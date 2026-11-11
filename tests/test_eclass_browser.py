@@ -214,3 +214,112 @@ def test_board_rows_are_scraped(browser, server):
         assert rows[1]["has_file"] is False, "첨부 없는 글을 있다고 봤습니다"
     finally:
         pg.close()
+
+
+# ---------------------------------------------------------------------------
+# 게시판 페이지네이션
+# ---------------------------------------------------------------------------
+class _FakeBrowser:
+    """Crawler 가 기대하는 최소 인터페이스만 제공합니다."""
+
+    def __init__(self, page, timeout_ms=5000):
+        self.page = page
+        self.timeout_ms = timeout_ms
+
+    def goto(self, url, wait="domcontentloaded"):
+        self.page.goto(url, wait_until=wait)
+
+
+def _crawler(page):
+    import tempfile
+    from pathlib import Path as _P
+
+    from gymhall.eclass.crawler import Crawler
+    from gymhall.eclass.urls import Site
+    from gymhall.paths import Layout
+    from gymhall.state import Store
+
+    tmp = _P(tempfile.mkdtemp())
+    layout = Layout(tmp)
+    layout.ensure()
+    return Crawler(
+        _FakeBrowser(page), Site(), layout, Store.open(layout.state / "s.json"),
+        term="2026-2학기", menus={}, risky={},
+    )
+
+
+def test_page_count_is_read(browser, server):
+    pg = browser.new_page()
+    try:
+        pg.goto(f"{server}/board_paged.html")
+        assert _crawler(pg).board_page_count() == 3
+    finally:
+        pg.close()
+
+
+def test_single_page_board_reports_one(browser, server):
+    pg = browser.new_page()
+    try:
+        pg.goto(f"{server}/board_list.html")
+        assert _crawler(pg).board_page_count() == 1
+    finally:
+        pg.close()
+
+
+def test_goto_page_changes_the_list(browser, server):
+    """회귀 방지: 클릭은 됐는데 목록이 그대로인 경우를 성공으로 처리하면
+    같은 페이지를 반복해서 긁게 됩니다."""
+    pg = browser.new_page()
+    try:
+        pg.goto(f"{server}/board_paged.html")
+        c = _crawler(pg)
+        first = c.read_board_rows()
+        assert first[0]["no"] == "9"
+
+        assert c.goto_board_page(2) is True
+        second = c.read_board_rows()
+        assert second[0]["no"] == "7", second
+        assert second[0]["title"] == "7번 글 공지"
+
+        assert c.goto_board_page(3) is True
+        assert c.read_board_rows()[0]["no"] == "5"
+    finally:
+        pg.close()
+
+
+def test_goto_nonexistent_page_fails_loudly(browser, server):
+    """없는 페이지로 갔다고 거짓 보고하면 수집 누락을 모르게 됩니다."""
+    pg = browser.new_page()
+    try:
+        pg.goto(f"{server}/board_paged.html")
+        assert _crawler(pg).goto_board_page(99) is False
+    finally:
+        pg.close()
+
+
+def test_all_pages_are_collected(browser, server):
+    """3페이지에 걸친 5건이 전부 읽히는지."""
+    pg = browser.new_page()
+    try:
+        pg.goto(f"{server}/board_paged.html")
+        c = _crawler(pg)
+        seen = []
+        for n in range(1, c.board_page_count() + 1):
+            if n > 1:
+                assert c.goto_board_page(n)
+            seen.extend(r["no"] for r in c.read_board_rows())
+        assert seen == ["9", "8", "7", "6", "5"], seen
+    finally:
+        pg.close()
+
+
+def test_attachment_flag_survives_pagination(browser, server):
+    pg = browser.new_page()
+    try:
+        pg.goto(f"{server}/board_paged.html")
+        c = _crawler(pg)
+        assert [r["has_file"] for r in c.read_board_rows()] == [True, False]
+        c.goto_board_page(2)
+        assert [r["has_file"] for r in c.read_board_rows()] == [False, True]
+    finally:
+        pg.close()
