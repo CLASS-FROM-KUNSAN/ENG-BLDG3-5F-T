@@ -1,0 +1,18 @@
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM", "RET", "ARG", "PTH"]
+ignore = [
+    "E501",    # 줄 길이는 line-length 로만 봅니다(한글 주석이 길어집니다)
+    "SIM105",  # try/except/pass 를 contextlib.suppress 로 바꾸라는 제안
+    "ARG002",  # 인터페이스를 맞추려 쓰지 않는 인자를 두는 경우가 있습니다
+    "B008",
+]
+
+[lint.per-file-ignores]
+# CLI 핸들러는 argparse 가 넘기는 공통 시그니처(args)를 받습니다.
+# 쓰지 않는 핸들러도 같은 모양이어야 배선이 단순해집니다.
+"src/gymhall/cli.py" = ["ARG001"]
+"tests/*" = ["ARG001", "ARG005", "B011", "SIM117", "PTH"]

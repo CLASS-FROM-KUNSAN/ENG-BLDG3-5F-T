@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import html
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from ..logging_setup import get as get_logger
 from ..paths import Layout, safe_name, unique_path

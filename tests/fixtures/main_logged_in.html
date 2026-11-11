@@ -1,0 +1,21 @@
+<!-- 로그인된 메인 페이지. 과목 목록 select 구조만 남기고 익명화했습니다. -->
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>국립군산대학교 eClass</title></head>
+<body>
+<div class="login">
+  <form id="loginForm" method="post">
+    <span class="info">0000000(테스트)님</span>
+    <a href="/Main.do?cmd=moveMenu">개인정보수정</a>
+    <a href="/User.do?cmd=logoutUser" class="logoutBtn">로그아웃</a>
+    <div class="class_sbox">
+      <select name="courseDTO.courseId" class="default" onchange="javascript:viewCourse(this.value)" title="내강의실 목록">
+        <option value=''>강의실 선택</option>
+        <option value='2026211605005,가교수,normal'>기초웹프로그래밍_05</option>
+        <option value='2026211784801,나교수,normal'>생명과학의이해_01</option>
+        <option value='2026211043701,다교수,normal'>운동과건강_01</option>
+        <option value='CORS_260422171741a6f75263,라교수,bnormal'>[이수필수] 법정의무교육</option>
+      </select>
+    </div>
+  </form>
+</div>
+</body></html>

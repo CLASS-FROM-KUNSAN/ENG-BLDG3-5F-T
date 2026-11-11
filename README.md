@@ -195,11 +195,13 @@ src\gymhall\
   transcribe\
     batch.py             정밀 전사 + 대기열
     realtime.py          실시간(임시) 전사
+tests\                  pytest. 네트워크/장치/계정 없이 돕니다
 docs\
   SETUP.md               설치 상세
   CONFIG.md              설정 항목 설명
   RISKS.md               위험 메뉴와 법적 주의
   TROUBLESHOOTING.md     안 될 때
+  TESTING.md             테스트와 개발 중 잡은 버그들
 ```
 
 산출물은 저장소가 아니라 `%LOCALAPPDATA%\gym-w-hall-2f\` 에 쌓입니다
@@ -219,6 +221,25 @@ docs\
   있거나 절전이면 그 수업은 그냥 사라집니다. 중요한 수업은 직접 시작하세요.
 - 로그인 시도를 자동 재시도하지 않습니다. 비밀번호를 틀리면 한 번만
   시도하고 멈춥니다 — 학교 계정 잠금을 피하기 위해서입니다.
+
+---
+
+## 개발
+
+```bash
+pip install pytest numpy requests
+python -m pytest
+```
+
+247개 테스트가 네트워크, 오디오 장치, 학교 계정 없이 전부 돌아갑니다.
+`ffmpeg` 가 있으면 실제 합치기 테스트가, Playwright + Chromium 이 있으면
+실제 브라우저로 로그인 폼을 조작하는 테스트가 추가로 돕니다.
+
+CI 는 **Python 3.10 / 3.11 / 3.12 / 3.13 에서 전부** 돌립니다.
+`threading.Thread._stop` 이 3.13 에서 사라진 탓에, 3.13 에서만 멀쩡하고
+3.11/3.12 에서 녹화가 깨지는 버그가 실제로 있었기 때문입니다.
+자세한 내용과 개발 중 잡은 다른 버그들은
+[docs/TESTING.md](docs/TESTING.md) 에 있습니다.
 
 ---
 

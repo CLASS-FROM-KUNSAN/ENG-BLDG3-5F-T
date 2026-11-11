@@ -45,10 +45,10 @@ def _atomic_write(path: Path, data: str) -> None:
             fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        Path(tmp).replace(path)
     except BaseException:
         try:
-            os.unlink(tmp)
+            Path(tmp).unlink(missing_ok=True)
         except OSError:
             pass
         raise
@@ -63,7 +63,7 @@ class Store:
 
     # -- 수명주기 ----------------------------------------------------
     @classmethod
-    def open(cls, path: Path) -> "Store":
+    def open(cls, path: Path) -> Store:
         path = Path(path)
         data: dict[str, Any] = {"version": 1, "downloaded": {}, "uploaded": {}, "meta": {}}
         if path.exists():

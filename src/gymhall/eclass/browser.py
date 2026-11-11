@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from .. import secrets
 from ..logging_setup import get as get_logger
@@ -40,33 +41,55 @@ class PlaywrightMissing(Exception):
         )
 
 
-# 로그인 폼 후보. 사이트가 바뀌어도 하나는 걸리도록 여러 개를 둡니다.
+# 로그인 폼 선택자.
+#
+# 실제 마크업(2026-11 기준, 개발자도구로 확인):
+#   <form id="loginForm" action="/User.do" method="post" onsubmit="return false;">
+#     <input type="hidden" name="cmd" value="loginUser">
+#     <ul class="user_box">
+#       <li><input id="id" name="userId" type="text" placeholder="아이디"></li>
+#       <li><input id="pw" name="password" type="password"
+#                  onkeypress="if(event.keyCode == 13){fnLogin()}"></li>
+#     </ul>
+#     <p><a href="#" onclick="fnLogin();" class="loginBtn">로그인</a></p>
+#   </form>
+#
+# 주의할 점 두 가지:
+#   1) id 속성은 `userId`/`password` 가 아니라 `id`/`pw` 입니다.
+#      (name 속성과 id 속성이 서로 다릅니다)
+#   2) onsubmit="return false" 라서 폼의 기본 제출은 막혀 있습니다.
+#      그래도 Enter 는 동작합니다 — 비밀번호 칸의 onkeypress 가
+#      직접 fnLogin() 을 부르고, fnLogin() 은 form.submit() 을 호출해
+#      onsubmit 을 우회하기 때문입니다.
+#
+# 여러 후보를 두는 이유는 학교가 마크업을 조금 바꿔도 버티게 하기 위함입니다.
 ID_SELECTORS = (
     "#loginForm input[name='userId']",
     "input[name='userId']",
-    "#userId",
+    "#loginForm #id",
     "#loginForm input[type='text']",
 )
 PW_SELECTORS = (
     "#loginForm input[name='password']",
     "input[name='password']",
-    "#password",
+    "#loginForm #pw",
     "#loginForm input[type='password']",
 )
 SUBMIT_SELECTORS = (
+    "#loginForm a.loginBtn",
     "#loginForm a[onclick*='fnLogin']",
+    "a.loginBtn",
+    "[onclick*='fnLogin']",
     "#loginForm button[type='submit']",
     "#loginForm input[type='submit']",
-    "a[onclick*='fnLogin']",
-    "[onclick*='fnLogin']",
 )
 # 로그인 성공 판정.
-# 하나만 보지 않습니다. 페이지 저장 도구나 테마 변경으로 로그아웃 링크가
+# 하나만 보지 않습니다. 테마나 페이지 저장 도구에 따라 로그아웃 링크가
 # 사라질 수 있어, '내 강의실 목록 select 가 있다' 는 조건도 함께 봅니다.
 LOGGED_IN_SELECTORS = (
     "a[href*='cmd=logoutUser']",
     "select[name='courseDTO.courseId']",
-    "a[href*='cmd=logoutUser'], a[onclick*='logoutUser']",
+    "a[onclick*='logoutUser']",
 )
 # 반대 증거: 비밀번호 입력란이 보이면 아직 로그인 전입니다.
 LOGGED_OUT_SELECTOR = "#loginForm input[name='password'], input[name='password']"
@@ -99,7 +122,7 @@ class EclassBrowser:
         self.page = None
 
     # -- 수명주기 ----------------------------------------------------
-    def __enter__(self) -> "EclassBrowser":
+    def __enter__(self) -> EclassBrowser:
         try:
             from playwright.sync_api import sync_playwright  # type: ignore
         except ImportError as exc:
