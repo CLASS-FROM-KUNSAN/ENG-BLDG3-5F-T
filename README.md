@@ -1,0 +1,230 @@
+# GYM-W-HALL-2F
+
+국립군산대학교 **eClass 자료 자동 수집** + **화면/음성 녹화 및 전사**,
+그리고 그 결과물을 **GitHub 릴리스에 자동 업로드**하는 도구 모음입니다.
+
+프로그램(.exe)이 아니라 **소스코드**입니다. 모든 동작은
+[`config.toml`](config.example.toml) 하나로 조정하고, 어느 PC에서든
+`scripts\setup.bat` 하나로 환경이 갖춰집니다.
+
+---
+
+## 쓰기 전에 반드시 읽어야 할 것
+
+이 도구는 **개인 학습용**을 전제로 만들어졌습니다.
+
+- **저장소는 private 이어야 합니다.** 강의자료와 녹화본은 교수와 학교의
+  저작물입니다. public 저장소에 올리면 사적 복제가 아니라 **공중송신**이
+  되어 저작권 침해입니다. 이 도구는 막아 주지 않습니다.
+- **녹화 전에 담당 교수에게 확인하세요.** 많은 학교가 수업 녹화·녹음을
+  학칙으로 제한합니다.
+- **시험·설문·토론 자동 수집은 기본으로 꺼져 있습니다.** 그 페이지는
+  열람만으로도 LMS 에 응시/참여 기록이 남을 수 있어서, 켜더라도 목록
+  제목만 읽고 상세 페이지에는 들어가지 않습니다. 자세한 내용은
+  [docs/RISKS.md](docs/RISKS.md).
+- **비밀번호는 코드나 설정 파일에 적지 않습니다.** Windows 자격 증명
+  관리자(DPAPI)에 저장합니다.
+
+---
+
+## 빠른 시작 (Windows)
+
+```bat
+git clone https://github.com/<owner>/<repo>.git
+cd <repo>
+scripts\setup.bat
+```
+
+`setup.bat` 이 가상환경, 파이썬 패키지, Playwright 브라우저, ffmpeg 를
+전부 준비하고 `config.toml` 을 만들어 줍니다.
+
+그다음 순서대로:
+
+```bat
+scripts\set_password.bat      REM Eclass 비밀번호 / GitHub 토큰 저장
+scripts\devices.bat           REM 오디오 장치 이름 확인 -> config.toml 에 반영
+scripts\doctor.bat            REM 환경 점검
+```
+
+`config.toml` 에서 최소한 이것들은 고쳐야 합니다.
+
+| 항목 | 설명 |
+|---|---|
+| `github.owner` / `github.repo` | 결과물을 올릴 **private** 저장소 |
+| `eclass.username` | 학번 |
+| `recording.timetable` | 시간표 (자동 녹화를 쓸 때) |
+| `recording.audio.system_device` | `devices.bat` 에 나온 루프백 장치 이름 |
+
+마지막으로 자동 실행을 걸려면 **관리자 권한 PowerShell** 에서:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\register_tasks.ps1
+```
+
+---
+
+## 할 수 있는 일
+
+### 1. eClass 자료 수집
+
+```bat
+scripts\eclass_sync.bat
+```
+
+수강 중인 과목을 돌면서 아래를 받아 `data\eclass\<학기>\<과목>\<메뉴>\`
+아래에 정리하고, 새로 생긴 것만 릴리스에 올립니다.
+
+| 메뉴 | 기본값 | 저장 형태 |
+|---|---|---|
+| 강의 목록 / 교안 | 켬 | 마크다운 |
+| 강의계획서 | 켬 | 마크다운 |
+| 과목 정보 | 켬 | 마크다운 |
+| 공지사항 | 켬 | 마크다운 + 첨부파일 |
+| 질의응답 | 켬 | 마크다운 + 첨부파일 |
+| 강의자료실 | 켬 | 마크다운 + 첨부파일 |
+| 과제 (명세만) | 켬 | 마크다운 + 첨부파일 |
+| 출석 | **끔** | 마크다운 (민감정보) |
+| 성적 | **끔** | 마크다운 (민감정보) |
+| 팀활동 | **끔** | 마크다운 |
+| 시험 · 설문 · 토론 | **끔** | 목록 제목만 ([위험](docs/RISKS.md)) |
+
+"생길 때마다"는 **작업 스케줄러가 3시간마다** 호출하는 방식으로
+구현돼 있습니다. 이미 받은 글과 파일은 해시로 걸러 다시 받지 않습니다.
+
+### 2. 화면 녹화 + 음성 녹음
+
+```bat
+scripts\record_now.bat                  REM 지금 바로
+scripts\record_now.bat -l 자료구조 -m 90 REM 이름과 길이 지정
+```
+
+- **화면**: ffmpeg (`gdigrab`)
+- **시스템 소리**: WASAPI 루프백 — 온라인 강의 소리가 그대로 들어갑니다.
+  **가상 오디오 드라이버 설치가 필요 없습니다.**
+- **마이크**: 별도 트랙
+- 결과는 `.mkv` 한 파일에 **오디오 트랙 2개**로 들어가므로 나중에 분리할
+  수 있습니다.
+- 기본 30분 단위로 끊어서 저장합니다 → 2GiB 제한 회피, 전원이 꺼져도
+  앞부분은 보존.
+
+실행 방식은 네 가지가 모두 준비돼 있습니다.
+
+| 방식 | 명령 | 쓸 만한 때 |
+|---|---|---|
+| 수동 | `record_now.bat` | **가장 확실합니다.** 들고 다니는 노트북에 적합 |
+| 시간표 | `record_schedule.bat` | 고정된 시간표, 늘 같은 자리 |
+| 프로그램 감지 | `record_watch.bat` | Zoom/Webex 온라인 강의 |
+| 터미널 | `python -m gymhall record start` | 직접 호출 |
+
+### 3. 음성 전사
+
+```bat
+scripts\transcribe_queue.bat
+```
+
+`faster-whisper` 로 **로컬에서** 전사합니다. 음성이 외부로 나가지 않습니다.
+
+- **정밀 전사(기본)**: 녹화가 끝난 뒤 대기열에 쌓였다가 처리됩니다.
+  저사양 노트북이면 충전 중에 돌리세요.
+- **실시간 전사(기본 꺼짐)**: 녹화 중 임시 자막을 만듭니다.
+  **저사양 PC에서는 켜지 마세요** — 녹화 프레임이 떨어집니다.
+  결과는 임시본이고, 나중에 정밀본이 따로 생성됩니다.
+
+처음 한 번은 인터넷이 되는 곳에서 모델을 받아 두세요.
+
+```bat
+.venv\Scripts\python -m gymhall transcribe warmup
+```
+
+### 4. GitHub 릴리스 업로드
+
+- 태그는 **월별로 하나**(`recordings-2026-11`)를 쓰고 에셋을 누적합니다.
+  세션마다 릴리스를 만들면 태그가 수백 개로 불어납니다.
+- **2GiB 가 넘는 파일은 자동으로 `.partNNN` 분할**되고, 복원용
+  `*.parts.json` 과 합치기 명령이 함께 올라갑니다.
+- 한글 파일명은 GitHub 가 망가뜨리므로 안전한 이름 + 해시로 바꿔 올리고,
+  원래 이름은 에셋 label 에 보존합니다.
+
+---
+
+## 전체 명령
+
+```
+python -m gymhall doctor                 환경 점검
+python -m gymhall devices                오디오 장치 목록
+python -m gymhall config check           설정 검증
+python -m gymhall secrets set eclass     비밀번호 저장
+python -m gymhall eclass probe           페이지 구조 탐색(디버그)
+python -m gymhall eclass sync            자료 수집 + 업로드
+python -m gymhall record start           수동 녹화
+python -m gymhall record schedule        시간표 대기
+python -m gymhall record watch           프로그램 감지 대기
+python -m gymhall transcribe queue       대기열 전사
+python -m gymhall transcribe warmup      모델 미리 받기
+python -m gymhall upload <경로>          임의 파일 업로드
+```
+
+모든 명령에 `--dry-run`(업로드 흉내), `--no-upload`, `--log-level DEBUG`
+를 붙일 수 있습니다.
+
+---
+
+## 폴더 구조
+
+```
+config.toml              ← 조정은 전부 여기서. git 에 올라가지 않습니다.
+requirements.txt
+scripts\                 ← .bat / .vbs / PowerShell
+src\gymhall\
+  config.py              설정 로드와 검증
+  release.py             릴리스 업로드 + 2GiB 분할
+  state.py               중복 방지 기록
+  secrets.py             자격증명
+  eclass\
+    urls.py              eClass URL 지도 (menuId 포함)
+    browser.py           Playwright 세션 + 로그인
+    crawler.py           메뉴별 수집
+    probe.py             구조 탐색
+  recorder\
+    video.py             ffmpeg 화면 캡처
+    audio.py             WASAPI 루프백 + 마이크
+    mux.py               합치기 + A/V 싱크 보정
+    session.py           세그먼트 관리
+    schedule.py          시간표
+    watcher.py           프로그램 감지
+  transcribe\
+    batch.py             정밀 전사 + 대기열
+    realtime.py          실시간(임시) 전사
+docs\
+  SETUP.md               설치 상세
+  CONFIG.md              설정 항목 설명
+  RISKS.md               위험 메뉴와 법적 주의
+  TROUBLESHOOTING.md     안 될 때
+```
+
+산출물은 저장소가 아니라 `%LOCALAPPDATA%\gym-w-hall-2f\` 에 쌓입니다
+(`general.data_dir` 로 바꿀 수 있습니다).
+
+---
+
+## 알려진 한계
+
+- **Windows 전용**입니다. 화면 캡처와 WASAPI 루프백이 그렇습니다.
+  (코드는 Linux에서 `x11grab` 으로 돌아가지만 시험하지 않았습니다.)
+- **세그먼트 사이에 1초 안팎의 공백**이 생깁니다. 강의에는 문제가 없지만
+  연속 측정에는 맞지 않습니다.
+- **학교가 LMS 를 개편하면 수집이 멈춥니다.** `eclass_probe.bat` 으로
+  새 구조를 떠서 `src/gymhall/eclass/urls.py` 를 고쳐야 합니다.
+- **작업 스케줄러 기반 자동 녹화는 놓칠 수 있습니다.** 노트북이 꺼져
+  있거나 절전이면 그 수업은 그냥 사라집니다. 중요한 수업은 직접 시작하세요.
+- 로그인 시도를 자동 재시도하지 않습니다. 비밀번호를 틀리면 한 번만
+  시도하고 멈춥니다 — 학교 계정 잠금을 피하기 위해서입니다.
+
+---
+
+## 문제가 생기면
+
+1. `scripts\doctor.bat` — 대부분 여기서 원인이 나옵니다.
+2. 로그 파일 — `doctor.bat` 이 알려 주는 데이터 폴더의 `logs\gymhall.log`.
+   작업 스케줄러로 돌리면 창이 안 뜨므로 **로그가 유일한 단서**입니다.
+3. [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)

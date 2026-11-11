@@ -218,3 +218,35 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---------------------------------------------------------------------
+#  GYM-W-HALL-2F
+# ---------------------------------------------------------------------
+
+# 개인 설정 (학번, 저장소 이름, 시간표가 들어갑니다)
+config.toml
+
+# 수집/녹화 결과물. 저장소에 들어가면 안 됩니다.
+data/
+recordings/
+transcripts/
+eclass_data/
+*.mkv
+*.mp4
+*.wav
+*.srt
+*.vtt
+
+# 세션 쿠키 / 상태 / 탐색 덤프
+# 탐색 덤프에는 학번, 이름, 교수 이메일이 들어갑니다.
+state/
+*_session.json
+probe-*/
+**/probe/
+
+# 동봉 ffmpeg
+tools/
+
+# 가상환경
+.venv/
+venv/
