@@ -13,10 +13,10 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover
     try:
         import tomli as tomllib  # type: ignore
-    except ImportError:  # pragma: no cover
+    except ImportError as exc:  # pragma: no cover
         raise SystemExit(
             "Python 3.11 미만에서는 'tomli' 가 필요합니다: pip install tomli"
-        )
+        ) from exc
 
 
 class ConfigError(Exception):

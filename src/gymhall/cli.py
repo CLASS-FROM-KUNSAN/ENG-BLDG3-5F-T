@@ -74,7 +74,7 @@ def cmd_doctor(args) -> int:
     ok = True
 
     print(f"  Python          : {sys.version.split()[0]}")
-    if sys.version_info < (3, 10):
+    if sys.version_info < (3, 10):  # noqa: UP036 - pip 를 거치지 않고 실행한 경우 안내
         print("    ! Python 3.10 이상을 권장합니다.")
         ok = False
 
@@ -258,9 +258,14 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
 
     excluded_labels = {MENU_LABELS.get(m, m) for m in excluded}
 
-    root = layout.eclass
+    # 이번 학기 폴더만 올립니다. layout.eclass 전체를 훑으면 지난 학기
+    # 파일까지 매번 다시 해시 계산하게 됩니다(업로드는 중복 제거로 막히지만
+    # 과목이 쌓이면 동기화가 눈에 띄게 느려집니다).
+    from .paths import safe_name
+
+    root = layout.eclass / safe_name(term)
     if not root.exists():
-        log.info("업로드할 폴더가 없습니다.")
+        log.info("업로드할 폴더가 없습니다: %s", root)
         return
 
     files = [p for p in iter_files(root) if not (set(p.parts) & excluded_labels)]

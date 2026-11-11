@@ -37,6 +37,7 @@ def _db_to_gain(db: float) -> float:
 class TrackResult:
     name: str
     path: Path
+    samplerate: int = 48000
     frames: int = 0
     started_at: float = 0.0
     peak: float = 0.0
@@ -45,7 +46,10 @@ class TrackResult:
 
     @property
     def seconds(self) -> float:
-        return self.frames / 48000 if self.frames else 0.0
+        # 48000 을 그대로 쓰면 44100 설정에서 길이가 8% 틀어집니다.
+        if not self.frames or not self.samplerate:
+            return 0.0
+        return self.frames / self.samplerate
 
 
 class AudioTrack(threading.Thread):
@@ -61,9 +65,15 @@ class AudioTrack(threading.Thread):
         channels: int = 2,
         gain_db: float = 0.0,
         silence_warn_sec: float = 60.0,
-        tap: "queue.Queue | None" = None,
+        tap: queue.Queue | None = None,
     ) -> None:
         super().__init__(name=f"audio-{name}", daemon=True)
+        # 주의: 이 필드 이름을 `_stop` 으로 바꾸지 마세요.
+        # threading.Thread 는 Python 3.12 까지 내부 메서드 `_stop()` 을 가지고
+        # 있어서, 같은 이름의 Event 를 넣으면 join() 이
+        #   TypeError: 'Event' object is not callable
+        # 로 터집니다. 3.13 에서는 그 메서드가 없어져 증상이 안 나타나므로
+        # 개발 환경에서는 멀쩡하고 사용자 PC 에서만 깨집니다.
         self.track_name = name
         self.source = source
         self.out_path = Path(out_path)
@@ -72,11 +82,11 @@ class AudioTrack(threading.Thread):
         self.gain = _db_to_gain(gain_db)
         self.silence_warn_sec = float(silence_warn_sec)
         self.tap = tap  # 실시간 전사로 흘려보낼 큐 (없으면 None)
-        self._stop = threading.Event()
-        self.result = TrackResult(name=name, path=self.out_path)
+        self._stop_event = threading.Event()
+        self.result = TrackResult(name=name, path=self.out_path, samplerate=self.samplerate)
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 
     def run(self) -> None:  # noqa: C901 - 스트리밍 루프라 분기가 많습니다
         import numpy as np
@@ -86,7 +96,9 @@ class AudioTrack(threading.Thread):
         warned = False
 
         try:
-            wav = wave.open(str(self.out_path), "wb")
+            # 녹음이 끝날 때까지 열어 두는 핸들입니다(finally 에서 닫습니다).
+            # with 로 감싸면 스트리밍 루프를 전부 들여써야 해서 읽기 어려워집니다.
+            wav = wave.open(str(self.out_path), "wb")  # noqa: SIM115
         except OSError as exc:
             self.result.error = f"WAV 파일 생성 실패: {exc}"
             log.error("[%s] %s", self.track_name, self.result.error)
@@ -103,7 +115,7 @@ class AudioTrack(threading.Thread):
                 self.result.started_at = time.time()
                 log.info("[%s] 녹음 시작 -> %s", self.track_name, self.out_path.name)
 
-                while not self._stop.is_set():
+                while not self._stop_event.is_set():
                     data = rec.record(numframes=BLOCK_FRAMES)
                     if data is None or len(data) == 0:
                         continue
@@ -168,7 +180,7 @@ class AudioRecorder:
     mic_device: str = ""
     mic_gain_db: float = 0.0
     silence_warn_sec: float = 60.0
-    realtime_queue: "queue.Queue | None" = None
+    realtime_queue: queue.Queue | None = None
     realtime_source: str = "system"
 
     tracks: list[AudioTrack] = field(default_factory=list)

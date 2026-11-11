@@ -17,10 +17,10 @@ import queue
 import signal
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
 
 from ..logging_setup import get as get_logger
 from ..paths import Layout, safe_name
@@ -67,7 +67,7 @@ class RecordingSession:
         layout: Layout,
         label: str,
         *,
-        realtime_queue: "queue.Queue | None" = None,
+        realtime_queue: queue.Queue | None = None,
         on_segment_done: Callable[[Segment], None] | None = None,
     ) -> None:
         self.cfg = cfg
@@ -75,14 +75,14 @@ class RecordingSession:
         self.label = safe_name(label)
         self.realtime_queue = realtime_queue
         self.on_segment_done = on_segment_done
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self._install_signal_handlers()
 
     # -- 종료 신호 ---------------------------------------------------
     def _install_signal_handlers(self) -> None:
         def handler(signum, _frame):
             log.info("종료 신호(%s)를 받았습니다. 현재 세그먼트를 마무리합니다.", signum)
-            self._stop.set()
+            self._stop_event.set()
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -91,11 +91,11 @@ class RecordingSession:
                 pass  # 메인 스레드가 아니면 무시
 
     def request_stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 
     @property
     def stopping(self) -> bool:
-        return self._stop.is_set()
+        return self._stop_event.is_set()
 
     # -- 실행 --------------------------------------------------------
     def run(self, *, duration_minutes: float | None = None) -> SessionResult:
@@ -127,7 +127,7 @@ class RecordingSession:
         deadline = time.time() + max_minutes * 60
         index = 0
 
-        while not self._stop.is_set() and time.time() < deadline:
+        while not self._stop_event.is_set() and time.time() < deadline:
             index += 1
             remaining_min = (deadline - time.time()) / 60
             this_len = min(seg_minutes, remaining_min)
@@ -204,7 +204,7 @@ class RecordingSession:
         # --- 대기 ---
         end_at = time.time() + minutes * 60
         log.info("세그먼트 %d 녹화 중 (%.1f분)", index, minutes)
-        while time.time() < end_at and not self._stop.is_set():
+        while time.time() < end_at and not self._stop_event.is_set():
             time.sleep(0.5)
             if video_rec is not None and not video_rec.is_running:
                 log.error("ffmpeg 가 예기치 않게 종료됐습니다. 세그먼트를 마무리합니다.")

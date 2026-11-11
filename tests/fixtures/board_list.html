@@ -1,0 +1,58 @@
+<!-- 실제 eClass 게시판 목록 페이지의 구조만 뽑아 익명화한 것입니다.
+     학번, 이름, 이메일은 전부 가짜로 바꿨습니다.
+     crawler.py 의 선택자가 이 구조를 전제로 하므로, 학교가 LMS 를
+     개편해 구조가 바뀌면 이 파일도 같이 갱신해야 합니다. -->
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>국립군산대학교 eClass</title></head>
+<body>
+<a href="/User.do?cmd=logoutUser" class="logoutBtn">로그아웃</a>
+<form name="courseForm" method="post" action="/Course.do">
+  <input type="hidden" name="cmd" />
+  <input type="hidden" name="boardContentsDTO.boardContentsId" />
+  <input type="hidden" name="boardInfoDTO.boardInfoId" />
+  <div class="boardTab"><ul>
+    <li class="select"><h3><a href="/Course.do?cmd=viewBoardContentsList&amp;boardInfoDTO.boardClass=notice">공지사항</a></h3></li>
+    <li><h3><a href="/Course.do?cmd=viewBoardContentsList&amp;boardInfoDTO.boardClass=qna">질의응답</a></h3></li>
+    <li><h3><a href="/Course.do?cmd=viewBoardContentsList&amp;boardInfoDTO.boardClass=pds">강의자료실</a></h3></li>
+  </ul></div>
+  <div id="listBox">
+  <table class="boardListBasic" summary="게시판 리스트입니다.">
+    <caption class="sf-hidden">게시판 리스트</caption>
+    <thead>
+      <tr class="odd-row">
+        <th class="num first">번 호</th><th>제 목</th><th>파 일</th>
+        <th>작성자</th><th>작성일</th><th class="last">조회수</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="odd-row">
+        <td class="first">2</td>
+        <td class="textLeft" style="max-width:400px">
+          <div style="margin-left:0px"></div>
+          <div style="margin-left:0px">
+            <a class="clip boardTitleNcontent TITLE_ORIGIN" href="javascript:void(0)">발표과제 및 조편성 관련 안내</a>
+          </div>
+        </td>
+        <td> <i class="icon-data-color m0"></i> </td>
+        <td class="boardTitleNcontent REG_NAME">홍길동</td>
+        <td>2026-10-28</td>
+        <td class="last">65</td>
+      </tr>
+      <tr>
+        <td class="first">1</td>
+        <td class="textLeft" style="max-width:400px">
+          <div style="margin-left:0px">
+            <a class="clip boardTitleNcontent TITLE_ORIGIN" href="javascript:void(0)">10월 26일 야외수업 관련</a>
+          </div>
+        </td>
+        <td>&nbsp;</td>
+        <td class="boardTitleNcontent REG_NAME">홍길동</td>
+        <td>2026-10-14</td>
+        <td class="last">78</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</form>
+<iframe name="hiddenFrame" width="0" height="0" frameborder="0" title="파일다운로드프레임"></iframe>
+</body></html>

@@ -1,0 +1,46 @@
+<!-- 로그인 전 eClass 메인 페이지.
+     실제 페이지의 개발자도구 화면(2026-11)에서 확인한 마크업 그대로입니다.
+     이 페이지에는 개인정보가 없어 익명화할 것이 없습니다.
+
+     browser.py 의 ID_SELECTORS / PW_SELECTORS / SUBMIT_SELECTORS 가
+     이 구조를 전제로 합니다. 학교가 로그인 화면을 바꾸면 이 파일을
+     같이 갱신하세요. -->
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>국립군산대학교 eClass</title></head>
+<body>
+<div id="container">
+ <div class="conFirst">
+  <div id="slider"><div class="main-roll"><ul class="roll-list"><li class="section01"></li></ul></div></div>
+  <script type="text/javascript"></script>
+  <div class="conFirst_Rt">
+   <!-- 로그인 -->
+   <div class="login">
+    <form id="loginForm" action="/User.do" method="post" onsubmit="return false;">
+     <input type="hidden" name="cmd" value="loginUser">
+     <h2>로그인</h2>
+     <fieldset>
+      <legend>로그인</legend>
+      <p class="fr"></p>
+      <ul class="user_box">
+       <li>
+        <input id="id" name="userId" type="text" placeholder="아이디" title="아이디">
+       </li>
+       <li>
+        <input type="password" name="password" id="pw"
+               onkeypress="if(event.keyCode == 13){fnLogin()}"
+               placeholder="비밀번호" value title="비밀번호">
+       </li>
+      </ul>
+      <p><a href="#" onclick="fnLogin();" class="loginBtn">로그인</a></p>
+      <ul class="member"></ul>
+     </fieldset>
+    </form>
+   </div>
+   <!--// 로그인 -->
+   <!-- 공지사항 영역 -->
+   <div class="boardList"></div>
+  </div>
+ </div>
+ <div class="conSecond"></div>
+</div>
+</body></html>

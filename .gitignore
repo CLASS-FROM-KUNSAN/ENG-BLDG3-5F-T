@@ -250,3 +250,6 @@ tools/
 # 가상환경
 .venv/
 venv/
+
+# 로컬 백업 번들
+*.bundle

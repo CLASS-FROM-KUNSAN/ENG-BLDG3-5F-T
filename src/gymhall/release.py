@@ -17,10 +17,11 @@ import mimetypes
 import re
 import time
 import unicodedata
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any
 
 from . import secrets
 from .logging_setup import get as get_logger
@@ -172,6 +173,7 @@ class ReleaseUploader:
         self._token = token
         self._session = None
         self._release_cache: dict[str, dict[str, Any]] = {}
+        self._asset_cache: dict[int, list[dict[str, Any]]] = {}
 
     # -- 하부 ---------------------------------------------------------
     @property
@@ -201,15 +203,29 @@ class ReleaseUploader:
             self._session = s
         return self._session
 
-    def _request(self, method: str, url: str, **kwargs) -> Any:
-        """재시도 포함 요청. 네트워크 오류와 5xx 만 재시도합니다."""
+    def _request(self, method: str, url: str, *,
+                 data_factory: Callable[[], Any] | None = None, **kwargs) -> Any:
+        """재시도 포함 요청.
+
+        data_factory 를 주면 '시도마다' 새로 호출해 본문을 만듭니다.
+        파일 객체를 data= 로 한 번만 넘기면, 첫 시도에서 핸들이 끝까지
+        읽힌 뒤 재시도에서 0바이트를 보내게 됩니다. 그러면 GitHub 는
+        빈 에셋을 받아들이고 200 을 돌려주므로, 녹화본이 백업된 줄
+        알았는데 0바이트인 상황이 조용히 만들어집니다.
+        """
         import requests  # type: ignore
 
+        timeout = kwargs.pop("timeout", 120)
         last_exc: Exception | None = None
         for attempt in range(self.retry_count + 1):
+            body = None
             try:
-                resp = self.session.request(method, url, timeout=kwargs.pop("timeout", 120), **kwargs)
+                if data_factory is not None:
+                    body = data_factory()
+                    kwargs["data"] = body
+                resp = self.session.request(method, url, timeout=timeout, **kwargs)
             except requests.RequestException as exc:
+                _close(body)
                 last_exc = exc
                 if attempt >= self.retry_count:
                     break
@@ -218,6 +234,8 @@ class ReleaseUploader:
                             exc.__class__.__name__, wait, attempt + 1, self.retry_count)
                 time.sleep(wait)
                 continue
+            else:
+                _close(body)
 
             if resp.status_code == 401:
                 raise ReleaseError("GitHub 토큰이 거부됐습니다(401). 토큰이 만료됐거나 권한이 없습니다.")
@@ -276,14 +294,56 @@ class ReleaseUploader:
         self._release_cache[tag] = created
         return created
 
-    def list_assets(self, release: dict[str, Any]) -> list[dict[str, Any]]:
+    def list_assets(self, release: dict[str, Any], *, refresh: bool = False) -> list[dict[str, Any]]:
+        """릴리스의 에셋 목록. 한 번 받아 캐시합니다.
+
+        파일 하나당 한 번씩 조회하면 수백 개를 올릴 때 API 호출이 두 배가
+        됩니다. 업로드/삭제할 때 캐시를 직접 갱신해 일관성을 유지합니다.
+        """
         rid = release.get("id")
         if not rid or self.dry_run:
             return []
-        assets = self._request(
-            "GET", f"{API}/repos/{self.owner}/{self.repo}/releases/{rid}/assets?per_page=100"
-        )
-        return assets or []
+        if not refresh and rid in self._asset_cache:
+            return self._asset_cache[rid]
+
+        assets: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            batch = self._request(
+                "GET",
+                f"{API}/repos/{self.owner}/{self.repo}/releases/{rid}/assets",
+                params={"per_page": 100, "page": page},
+            )
+            if not batch:
+                break
+            if not isinstance(batch, list):
+                # 에셋 목록은 반드시 배열입니다. 아니면 API 응답이 예상과
+                # 다른 것이므로, 문자열을 에셋으로 오인해 망가지기 전에 멈춥니다.
+                log.warning("에셋 목록 응답이 배열이 아닙니다(%s). 목록을 비워 둡니다.", type(batch).__name__)
+                assets = []
+                break
+            assets.extend(a for a in batch if isinstance(a, dict))
+            if len(batch) < 100:
+                break
+            page += 1
+            if page > 50:  # 5000개면 뭔가 잘못된 것입니다
+                log.warning("에셋이 5000개를 넘습니다. 목록 조회를 멈춥니다.")
+                break
+
+        self._asset_cache[rid] = assets
+        return assets
+
+    def _remember_asset(self, release: dict[str, Any], asset: dict[str, Any]) -> None:
+        rid = release.get("id")
+        if rid in self._asset_cache:
+            self._asset_cache[rid].append(asset)
+
+    def _forget_asset(self, release: dict[str, Any], name: str) -> None:
+        rid = release.get("id")
+        if rid in self._asset_cache:
+            self._asset_cache[rid] = [
+                a for a in self._asset_cache[rid] if a.get("name") != name
+            ]
 
     def delete_asset(self, asset_id: int) -> None:
         if self.dry_run:
@@ -305,6 +365,7 @@ class ReleaseUploader:
             if asset.get("name") == target:
                 log.info("같은 이름의 에셋을 교체합니다: %s", target)
                 self.delete_asset(asset["id"])
+                self._forget_asset(release, target)
                 break
 
         upload_url = str(release.get("upload_url", "")).split("{")[0]
@@ -319,15 +380,29 @@ class ReleaseUploader:
         if label:
             params["label"] = label
 
-        with path.open("rb") as fh:
-            result = self._request(
-                "POST",
-                upload_url,
-                params=params,
-                data=fh,
-                headers={"Content-Type": ctype, "Content-Length": str(size)},
-                timeout=None,
+        result = self._request(
+            "POST",
+            upload_url,
+            params=params,
+            # 재시도마다 파일을 다시 엽니다. 한 번만 열어서 넘기면
+            # 재시도 때 0바이트가 올라갑니다.
+            data_factory=lambda: path.open("rb"),
+            headers={"Content-Type": ctype, "Content-Length": str(size)},
+            timeout=None,
+        )
+
+        # GitHub 가 돌려준 크기를 로컬 파일과 대조합니다.
+        # 이게 없으면 0바이트 에셋이 성공으로 보고돼도 알 수 없습니다.
+        reported = result.get("size") if isinstance(result, dict) else None
+        if isinstance(reported, int) and reported != size:
+            raise ReleaseError(
+                f"업로드된 크기가 다릅니다: {target} — "
+                f"보낸 {size}바이트 / 저장된 {reported}바이트. "
+                "업로드가 중간에 끊겼을 수 있으니 다시 시도하세요."
             )
+
+        if isinstance(result, dict):
+            self._remember_asset(release, result)
         log.info("업로드 완료: %s", target)
         return result
 
@@ -405,6 +480,16 @@ class ReleaseUploader:
 
 
 # ---------------------------------------------------------------------------
+def _close(obj: Any) -> None:
+    """파일 객체면 닫습니다. 그 외에는 아무것도 하지 않습니다."""
+    closer = getattr(obj, "close", None)
+    if callable(closer):
+        try:
+            closer()
+        except OSError:
+            pass
+
+
 def _human(n: float) -> str:
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
         if n < 1024 or unit == "TiB":
