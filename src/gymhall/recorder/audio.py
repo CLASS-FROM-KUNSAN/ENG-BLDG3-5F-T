@@ -1,0 +1,217 @@
+"""오디오 캡처.
+
+시스템 소리와 마이크를 '각각 다른 스레드'에서 독립적으로 받아
+각각 WAV 로 씁니다. 나중에 ffmpeg 가 별도 트랙으로 묶습니다.
+
+왜 ffmpeg 의 dshow 를 안 쓰나:
+  Windows 는 DirectShow 로 '스피커로 나가는 소리' 를 기본 제공하지
+  않습니다. 잡으려면 스테레오 믹스(지원 안 하는 메인보드 많음)나
+  VB-Cable 같은 가상 드라이버를 깔아야 합니다. 이동하며 여러 PC 에서
+  쓴다는 요구사항과 정면으로 충돌합니다.
+  soundcard 는 WASAPI 루프백을 직접 호출하므로 설치가 필요 없습니다.
+"""
+
+from __future__ import annotations
+
+import queue
+import threading
+import time
+import wave
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from ..logging_setup import get as get_logger
+from . import devices
+
+log = get_logger("recorder.audio")
+
+# 한 번에 읽어올 프레임 수. 작을수록 지연이 짧고 CPU 를 더 씁니다.
+BLOCK_FRAMES = 4096
+
+
+def _db_to_gain(db: float) -> float:
+    return 10.0 ** (float(db) / 20.0)
+
+
+@dataclass
+class TrackResult:
+    name: str
+    path: Path
+    frames: int = 0
+    started_at: float = 0.0
+    peak: float = 0.0
+    silent: bool = False
+    error: str | None = None
+
+    @property
+    def seconds(self) -> float:
+        return self.frames / 48000 if self.frames else 0.0
+
+
+class AudioTrack(threading.Thread):
+    """장치 하나를 WAV 하나로 녹음하는 스레드."""
+
+    def __init__(
+        self,
+        name: str,
+        source,
+        out_path: Path,
+        *,
+        samplerate: int = 48000,
+        channels: int = 2,
+        gain_db: float = 0.0,
+        silence_warn_sec: float = 60.0,
+        tap: "queue.Queue | None" = None,
+    ) -> None:
+        super().__init__(name=f"audio-{name}", daemon=True)
+        self.track_name = name
+        self.source = source
+        self.out_path = Path(out_path)
+        self.samplerate = int(samplerate)
+        self.channels = int(channels)
+        self.gain = _db_to_gain(gain_db)
+        self.silence_warn_sec = float(silence_warn_sec)
+        self.tap = tap  # 실시간 전사로 흘려보낼 큐 (없으면 None)
+        self._stop = threading.Event()
+        self.result = TrackResult(name=name, path=self.out_path)
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def run(self) -> None:  # noqa: C901 - 스트리밍 루프라 분기가 많습니다
+        import numpy as np
+
+        self.out_path.parent.mkdir(parents=True, exist_ok=True)
+        silent_for = 0.0
+        warned = False
+
+        try:
+            wav = wave.open(str(self.out_path), "wb")
+        except OSError as exc:
+            self.result.error = f"WAV 파일 생성 실패: {exc}"
+            log.error("[%s] %s", self.track_name, self.result.error)
+            return
+
+        try:
+            wav.setnchannels(self.channels)
+            wav.setsampwidth(2)  # int16
+            wav.setframerate(self.samplerate)
+
+            with self.source.recorder(samplerate=self.samplerate,
+                                      channels=self.channels,
+                                      blocksize=BLOCK_FRAMES) as rec:
+                self.result.started_at = time.time()
+                log.info("[%s] 녹음 시작 -> %s", self.track_name, self.out_path.name)
+
+                while not self._stop.is_set():
+                    data = rec.record(numframes=BLOCK_FRAMES)
+                    if data is None or len(data) == 0:
+                        continue
+
+                    if self.gain != 1.0:
+                        data = data * self.gain
+
+                    peak = float(np.max(np.abs(data))) if data.size else 0.0
+                    self.result.peak = max(self.result.peak, peak)
+
+                    block_sec = len(data) / self.samplerate
+                    if peak < 1e-4:
+                        silent_for += block_sec
+                        if not warned and silent_for >= self.silence_warn_sec:
+                            log.warning(
+                                "[%s] %.0f초 동안 무음입니다. 장치 선택이 잘못됐을 수 있습니다. "
+                                "python -m gymhall devices 로 확인하세요.",
+                                self.track_name, silent_for,
+                            )
+                            warned = True
+                    else:
+                        silent_for = 0.0
+
+                    clipped = np.clip(data, -1.0, 1.0)
+                    pcm = (clipped * 32767.0).astype("<i2")
+                    wav.writeframes(pcm.tobytes())
+                    self.result.frames += len(data)
+
+                    if self.tap is not None:
+                        try:
+                            self.tap.put_nowait(clipped.copy())
+                        except queue.Full:
+                            pass  # 실시간 전사가 밀리면 버립니다. 녹음이 우선입니다.
+
+        except Exception as exc:
+            self.result.error = str(exc)
+            log.exception("[%s] 녹음 중 오류", self.track_name)
+        finally:
+            try:
+                wav.close()
+            except Exception:
+                pass
+            self.result.silent = self.result.peak < 1e-4
+            log.info(
+                "[%s] 녹음 종료: %.1f초, 최대레벨 %.3f%s",
+                self.track_name, self.result.seconds, self.result.peak,
+                "  ** 전 구간 무음 **" if self.result.silent else "",
+            )
+
+
+@dataclass
+class AudioRecorder:
+    """시스템 + 마이크 트랙을 함께 관리합니다."""
+
+    out_dir: Path
+    samplerate: int = 48000
+    channels: int = 2
+    system_enabled: bool = True
+    system_device: str = ""
+    system_gain_db: float = 0.0
+    mic_enabled: bool = True
+    mic_device: str = ""
+    mic_gain_db: float = 0.0
+    silence_warn_sec: float = 60.0
+    realtime_queue: "queue.Queue | None" = None
+    realtime_source: str = "system"
+
+    tracks: list[AudioTrack] = field(default_factory=list)
+
+    def start(self, stem: str) -> None:
+        self.tracks = []
+        specs = []
+        if self.system_enabled:
+            specs.append(("system", self.system_device, self.system_gain_db,
+                          devices.resolve_system_source))
+        if self.mic_enabled:
+            specs.append(("mic", self.mic_device, self.mic_gain_db,
+                          devices.resolve_mic_source))
+
+        for name, device_name, gain, resolver in specs:
+            try:
+                source = resolver(device_name)
+            except Exception as exc:
+                log.error("[%s] 장치를 열 수 없습니다: %s", name, exc)
+                continue
+            tap = self.realtime_queue if (
+                self.realtime_queue is not None
+                and (self.realtime_source == name or self.realtime_source == "both")
+            ) else None
+            track = AudioTrack(
+                name, source, Path(self.out_dir) / f"{stem}.{name}.wav",
+                samplerate=self.samplerate, channels=self.channels, gain_db=gain,
+                silence_warn_sec=self.silence_warn_sec, tap=tap,
+            )
+            self.tracks.append(track)
+            track.start()
+
+        if not self.tracks:
+            log.error("오디오 트랙을 하나도 시작하지 못했습니다. 영상만 녹화됩니다.")
+
+    def stop(self, timeout: float = 10.0) -> list[TrackResult]:
+        for track in self.tracks:
+            track.stop()
+        for track in self.tracks:
+            track.join(timeout=timeout)
+        return [t.result for t in self.tracks]
+
+    @property
+    def started_at(self) -> float:
+        times = [t.result.started_at for t in self.tracks if t.result.started_at]
+        return min(times) if times else 0.0
