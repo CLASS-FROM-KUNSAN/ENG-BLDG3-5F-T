@@ -36,6 +36,13 @@ log = get_logger("eclass.crawler")
 BOARD_TABLE = "table.boardListBasic"
 BOARD_ROW = f"{BOARD_TABLE} tbody tr"
 BOARD_TITLE_LINK = "a.boardTitleNcontent, a.TITLE_ORIGIN, td.textLeft a"
+# 페이지네이션. paginator3000 이 그립니다.
+#   <div class="paginator fullsize" id="paginator3"> ... <span><strong>1</strong></span>
+#   <div class="paginator_pages">3 pages</div>
+PAGINATOR = "div.paginator"
+PAGINATOR_PAGES = "div.paginator_pages"
+MAX_BOARD_PAGES = 50          # 안전장치. 이보다 많으면 뭔가 잘못된 것입니다.
+
 # 상세 화면에서 본문이 들어가는 곳 후보
 DETAIL_BODY = (
     "div.boardViewContent", "div.viewContent", "div.bbsContent",
@@ -287,49 +294,148 @@ class Crawler:
             log.warning("게시판 목록 읽기 실패: %s", exc)
             return []
 
-    def crawl_board(self, course: Course, key: str, *, titles_only: bool = False) -> None:
+    def board_page_count(self) -> int:
+        """게시판의 전체 페이지 수. 읽지 못하면 1 로 봅니다."""
+        try:
+            loc = self.br.page.locator(PAGINATOR_PAGES).first
+            if loc.count() == 0:
+                return 1
+            match = re.search(r"(\d+)", loc.inner_text(timeout=3000) or "")
+            return max(1, int(match.group(1))) if match else 1
+        except Exception as exc:
+            log.debug("페이지 수를 읽지 못했습니다: %s", exc)
+            return 1
+
+    def goto_board_page(self, target: int) -> bool:
+        """게시판 target 페이지로 이동합니다.
+
+        이 LMS 의 페이지 이동도 JS 라서 URL 로는 갈 수 없습니다. paginator
+        안에서 그 숫자를 가진 요소를 눌러 보고, 목록이 실제로 바뀌었는지
+        확인합니다. 바뀌지 않았으면 실패로 봅니다 — '클릭은 됐는데 아무
+        일도 안 일어났다' 를 성공으로 처리하면 같은 페이지를 반복해서
+        긁게 됩니다.
+        """
+        page = self.br.page
+        before = self._page_signature()
+
+        selectors = (
+            f"{PAGINATOR} a",
+            f"{PAGINATOR} span",
+            f"{PAGINATOR} td",
+        )
+        for sel in selectors:
+            loc = page.locator(sel)
+            try:
+                count = loc.count()
+            except Exception:
+                continue
+            for i in range(min(count, 200)):
+                item = loc.nth(i)
+                try:
+                    if (item.inner_text(timeout=1000) or "").strip() != str(target):
+                        continue
+                    item.click(timeout=self.br.timeout_ms)
+                    page.wait_for_load_state("domcontentloaded", timeout=self.br.timeout_ms)
+                    page.wait_for_timeout(400)
+                except Exception:
+                    continue
+                if self._page_signature() != before:
+                    return True
+        return False
+
+    def _page_signature(self) -> str:
+        """현재 목록의 지문. 페이지가 실제로 바뀌었는지 판단하는 데 씁니다."""
         rows = self.read_board_rows()
+        return "|".join(f"{r.get('no')}:{r.get('title')}" for r in rows[:5])
+
+    def crawl_board(self, course: Course, key: str, *, titles_only: bool = False) -> None:
+        """게시판 하나를 전부 긁습니다. 페이지가 여러 장이면 끝까지 넘깁니다."""
         label = MENU_LABELS.get(key, key)
-        if not rows:
-            log.info("%s / %s: 글이 없습니다.", course.name, label)
-            return
-        log.info("%s / %s: %d건", course.name, label, len(rows))
-
-        out_dir = self._dir(course, key)
-
-        if titles_only:
-            # 위험 메뉴: 목록만 기록하고 상세에는 절대 들어가지 않습니다.
-            listing = "\n".join(
-                f"- [{r['no']}] {r['title']}  ({r.get('date','')})" for r in rows
-            )
-            body = (f"# {course.name} - {label} (목록만)\n\n"
-                    "> 상세 페이지 진입은 LMS 에 기록이 남을 수 있어 하지 않았습니다.\n\n"
-                    f"{listing}\n")
-            path = out_dir / safe_name(f"{label}_목록.md")
-            path.write_text(body, encoding="utf-8")
-            self.stats.posts += 1
-            return
+        total_pages = self.board_page_count()
+        if total_pages > MAX_BOARD_PAGES:
+            log.warning("%s / %s: 페이지가 %d장입니다. 앞 %d장만 봅니다.",
+                        course.name, label, total_pages, MAX_BOARD_PAGES)
+            total_pages = MAX_BOARD_PAGES
 
         list_url = self.br.page.url
-        for row in rows:
-            state_key = sha256_text(
-                f"{course.course_id}|{key}|{row['no']}|{row['title']}|{row.get('date','')}"
-            )
-            if self.store.is_downloaded(state_key):
-                self.stats.skipped += 1
-                continue
-            try:
-                self._open_post(course, key, row, out_dir, state_key)
-            except Exception as exc:
-                msg = f"{course.name}/{label}/{row['title']}: {exc}"
-                log.warning("글 열기 실패: %s", msg)
+        out_dir = self._dir(course, key)
+        seen_titles: list[str] = []
+        grand_total = 0
+
+        for page_no in range(1, total_pages + 1):
+            if page_no > 1 and not self.goto_board_page(page_no):
+                # 여기서 조용히 넘어가면 사용자는 전부 받은 줄 압니다.
+                msg = (f"{course.name}/{label}: {page_no}페이지로 넘어가지 못했습니다. "
+                       f"전체 {total_pages}페이지 중 {page_no - 1}페이지까지만 수집했습니다. "
+                       "페이지 이동 방식이 바뀐 것 같습니다(probe 로 확인하세요).")
+                log.error(msg)
                 self.stats.errors.append(msg)
-            finally:
-                # 목록으로 복귀. 상세에서 뒤로가기가 막힌 화면이 있어 URL 로 돌아갑니다.
+                break
+
+            rows = self.read_board_rows()
+            if not rows:
+                if page_no == 1:
+                    log.info("%s / %s: 글이 없습니다.", course.name, label)
+                break
+
+            grand_total += len(rows)
+            if total_pages > 1:
+                log.info("%s / %s: %d/%d페이지, %d건",
+                         course.name, label, page_no, total_pages, len(rows))
+            else:
+                log.info("%s / %s: %d건", course.name, label, len(rows))
+
+            if titles_only:
+                seen_titles.extend(
+                    f"- [{r['no']}] {r['title']}  ({r.get('date','')})" for r in rows
+                )
+                continue
+
+            page_url = self.br.page.url
+            for row in rows:
+                state_key = sha256_text(
+                    f"{course.course_id}|{key}|{row['no']}|{row['title']}|{row.get('date','')}"
+                )
+                if self.store.is_downloaded(state_key):
+                    self.stats.skipped += 1
+                    continue
                 try:
-                    self.br.goto(list_url)
-                except Exception:
-                    self.open_menu(course, key)
+                    self._open_post(course, key, row, out_dir, state_key)
+                except Exception as exc:
+                    msg = f"{course.name}/{label}/{row['title']}: {exc}"
+                    log.warning("글 열기 실패: %s", msg)
+                    self.stats.errors.append(msg)
+                finally:
+                    # 목록으로 복귀. 상세에서 뒤로가기가 막힌 화면이 있어
+                    # URL 로 돌아갑니다. 단, 2페이지 이상에서는 URL 이
+                    # 1페이지를 가리키므로 다시 그 페이지로 넘어가야 합니다.
+                    try:
+                        self.br.goto(page_url)
+                        if page_no > 1 and not self.goto_board_page(page_no):
+                            raise RuntimeError("목록 페이지 복귀 실패")
+                    except Exception as exc:
+                        log.error("%s/%s: %d페이지로 돌아가지 못해 중단합니다: %s",
+                                  course.name, label, page_no, exc)
+                        self.stats.errors.append(
+                            f"{course.name}/{label}: {page_no}페이지 복귀 실패"
+                        )
+                        return
+
+        if titles_only and seen_titles:
+            body = (f"# {course.name} - {label} (목록만)\n\n"
+                    "> 상세 페이지 진입은 LMS 에 기록이 남을 수 있어 하지 않았습니다.\n\n"
+                    + "\n".join(seen_titles) + "\n")
+            (out_dir / safe_name(f"{label}_목록.md")).write_text(body, encoding="utf-8")
+            self.stats.posts += 1
+
+        if total_pages > 1:
+            log.info("%s / %s: 총 %d건 (%d페이지)",
+                     course.name, label, grand_total, total_pages)
+
+        try:
+            self.br.goto(list_url)
+        except Exception:
+            pass
 
     def _open_post(self, course: Course, key: str, row: dict[str, Any],
                    out_dir: Path, state_key: str) -> None:

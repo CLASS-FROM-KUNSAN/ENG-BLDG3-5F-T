@@ -1,0 +1,64 @@
+<!-- 페이지가 여러 장인 게시판.
+     실제 eClass 는 paginator3000.js 가 페이지 번호를 그리고, 클릭하면
+     JS 가 목록을 갈아끼웁니다. 그 동작을 최소한으로 흉내 낸 것입니다.
+     crawler 의 board_page_count() / goto_board_page() 를 검증합니다. -->
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>국립군산대학교 eClass</title></head>
+<body>
+<a href="/User.do?cmd=logoutUser">로그아웃</a>
+<form name="courseForm" method="post" action="/Course.do">
+<div id="listBox">
+  <table class="boardListBasic" summary="게시판 리스트입니다.">
+    <thead>
+      <tr class="odd-row">
+        <th class="num first">번 호</th><th>제 목</th><th>파 일</th>
+        <th>작성자</th><th>작성일</th><th class="last">조회수</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div class="paginator fullsize" id="paginator3">
+    <table width="100%"><tbody>
+      <tr class="paginator_tr odd-row">
+        <td width="100%" class="first last">
+          <span id="p1" class="pg">1</span>
+          <span id="p2" class="pg">2</span>
+          <span id="p3" class="pg">3</span>
+        </td>
+      </tr>
+    </tbody></table>
+  </div>
+  <div class="paginator_pages">3 pages</div>
+</div>
+</form>
+<script>
+// 페이지별 데이터. 실제로는 서버가 폼 POST 로 내려줍니다.
+var PAGES = {
+  1: [["9","9번 글 공지","홍길동","2026-10-28",true],
+      ["8","8번 글 공지","홍길동","2026-10-27",false]],
+  2: [["7","7번 글 공지","김철수","2026-10-20",false],
+      ["6","6번 글 공지","김철수","2026-10-19",true]],
+  3: [["5","5번 글 공지","이영희","2026-10-10",false]]
+};
+function render(n) {
+  var html = "";
+  PAGES[n].forEach(function (r, i) {
+    html += '<tr class="' + (i % 2 ? "" : "odd-row") + '">'
+      + '<td class="first">' + r[0] + '</td>'
+      + '<td class="textLeft"><div><a class="clip boardTitleNcontent TITLE_ORIGIN" '
+      + 'href="javascript:void(0)">' + r[1] + '</a></div></td>'
+      + '<td>' + (r[4] ? '<i class="icon-data-color m0"></i>' : '&nbsp;') + '</td>'
+      + '<td class="boardTitleNcontent REG_NAME">' + r[2] + '</td>'
+      + '<td>' + r[3] + '</td>'
+      + '<td class="last">10</td></tr>';
+  });
+  document.getElementById("rows").innerHTML = html;
+  window.__page = n;
+}
+document.querySelectorAll(".pg").forEach(function (el) {
+  el.style.cursor = "pointer";
+  el.addEventListener("click", function () { render(parseInt(el.textContent, 10)); });
+});
+render(1);
+</script>
+</body></html>
