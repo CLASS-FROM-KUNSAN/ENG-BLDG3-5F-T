@@ -80,7 +80,53 @@ WHISPER_LOGPROB_THRESHOLD = -1.0
 # 같은 문장이 연속으로 이 횟수를 넘으면 루프로 봅니다.
 DEFAULT_MAX_REPEATS = 3
 
+# 아주 짧은 세그먼트에 적용하는 더 낮은 무음 임계값.
+#
+# 왜 필요한가: 실측 기록(codyssey_final docs/research/speak-hallucination.md:116)
+# 에 따르면 Groq Whisper 는 1초 무음에 " you" 를 no_speech_prob 0.70,
+# avg_logprob -0.71 로 내놨고 "기존 필터 통과" 했습니다. 같은 입력에 OpenAI
+# whisper-1 은 0.94 를 줘서(:117) 걸렸습니다. 즉 **같은 계열, 같은 입력인데
+# 0.70~0.94 로 흔들리고 우리 임계값 0.85 가 그 사이를 가릅니다.**
+#
+# 긴 문장은 증거가 많아 0.85 로 충분하지만, 한두 단어짜리는 증거가 거의
+# 없습니다. 그래서 짧은 세그먼트에만 더 낮은 문턱을 적용합니다.
+# 교수가 "네" 한 마디 할 때는 no_speech_prob 가 낮게 나오므로 살아남습니다.
+SHORT_SEGMENT_WORDS = 2
+SHORT_SEGMENT_NO_SPEECH = 0.5
+
 _PUNCT = re.compile(r"[\s.,!?~…·\-'\"“”‘’()\[\]]+")
+
+# 표기형 환각 — 내용이 아니라 '상태를 적은 꼬리표'.
+# Whisper 가 잡음 구간에서 자주 내놓습니다. 강의실은 프로젝터 팬, 판서,
+# 키보드, 에어컨 소리가 계속 나므로 이게 특히 잘 생깁니다.
+#
+# 참고한 구현(codyssey_final speech_compare.py:17-35)은 "라틴 문자가 하나도
+# 없으면 버린다" 는 규칙을 썼는데, 그대로 가져오면 **한국어 전사가 통째로
+# 삭제됩니다.** 그래서 '문자나 숫자가 하나도 없을 때' 로 바꿨습니다.
+_BRACKETED_ONLY = re.compile(r"^\W*(?:\[[^\]]*\]|\([^)]*\)|<[^>]*>)\W*$")
+_PLACEHOLDER_WORDS = frozenset({
+    "silence", "silent", "no speech", "no audio", "no voice", "blank audio",
+    "inaudible", "unintelligible", "music", "applause", "laughter", "sound",
+    "no_speech", "blank_audio",
+    "음악", "박수", "웃음", "무음", "잡음", "침묵", "소리", "알아들을 수 없음",
+})
+
+
+def _has_alnum(text: str) -> bool:
+    """문자나 숫자가 하나라도 있는지. 한글·한자·키릴 전부 포함됩니다."""
+    return any(ch.isalnum() for ch in text)
+
+
+def is_placeholder(text: str) -> bool:
+    """'내용' 이 아니라 '상태 꼬리표' 인지."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    if not _has_alnum(stripped):
+        return True                       # "...", "♪♪♪", "---", "ㅡㅡ"
+    if _BRACKETED_ONLY.match(stripped):
+        return True                       # "[음악]", "(웃음)", "[Music]"
+    return normalize(stripped) in _PLACEHOLDER_WORDS
 
 
 def normalize(text: str) -> str:
@@ -95,18 +141,28 @@ class CleanupStats:
     dropped_phrase: int = 0
     dropped_silence: int = 0
     dropped_repeat: int = 0
-    samples: list[str] = field(default_factory=list)
+    dropped_placeholder: int = 0
+    # 버린 세그먼트의 '숫자' 를 남깁니다. 본문만 남기면 나중에 임계값이
+    # 맞는지 틀린지 판단할 자료가 없습니다.
+    samples: list[dict] = field(default_factory=list)
 
     @property
     def dropped(self) -> int:
-        return self.dropped_phrase + self.dropped_silence + self.dropped_repeat
+        return (self.dropped_phrase + self.dropped_silence
+                + self.dropped_repeat + self.dropped_placeholder)
+
+    @property
+    def drop_ratio(self) -> float:
+        total = self.kept + self.dropped
+        return self.dropped / total if total else 0.0
 
     def line(self) -> str:
         if not self.dropped:
             return f"{self.kept}개 구간, 제거 없음"
         return (
             f"{self.kept}개 구간 유지, {self.dropped}개 제거 "
-            f"(상투어 {self.dropped_phrase} / 무음 {self.dropped_silence} / 반복 {self.dropped_repeat})"
+            f"(상투어 {self.dropped_phrase} / 무음 {self.dropped_silence} / "
+            f"반복 {self.dropped_repeat} / 표기형 {self.dropped_placeholder})"
         )
 
 
@@ -122,12 +178,16 @@ class Cleaner:
         max_repeats: int = DEFAULT_MAX_REPEATS,
         extra_phrases: tuple[str, ...] = (),
         use_logprob_rule: bool = True,
+        drop_placeholders: bool = True,
+        short_segment_no_speech: float = SHORT_SEGMENT_NO_SPEECH,
     ) -> None:
         self.enabled = enabled
         self.drop_phrases = drop_phrases
         self.no_speech_threshold = float(no_speech_threshold)
         self.max_repeats = max(0, int(max_repeats))
         self.use_logprob_rule = bool(use_logprob_rule)
+        self.drop_placeholders = bool(drop_placeholders)
+        self.short_segment_no_speech = float(short_segment_no_speech)
         self.phrases = {normalize(p) for p in HALLUCINATION_PHRASES}
         self.phrases |= {normalize(p) for p in extra_phrases if p}
         self.phrases.discard("")
@@ -153,12 +213,18 @@ class Cleaner:
             self._note_kept(stripped)
             return False, ""
 
+        # 0) 표기형 환각 — 내용이 아니라 상태 꼬리표
+        if self.drop_placeholders and is_placeholder(stripped):
+            self.stats.dropped_placeholder += 1
+            self._remember(stripped, no_speech_prob, avg_logprob, "표기형")
+            return True, "표기형 환각"
+
         norm = normalize(stripped)
 
         # 1) 상투어
         if self.drop_phrases and norm in self.phrases:
             self.stats.dropped_phrase += 1
-            self._remember(stripped)
+            self._remember(stripped, no_speech_prob, avg_logprob, "상투어")
             return True, "상투어 환각"
 
         # 2) 모델이 스스로 무음이라고 본 구간
@@ -168,7 +234,7 @@ class Cleaner:
             and no_speech_prob > self.no_speech_threshold
         ):
             self.stats.dropped_silence += 1
-            self._remember(stripped)
+            self._remember(stripped, no_speech_prob, avg_logprob, "무음")
             return True, f"무음 추정(no_speech_prob={no_speech_prob:.2f})"
 
         # 2-b) 무음 의심 + 확신 없음 (Whisper 자체 기본 규칙)
@@ -180,10 +246,27 @@ class Cleaner:
             and avg_logprob < WHISPER_LOGPROB_THRESHOLD
         ):
             self.stats.dropped_silence += 1
-            self._remember(stripped)
+            self._remember(stripped, no_speech_prob, avg_logprob, "무음+저확신")
             return True, (
                 f"무음 의심+저확신(no_speech_prob={no_speech_prob:.2f}, "
                 f"avg_logprob={avg_logprob:.2f})"
+            )
+
+        # 2-c) 짧은 세그먼트는 더 낮은 문턱
+        # no_speech_threshold 를 0 으로 꺼 두었으면 이 검사도 같이 끕니다.
+        # 사용자가 "무음 판정 쓰지 마" 라고 한 것이므로 일관되어야 합니다.
+        if (
+            self.no_speech_threshold > 0
+            and self.short_segment_no_speech > 0
+            and no_speech_prob is not None
+            and no_speech_prob > self.short_segment_no_speech
+            and len(normalize(stripped).split()) <= SHORT_SEGMENT_WORDS
+        ):
+            self.stats.dropped_silence += 1
+            self._remember(stripped, no_speech_prob, avg_logprob, "짧은구간")
+            return True, (
+                f"짧은 구간 무음 추정(no_speech_prob={no_speech_prob:.2f}, "
+                f"{len(normalize(stripped).split())}단어)"
             )
 
         # 3) 반복 루프
@@ -194,7 +277,7 @@ class Cleaner:
                 self._last, self._run = norm, 1
             if self._run > self.max_repeats:
                 self.stats.dropped_repeat += 1
-                self._remember(stripped)
+                self._remember(stripped, no_speech_prob, avg_logprob, "반복")
                 return True, f"같은 문장 {self._run}회 반복"
         self._note_kept(stripped)
         return False, ""
@@ -203,9 +286,15 @@ class Cleaner:
     def _note_kept(self, text: str) -> None:
         self.stats.kept += 1
 
-    def _remember(self, text: str) -> None:
-        if len(self.stats.samples) < 5:
-            self.stats.samples.append(text[:60])
+    def _remember(self, text: str, no_speech_prob: float | None = None,
+                  avg_logprob: float | None = None, reason: str = "") -> None:
+        if len(self.stats.samples) < 20:
+            self.stats.samples.append({
+                "text": text[:80],
+                "reason": reason,
+                "no_speech_prob": round(no_speech_prob, 3) if no_speech_prob is not None else None,
+                "avg_logprob": round(avg_logprob, 3) if avg_logprob is not None else None,
+            })
 
     def report(self, where: str = "") -> None:
         """끝나고 한 번 호출해 결과를 로그에 남깁니다."""
@@ -214,7 +303,20 @@ class Cleaner:
         prefix = f"{where}: " if where else ""
         log.info("%s전사 정리 — %s", prefix, self.stats.line())
         for sample in self.stats.samples:
-            log.debug("  제거된 예: %s", sample)
+            log.debug(
+                "  제거(%s) nsp=%s lp=%s: %s",
+                sample.get("reason", ""), sample.get("no_speech_prob"),
+                sample.get("avg_logprob"), sample.get("text", ""),
+            )
+        # 너무 많이 지웠으면 알려 줍니다. 환각이 남는 것보다
+        # 교수의 실제 말이 조용히 사라지는 쪽이 더 나쁩니다.
+        if self.stats.drop_ratio > 0.2 and self.stats.dropped > 5:
+            log.warning(
+                "%s구간의 %.0f%%를 제거했습니다. 정리 규칙이 과하게 작동했을 수 있습니다. "
+                "원본이 궁금하면 config 에서 transcribe.cleanup.enabled = false 로 두고 "
+                "다시 전사해 보세요.",
+                prefix, self.stats.drop_ratio * 100,
+            )
 
 
 def from_config(cfg) -> Cleaner:
@@ -227,4 +329,8 @@ def from_config(cfg) -> Cleaner:
         max_repeats=int(cfg.get("transcribe.cleanup.max_repeats", DEFAULT_MAX_REPEATS)),
         extra_phrases=tuple(cfg.get("transcribe.cleanup.extra_phrases", [])),
         use_logprob_rule=bool(cfg.get("transcribe.cleanup.use_logprob_rule", True)),
+        drop_placeholders=bool(cfg.get("transcribe.cleanup.drop_placeholders", True)),
+        short_segment_no_speech=float(
+            cfg.get("transcribe.cleanup.short_segment_no_speech", SHORT_SEGMENT_NO_SPEECH)
+        ),
     )

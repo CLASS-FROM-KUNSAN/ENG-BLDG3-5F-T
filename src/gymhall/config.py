@@ -120,7 +120,10 @@ DEFAULTS: dict[str, Any] = {
             "manual": True,
             "schedule_enabled": False,
             "watch_enabled": False,
-            "watch_processes": [],
+            # 예시 파일(config.example.toml)과 같은 값이어야 합니다.
+            # 다르면 사용자가 이 줄을 지웠을 때 감시가 조용히 아무것도
+            # 하지 않게 됩니다. tests/test_config.py 가 둘을 대조합니다.
+            "watch_processes": ["Zoom.exe", "Webex.exe", "Teams.exe"],
             "watch_window_titles": [],
             "watch_interval_sec": 15,
             "watch_stop_grace_sec": 60,

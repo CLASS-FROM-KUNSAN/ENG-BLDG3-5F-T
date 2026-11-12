@@ -250,40 +250,52 @@ def test_long_youtube_phrases_still_dropped(text):
     assert Cleaner().should_drop(text, 0.1)[0] is True
 
 
-def test_short_phrase_dropped_when_signals_agree():
-    """'Thank you' 도 모델이 무음+저확신이라고 하면 버립니다."""
-    cleaner = Cleaner()
-    assert cleaner.should_drop("Thank you", 0.7, -1.5)[0] is True
-    assert cleaner.should_drop("Thank you", 0.7, -0.3)[0] is False
+def test_short_phrase_dropped_when_signal_is_bad():
+    """'Thank you' 도 모델이 무음이라고 보면 버립니다.
+
+    no_speech_prob 0.7 은 "70% 확률로 무음" 이라는 뜻입니다. 교수가 또렷이
+    "Thank you" 라고 말했다면 이 값이 낮게 나옵니다. 짧은 구간에 0.7 이
+    찍혔다면 환각 쪽이 훨씬 유력합니다(실측 기록: Groq 가 1초 무음에
+    " you" 를 0.70 으로 내놨습니다).
+    """
+    assert Cleaner().should_drop("Thank you", 0.7, -1.5)[0] is True
+    assert Cleaner().should_drop("Thank you", 0.7, -0.3)[0] is True
+    # 신호가 깨끗하면 그대로 둡니다 — 실제 마무리 인사
+    assert Cleaner().should_drop("Thank you", 0.15, -0.3)[0] is False
 
 
 # ---------------------------------------------------------------------------
 # avg_logprob 결합 규칙 (Whisper 자체 기본값)
 # ---------------------------------------------------------------------------
+LONG = "자 그러면 이진 탐색 트리의 삽입 연산을 보겠습니다"
+
+
 def test_logprob_rule_needs_both_signals_bad():
+    """긴 문장으로 확인합니다 — 짧은 구간 규칙에 먼저 걸리면 이 규칙을
+    시험하는 게 아니게 됩니다."""
     cleaner = Cleaner()
     # 무음 의심은 있지만 확신도는 괜찮음 -> 유지
-    assert cleaner.should_drop("뭔가 말했습니다", 0.7, -0.5)[0] is False
+    assert cleaner.should_drop(LONG, 0.7, -0.5)[0] is False
     # 확신도는 낮지만 무음 의심은 없음 -> 유지
-    assert cleaner.should_drop("뭔가 말했습니다", 0.2, -2.0)[0] is False
+    assert cleaner.should_drop(LONG, 0.2, -2.0)[0] is False
     # 둘 다 나쁨 -> 제거
-    drop, reason = cleaner.should_drop("뭔가 말했습니다", 0.7, -2.0)
+    drop, reason = cleaner.should_drop(LONG, 0.7, -2.0)
     assert drop is True
     assert "저확신" in reason
 
 
 def test_logprob_rule_can_be_disabled():
     cleaner = Cleaner(use_logprob_rule=False)
-    assert cleaner.should_drop("뭔가 말했습니다", 0.7, -2.0)[0] is False
+    assert cleaner.should_drop(LONG, 0.7, -2.0)[0] is False
 
 
 def test_logprob_missing_skips_the_rule():
     """엔진이 avg_logprob 를 주지 않으면 그 규칙만 건너뜁니다."""
-    assert Cleaner().should_drop("뭔가 말했습니다", 0.7, None)[0] is False
+    assert Cleaner().should_drop(LONG, 0.7, None)[0] is False
 
 
 def test_single_threshold_still_applies_above_085():
-    assert Cleaner().should_drop("뭔가", 0.9, None)[0] is True
+    assert Cleaner().should_drop(LONG, 0.9, None)[0] is True
 
 
 def test_english_lecture_flow():
@@ -306,3 +318,135 @@ def test_english_lecture_flow():
         "Okay, see you next week",
         "Thank you",
     ], kept
+
+
+# ---------------------------------------------------------------------------
+# 표기형 환각 — 내용이 아니라 '상태 꼬리표'
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "text",
+    ["[음악]", "[Music]", "(웃음)", "[박수]", "[BLANK_AUDIO]", "[inaudible]",
+     "(no speech)", "[silence]", "<no audio>", "♪♪♪", "...", "---", "   . . .   "],
+)
+def test_placeholder_segments_are_dropped(text):
+    """강의실은 프로젝터 팬·판서·키보드 소리가 계속 나서
+    Whisper 가 이런 꼬리표를 자주 내놓습니다."""
+    drop, reason = Cleaner().should_drop(text, 0.3, -0.5)
+    assert drop is True, f"{text!r} 가 남았습니다"
+    assert "표기형" in reason
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "자 오늘은 이진 탐색 트리를 하겠습니다",
+        "네", "예", "그렇죠", "맞습니다",
+        "O(log n) 입니다",
+        "(참고) 교재 3장을 보세요",          # 괄호로 '시작' 하지만 내용이 있음
+        "트리의 높이는 log n 입니다",
+        "1번 문제",
+        "3장 45쪽",
+    ],
+)
+def test_real_korean_speech_survives_placeholder_rule(text):
+    """회귀 방지: 참고한 구현은 '라틴 문자가 없으면 버린다' 였습니다.
+    그대로 가져왔다면 **한국어 전사가 통째로 삭제**됐을 것입니다.
+    """
+    drop, reason = Cleaner().should_drop(text, 0.15, -0.3)
+    assert drop is False, f"{text!r} 가 {reason} 으로 삭제됐습니다"
+
+
+def test_placeholder_rule_can_be_disabled():
+    assert Cleaner(drop_placeholders=False).should_drop("[음악]", 0.2, -0.3)[0] is False
+
+
+def test_is_placeholder_direct():
+    from gymhall.transcribe.cleanup import is_placeholder
+
+    assert is_placeholder("[Music]") is True
+    assert is_placeholder("♪") is True
+    assert is_placeholder("") is True
+    assert is_placeholder("안녕하세요") is False
+    assert is_placeholder("Hello") is False
+    assert is_placeholder("(참고) 교재를 보세요") is False
+
+
+# ---------------------------------------------------------------------------
+# 짧은 구간 — 실측으로 뚫린 임계값
+# ---------------------------------------------------------------------------
+def test_measured_groq_silence_hallucination_is_caught():
+    """회귀 방지 — 실측 기록된 구멍.
+
+    codyssey_final docs/research/speak-hallucination.md:116 에 따르면
+    Groq Whisper 는 1초 무음에 " you" 를 no_speech_prob 0.70,
+    avg_logprob -0.71 로 내놨고 "기존 필터 통과" 했습니다.
+    우리 필터도 같은 값에서 통과시켰습니다(0.70 < 0.85, -0.71 > -1.0).
+    """
+    drop, reason = Cleaner().should_drop(" you", 0.70, -0.71)
+    assert drop is True, "실측된 무음 환각이 여전히 통과합니다"
+    assert "짧은 구간" in reason
+
+
+def test_measured_openai_silence_hallucination_is_caught():
+    """같은 입력에 OpenAI whisper-1 은 0.94 를 줬습니다(:117).
+    즉 같은 계열인데 0.70~0.94 로 흔들립니다."""
+    assert Cleaner().should_drop("you", 0.94, -0.71)[0] is True
+
+
+@pytest.mark.parametrize("text", ["네", "예", "Yes", "Okay", "맞아요", "좋습니다"])
+def test_short_real_utterances_survive_when_signal_is_clean(text):
+    """교수가 한 마디 할 때는 no_speech_prob 가 낮게 나옵니다."""
+    assert Cleaner().should_drop(text, 0.15, -0.3)[0] is False
+
+
+def test_long_segment_is_not_judged_by_short_rule():
+    """긴 문장은 증거가 많아 0.85 기준을 그대로 씁니다."""
+    long_text = "자 그러면 이진 탐색 트리의 삽입 연산을 보겠습니다"
+    assert Cleaner().should_drop(long_text, 0.70, -0.71)[0] is False
+
+
+def test_short_rule_threshold_is_configurable():
+    lenient = Cleaner(short_segment_no_speech=0.99)
+    assert lenient.should_drop(" you", 0.70, -0.71)[0] is False
+    off = Cleaner(short_segment_no_speech=0)
+    assert off.should_drop(" you", 0.70, -0.71)[0] is False
+
+
+# ---------------------------------------------------------------------------
+# 임계값을 나중에 고칠 수 있게 숫자를 남기는가
+# ---------------------------------------------------------------------------
+def test_dropped_samples_keep_the_numbers():
+    """본문만 남기면 임계값이 맞는지 틀린지 판단할 자료가 없습니다."""
+    cleaner = Cleaner()
+    cleaner.should_drop("시청해주셔서 감사합니다", 0.42, -0.9)
+    sample = cleaner.stats.samples[0]
+    assert sample["no_speech_prob"] == pytest.approx(0.42)
+    assert sample["avg_logprob"] == pytest.approx(-0.9)
+    assert sample["reason"] == "상투어"
+    assert "시청해주셔서" in sample["text"]
+
+
+def test_drop_ratio_is_tracked():
+    cleaner = Cleaner()
+    for i in range(8):
+        cleaner.should_drop(f"정상 문장 {i} 입니다", 0.1, -0.3)
+    cleaner.should_drop("[음악]", 0.1, -0.3)
+    cleaner.should_drop("(웃음)", 0.1, -0.3)
+    assert cleaner.stats.kept == 8
+    assert cleaner.stats.dropped == 2
+    assert cleaner.stats.drop_ratio == pytest.approx(0.2)
+
+
+def test_excessive_removal_warns(caplog):
+    """너무 많이 지웠으면 사용자에게 알려야 합니다.
+    교수의 실제 말이 조용히 사라지는 쪽이 환각이 남는 쪽보다 나쁩니다."""
+    import logging
+
+    cleaner = Cleaner()
+    for i in range(3):
+        cleaner.should_drop(f"정상 문장 {i}", 0.1, -0.3)
+    for i in range(10):
+        cleaner.should_drop(f"[음악 {i}]", 0.1, -0.3)
+    with caplog.at_level(logging.WARNING, logger="gymhall.transcribe.cleanup"):
+        cleaner.report("테스트")
+    assert any("과하게" in r.message for r in caplog.records), caplog.records
