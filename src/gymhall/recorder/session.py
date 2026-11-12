@@ -24,6 +24,7 @@ from pathlib import Path
 
 from ..logging_setup import get as get_logger
 from ..paths import Layout, safe_name
+from . import devices
 from .audio import AudioRecorder
 from .mux import MuxInput, mux
 from .video import VideoRecorder
@@ -42,6 +43,9 @@ class Segment:
     # 장치 무음으로 중단된 세그먼트. 로컬에는 두되 올리지는 않습니다 —
     # 소리 없는 영상이 백업된 것처럼 보이면 안 됩니다.
     broken: bool = False
+
+
+_UNSET = object()
 
 
 @dataclass
@@ -90,6 +94,10 @@ class RecordingSession:
         # 소리는 그때부터 받고(수업이 일찍 시작해도 안 놓치려고),
         # 화면만 정시에 시작합니다. mux 가 -itsoffset 으로 맞춥니다.
         self.video_not_before = float(video_not_before or 0.0)
+        # 마이크는 세션당 한 번만 고릅니다. _UNSET 은 '아직 안 골랐다'
+        # 이고 None 은 '골랐는데 쓸 게 없다' 입니다. 둘을 섞으면 매
+        # 세그먼트마다 다시 시험해 그때마다 1.5초씩 소리가 빕니다.
+        self._mic_source: object = _UNSET
         self.silence_stop_sec = float(cfg.get("recording.audio.silence_stop_sec", 900))
         self.silence_abort_sec = float(cfg.get("recording.audio.silence_abort_sec", 3600))
         # 장치 무음으로 중단된 세션은 올리지 않습니다.
@@ -124,6 +132,67 @@ class RecordingSession:
                             "녹화를 멈춥니다. python -m gymhall devices 로 "
                             "장치를 확인하세요.")
         return None
+
+    def _resolve_mic(self):
+        """이 세션에서 쓸 마이크. 한 번만 고르고 그대로 씁니다.
+
+        설정에 이름이 적혀 있으면 그게 유일한 진실입니다 — 시험하지
+        않습니다. 사람이 고른 것을 코드가 뒤집으면 안 됩니다. 죽어
+        있으면 녹음이 끝나고 'peak 가 정확히 0' 오류가 알려 줍니다.
+        """
+        if self._mic_source is not _UNSET:
+            return self._mic_source
+
+        cfg = self.cfg
+        if not cfg.get("recording.audio.mic_enabled", True):
+            self._mic_source = None
+            return None
+
+        explicit = str(cfg.get("recording.audio.mic_device", "") or "").strip()
+        if explicit or not cfg.get("recording.audio.mic_auto_select", True):
+            # 리졸버가 평소처럼 이름으로 찾습니다.
+            self._mic_source = None
+            return None
+
+        mic, probes = devices.select_working_mic(
+            duration_sec=float(cfg.get("recording.audio.mic_probe_sec", 1.5)),
+            samplerate=int(cfg.get("recording.audio.samplerate", 48000)),
+            channels=int(cfg.get("recording.audio.channels", 2)),
+        )
+        self._log_mic_choice(mic, probes)
+        self._mic_source = mic
+        return mic
+
+    @staticmethod
+    def _log_mic_choice(mic, probes) -> None:
+        if not probes:
+            log.warning("마이크를 하나도 찾지 못했습니다. 영상만 녹화됩니다.")
+            return
+        if all(p.dead for p in probes):
+            # 하나만 0 이면 장치 문제, 전부 0 이면 권한 문제입니다.
+            # 이 둘을 한 문장에 섞으면 고칠 곳을 알 수 없습니다.
+            log.error(
+                "마이크 %d개가 전부 신호 0 입니다(%s). 장치 문제가 아니라 "
+                "Windows 설정 > 개인 정보 및 보안 > 마이크 > '데스크톱 앱이 "
+                "마이크에 액세스하도록 허용' 이 꺼져 있을 가능성이 큽니다. "
+                "그래도 '%s' 로 시도는 합니다.",
+                len(probes), ", ".join(p.name for p in probes[:3]),
+                getattr(mic, "name", "(없음)"),
+            )
+            return
+        chosen = probes[-1]
+        if len(probes) == 1:
+            log.info("마이크: '%s' (최대레벨 %.5f)", chosen.name, chosen.peak)
+            return
+        log.warning(
+            "기본 마이크 '%s' 는 신호가 정확히 0 이라 '%s' 로 바꿉니다"
+            "(최대레벨 %.5f). 고정하려면 config.toml 의 mic_device 에 "
+            "이름 일부를 적으세요.",
+            probes[0].name, chosen.name, chosen.peak,
+        )
+        for p in probes[:-1]:
+            log.info("  건너뜀: '%s'%s", p.name,
+                     f" — {p.error}" if p.error else " — 신호 0")
 
     def _wait_for_video_start(self) -> None:
         """화면 캡처 시작 시각까지 기다립니다. 첫 세그먼트에서만 걸립니다.
@@ -267,6 +336,7 @@ class RecordingSession:
                 silence_peak=float(cfg.get("recording.audio.silence_peak", 1e-5)),
                 realtime_queue=self.realtime_queue,
                 realtime_source=str(cfg.get("transcribe.source_track", "system")),
+                mic_source=self._resolve_mic(),
             )
             audio_rec.start(stem)
 

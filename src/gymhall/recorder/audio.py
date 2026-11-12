@@ -247,6 +247,9 @@ class AudioRecorder:
     silence_peak: float = 1e-5
     realtime_queue: queue.Queue | None = None
     realtime_source: str = "system"
+    # 세션이 미리 골라 둔 마이크. 주면 리졸버를 부르지 않습니다.
+    # 세그먼트마다 다시 고르면 그때마다 소리가 1.5초 빕니다.
+    mic_source: object | None = None
 
     tracks: list[AudioTrack] = field(default_factory=list)
 
@@ -261,11 +264,14 @@ class AudioRecorder:
                           devices.resolve_mic_source))
 
         for name, device_name, gain, resolver in specs:
-            try:
-                source = resolver(device_name)
-            except Exception as exc:
-                log.error("[%s] 장치를 열 수 없습니다: %s", name, exc)
-                continue
+            if name == "mic" and self.mic_source is not None:
+                source = self.mic_source
+            else:
+                try:
+                    source = resolver(device_name)
+                except Exception as exc:
+                    log.error("[%s] 장치를 열 수 없습니다: %s", name, exc)
+                    continue
             tap = self.realtime_queue if (
                 self.realtime_queue is not None
                 and (self.realtime_source == name or self.realtime_source == "both")

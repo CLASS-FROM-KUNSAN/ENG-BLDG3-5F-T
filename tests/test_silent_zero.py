@@ -460,3 +460,53 @@ def test_watch_returns_zero_when_recording_works(tmp_path, monkeypatch):
         once = True
 
     assert cli.cmd_record_watch(_A()) == 0
+
+
+def test_watch_once_failure_is_not_the_same_as_a_user_interrupt(tmp_path, monkeypatch):
+    """스케줄 작업으로 걸면 둘을 구분해야 합니다.
+
+    예전에는 --once 가 KeyboardInterrupt 를 던져 바깥의 except 가
+    사용자의 진짜 Ctrl+C 와 섞었습니다.
+    """
+    from gymhall.recorder import watcher as w
+
+    class _FakeWatcher:
+        def __init__(self, **kw):
+            pass
+
+        def watch(self, on_start):
+            on_start("zoom.exe")
+
+        def wait_until_gone(self, *a, **kw):
+            return True
+
+    monkeypatch.setattr(w, "Watcher", _FakeWatcher)
+    monkeypatch.setattr(cli, "_load", lambda _a: (Cfg(), Layout(tmp_path)))
+    monkeypatch.setattr(cli, "_resolve_course", lambda *a, **kw: None)
+    monkeypatch.setattr(cli, "_run_recording", lambda *a, **kw: None)
+
+    class _A(_Args):
+        once = True
+
+    assert cli.cmd_record_watch(_A()) == 1, "녹화 실패인데 1 이 아닙니다"
+
+
+def test_a_real_ctrl_c_during_watch_is_130(tmp_path, monkeypatch):
+    """사용자 중단은 main 이 130 으로 내보냅니다. 1 로 바꾸면 안 됩니다."""
+    from gymhall.recorder import watcher as w
+
+    class _InterruptedWatcher:
+        def __init__(self, **kw):
+            pass
+
+        def watch(self, on_start):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(w, "Watcher", _InterruptedWatcher)
+    monkeypatch.setattr(cli, "_load", lambda _a: (Cfg(), Layout(tmp_path)))
+
+    class _A(_Args):
+        once = False
+
+    with pytest.raises(KeyboardInterrupt):
+        cli.cmd_record_watch(_A())

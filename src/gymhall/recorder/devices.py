@@ -6,12 +6,17 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Literal
 
 from ..logging_setup import get as get_logger
 
 log = get_logger("recorder.devices")
+
+
+# '안 넘겼다' 와 '없다(None)' 를 가르는 표시입니다.
+_UNSET = object()
 
 
 class SoundcardMissing(Exception):
@@ -101,6 +106,112 @@ def resolve_mic_source(name: str = ""):
             "python -m gymhall devices 로 정확한 이름을 확인하세요."
         )
     return sc.default_microphone()
+
+
+# ---------------------------------------------------------------------
+# 마이크 자동 선택
+# ---------------------------------------------------------------------
+# 2026-11-13 실기 PC 의 기본 마이크는 '마이크 배열 (Audio Share)' 라는
+# 가상 장치였고, 61초 녹음에 0 아닌 바이트가 **하나도** 없었습니다.
+# 설정을 비워 둔 PC 는 OS 기본 장치를 그대로 쓰는데, 그게 이런
+# 장치면 수업 내내 비트 단위 0 이 녹음되고 끝나고서야 압니다.
+#
+# 여기서 하는 일은 **좋은 마이크를 고르는 것이 아니라 죽은 마이크를
+# 거르는 것**입니다. 잡음 크기로 품질을 판단할 수는 없습니다 —
+# 인텔이 Focusrite 보다 30배 시끄러운 것은 성능이 아니라 잡음 바닥이
+# 다르기 때문입니다. 쓸 수 있는 신호는 "정확히 0 이면 죽은 것" 하나뿐입니다.
+#
+# 시스템 소리(루프백)에는 **절대 쓰지 않습니다.** 재생 중인 게 없으면
+# 정확히 0 이 정상이라 전부 오탐이 됩니다.
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    name: str
+    peak: float
+    error: str | None = None
+
+    @property
+    def dead(self) -> bool:
+        """비트 단위로 정확히 0 이거나, 열지 못했습니다.
+
+        진짜 마이크는 조용한 방에서도 ADC 열잡음으로 ±1 LSB 는
+        흔들립니다. 정확히 0 이면 조용한 게 아니라 신호 경로가
+        없는 것입니다.
+        """
+        return self.error is not None or self.peak == 0.0
+
+
+def probe_mic(mic, *, duration_sec: float = 1.5,
+              samplerate: int = 48000, channels: int = 2) -> ProbeResult:
+    """장치를 잠깐 열어 최대 레벨만 잽니다. 디스크에는 쓰지 않습니다.
+
+    받은 소리는 메모리에서 통계만 세고 버립니다. 수업 전 강의실
+    대화가 파일로 남지 않게 하려는 것으로, pre-roll 프라이버시
+    원칙과 같습니다.
+    """
+    import numpy as np
+
+    name = str(getattr(mic, "name", "") or "(이름 없음)")
+    peak = 0.0
+    try:
+        with mic.recorder(samplerate=samplerate, channels=channels,
+                          blocksize=4096) as rec:
+            deadline = time.monotonic() + float(duration_sec)
+            while time.monotonic() < deadline:
+                data = rec.record(numframes=4096)
+                if data is None or len(data) == 0:
+                    continue
+                peak = max(peak, float(np.max(np.abs(data))))
+    except Exception as exc:
+        return ProbeResult(name, 0.0, str(exc))
+    return ProbeResult(name, peak)
+
+
+def select_working_mic(*, duration_sec: float = 1.5,
+                       samplerate: int = 48000, channels: int = 2,
+                       mics=_UNSET, default=_UNSET):
+    """살아 있는 마이크 하나를 고릅니다. (장치, 시험결과들) 을 돌려줍니다.
+
+    기본 장치를 먼저 시험하고, 죽어 있으면 나머지를 순서대로 봅니다.
+    첫 성공에서 멈추므로 보통 1.5초면 끝납니다.
+
+    **전부 죽어 있어도 기본 장치를 돌려줍니다.** 포기하면 영상만
+    남는데, 그보다는 시도하고 경고하는 쪽이 낫습니다. 전부 0 이라는
+    것은 장치 문제가 아니라 Windows 마이크 권한이 꺼져 있다는
+    뜻일 가능성이 큽니다 — 하나만 0 이면 장치, 전부 0 이면 권한.
+
+    mics/default 는 테스트 주입용입니다. 실장치 없이 모든 갈래를
+    시험할 수 있어야 합니다(리눅스 CI 에서 이 함수가 한 줄도 안 돌면
+    의미가 없습니다).
+    """
+    # None 은 '마이크가 없다' 는 **답**일 수 있습니다. '안 넘겼다' 와
+    # 섞으면, 장치가 없는 PC 를 시험하려 할 때마다 진짜 soundcard 를
+    # 부르게 됩니다(리눅스 CI 에서는 그 자리에서 터집니다).
+    if mics is _UNSET or default is _UNSET:
+        sc = _sc()
+        if mics is _UNSET:
+            mics = list(sc.all_microphones(include_loopback=False))
+        if default is _UNSET:
+            default = sc.default_microphone()
+
+    ordered = []
+    seen = set()
+    for mic in ([default] if default is not None else []) + list(mics):
+        name = str(getattr(mic, "name", "") or "")
+        if name in seen:
+            continue
+        seen.add(name)
+        ordered.append(mic)
+
+    probes: list[ProbeResult] = []
+    for mic in ordered:
+        result = probe_mic(mic, duration_sec=duration_sec,
+                           samplerate=samplerate, channels=channels)
+        probes.append(result)
+        if not result.dead:
+            return mic, probes
+    return default, probes
 
 
 def describe() -> str:

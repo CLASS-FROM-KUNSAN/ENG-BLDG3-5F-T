@@ -667,6 +667,16 @@ def cmd_record_schedule(args) -> int:
             return 0 if result is not None else 1
 
 
+class _WatchOnceDone(Exception):
+    """--once 로 한 번 감지하고 끝났습니다.
+
+    예전에는 여기서 KeyboardInterrupt 를 던졌습니다. 그러면 바깥의
+    except 가 사용자의 진짜 Ctrl+C 와 구별하지 못해, '사용자 중단'
+    과 '녹화 실패' 가 같은 종료 코드로 나갔습니다. watch --once 를
+    스케줄 작업으로 걸면 이게 치명적입니다.
+    """
+
+
 def cmd_record_watch(args) -> int:
     from .recorder.watcher import Watcher
 
@@ -702,12 +712,17 @@ def cmd_record_watch(args) -> int:
                       "(다른 녹화가 돌고 있습니다).", hit)
             failures.append(hit)
         if args.once:
-            raise KeyboardInterrupt
+            # 진짜 Ctrl+C 와 섞으면 안 됩니다. 사용자 중단은 130,
+            # 녹화 실패는 1 이어야 스케줄러가 구분합니다.
+            raise _WatchOnceDone
 
     try:
         watcher.watch(on_start)
+    except _WatchOnceDone:
+        pass
     except KeyboardInterrupt:
         log.info("감시를 종료합니다.")
+        raise
     if failures:
         log.error("감지했지만 녹화하지 못한 것 %d건: %s",
                   len(failures), ", ".join(failures))

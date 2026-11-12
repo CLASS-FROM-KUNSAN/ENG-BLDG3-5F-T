@@ -481,3 +481,32 @@ def test_nothing_at_all_still_keeps_the_post_pending(tmp_path):
                    what="공지", extra={})
     assert not c.store.is_downloaded("KEY-NONE")
     assert c.stats.errors
+
+
+def test_a_pending_post_clears_once_the_files_are_present(tmp_path):
+    """1회차에서 부분 실패한 글이 2회차에 완료로 승격돼야 합니다.
+
+    _finish_post 는 미완료면 downloaded 를 안 적고 pending 만 남깁니다.
+    그러면 다음 실행이 그 글을 다시 엽니다. 그런데 첨부는 내용 해시가
+    같아 saved 에서 빠지므로, att.known 을 안 보면 **매번 같은 판정**을
+    받아 영원히 안 끝납니다. API 낭비와 로그 노이즈가 영구화됩니다.
+    """
+    c = _c(tmp_path)
+    md = tmp_path / "글.md"
+    md.write_text("본문", encoding="utf-8")
+
+    # 1회차: 첨부 실패 -> 미완료
+    c._finish_post("KEY-P", md, Attachments(failed=["자료.pdf"]),
+                   expected_file=True, what="과목가/공지/글", extra={})
+    assert not c.store.is_downloaded("KEY-P")
+    assert c.store.get_meta("pending:KEY-P") == str(md)
+
+    # 2회차: 그 파일은 이미 받아 둔 상태 -> saved 는 비어도 known 이 있음
+    c.stats.errors.clear()
+    c._finish_post("KEY-P", md, Attachments(known=1, candidates=1),
+                   expected_file=True, what="과목가/공지/글", extra={})
+    assert c.store.is_downloaded("KEY-P"), (
+        "이미 받아 둔 첨부인데 또 미완료로 남겼습니다 — 영원히 안 끝납니다"
+    )
+    assert not c.store.get_meta("pending:KEY-P"), "pending 표시가 안 지워졌습니다"
+    assert not c.stats.errors, c.stats.errors
