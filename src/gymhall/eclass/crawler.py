@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -555,6 +556,9 @@ class Crawler:
             take()
 
         if rewound == 0 and advanced == 0 and len(found) <= 3:
+            # [이수필수], 학생생활관처럼 원래 1주차짜리 단일 콘텐츠인
+            # 과목이 있습니다. 화살표가 없는 것이 정상이라, 이걸 경고로
+            # 찍으면 진짜 실패 사이에 노이즈로 섞입니다.
             # 2026-11-12 실행에서 9과목 전부 '3주차' 로 끝났습니다. 16주
             # 과목인데 첫 창만 읽었다는 뜻입니다. 화살표를 못 찾았는지,
             # 눌렀는데 화면이 안 바뀌었는지가 로그로 구분돼야 합니다.
@@ -564,11 +568,14 @@ class Crawler:
                 next_n = page.locator(self.CURRICULUM_NEXT).count()
             except Exception as exc:
                 prev_n = next_n = f"셀 수 없음({exc})"
-            log.warning(
+            single = len(first) <= 1 and prev_n == 0 and next_n == 0
+            log.log(
+                logging.INFO if single else logging.WARNING,
                 "%s / 학습목차: 주차를 한 칸도 못 넘겼습니다(%d주차만). "
-                "화살표 개수 prev=%s next=%s. 0 이면 선택자가 틀린 것이고, "
-                "0 이 아니면 눌러도 화면이 안 바뀐 것입니다.",
+                "화살표 개수 prev=%s next=%s. %s",
                 course.name, len(first), prev_n, next_n,
+                "1주차짜리 단일 콘텐츠로 보입니다(정상)." if single else
+                "0 이면 선택자가 틀린 것이고, 0 이 아니면 눌러도 화면이 안 바뀐 것입니다.",
             )
 
         if rewound >= self.MAX_WEEK_STEPS or advanced >= self.MAX_WEEK_STEPS:
@@ -821,15 +828,54 @@ class Crawler:
 
         log.info("쪽지(%s): %d건 저장", box, total)
 
+    def _enter_detail(self, link, what: str) -> bool:
+        """목록 행을 눌러 상세로 들어갑니다. 들어갔는지를 돌려줍니다.
+
+        이 LMS 는 글 열람을 JS 폼 POST 로 합니다. 클릭 직후에는 **아직
+        이전 페이지가** domcontentloaded 상태라, wait_for_load_state 는
+        그 자리에서 즉시 돌아옵니다. 그래서 300ms 뒤에 옛 목록 화면을
+        읽고, 거기서 첨부를 못 찾습니다.
+
+        2026-11-13 실행의 진단 덤프가 그 증거입니다. 상세라면 본문과
+        목록 버튼과 첨부가 있어야 하는데, 화면에 onclick 을 가진 요소가
+        홈으로 가는 링크 하나뿐이었습니다 — 상세로 못 들어간 것입니다.
+        그 결과가 "첨부 링크를 못 찾았습니다" 26건이었고, 원인과 전혀
+        다른 곳을 가리키고 있었습니다.
+
+        학습목차에서 같은 버그를 expect_navigation 으로 이미 고쳤고,
+        16주차가 전부 저장되기 시작했습니다. 같은 처방입니다.
+
+        navigation 을 못 보면 False 입니다. 호출부는 그걸 "상세 진입
+        실패" 로 적어야 합니다 — "첨부를 못 찾았다" 로 적으면 다음
+        사람이 또 선택자를 들여다봅니다.
+        """
+        page = self.br.page
+        try:
+            with page.expect_navigation(wait_until="domcontentloaded",
+                                        timeout=self.br.timeout_ms):
+                link.click(timeout=self.br.timeout_ms)
+        except Exception as exc:
+            log.warning("상세 진입 실패(%s): navigation 이 없었습니다 — %s",
+                        what, exc)
+            # AJAX 로 본문만 갈아끼우는 화면일 수도 있으니 한 번 더 봅니다.
+            try:
+                page.wait_for_load_state("domcontentloaded",
+                                         timeout=self.br.timeout_ms)
+            except Exception:
+                pass
+            page.wait_for_timeout(300)
+            return False
+        # 폼 POST 뒤에 화면이 다시 그려질 여유.
+        page.wait_for_timeout(300)
+        return True
+
     def _open_message(self, row: dict[str, Any], who: str, out_dir: Path,
                       state_key: str, box: str) -> None:
         page = self.br.page
         link = page.locator(MESSAGE_ROW).nth(row["index"]).locator(MESSAGE_LINK).first
         if link.count() == 0:
             raise RuntimeError("제목 링크를 찾지 못했습니다")
-        link.click()
-        page.wait_for_load_state("domcontentloaded", timeout=self.br.timeout_ms)
-        page.wait_for_timeout(250)
+        entered = self._enter_detail(link, f"쪽지({box})/{row['title']}")
 
         body = ""
         for sel in (*DETAIL_BODY, "div#listBox"):
@@ -859,7 +905,7 @@ class Crawler:
         self._finish_post(
             state_key, md, att,
             expected_file=bool(row.get("has_file")),
-            what=f"쪽지({box})/{row['title']}",
+            what=f"쪽지({box})/{row['title']}", entered=entered,
             extra={"title": row["title"], "sender": who},
         )
 
@@ -1069,7 +1115,8 @@ class Crawler:
         return unique_path(out_dir / f"{safe_name(stem)}.md")
 
     def _finish_post(self, state_key: str, md: Path, att: Attachments,
-                     *, expected_file: bool, what: str, extra: dict[str, Any]) -> None:
+                     *, expected_file: bool, what: str, extra: dict[str, Any],
+                     entered: bool = True) -> None:
         """첨부까지 성공했을 때만 '완료' 로 기록합니다.
 
         첨부가 하나라도 실패했는데 글을 완료로 적으면, 다음 실행이
@@ -1077,7 +1124,13 @@ class Crawler:
         """
         missing = list(att.failed)
         if expected_file and not att.saved and not missing:
-            missing.append("목록에는 첨부 표시가 있는데 링크를 찾지 못했습니다")
+            # 원인을 두 갈래로 갈라 적습니다. 섞어 놓으면 다음 사람이
+            # 선택자만 들여다보다 하루를 씁니다.
+            missing.append(
+                "상세 화면에 못 들어갔습니다(클릭 후 navigation 없음)"
+                if not entered else
+                "목록에는 첨부 표시가 있는데 링크를 찾지 못했습니다"
+            )
             # 선택자를 또 찍어 맞히지 않도록, 이 화면에 실제로 있는
             # 것들을 남깁니다. 다음 실행 로그가 답을 줍니다.
             log.error("  이 화면에 있는 것들:\n      %s",
@@ -1100,9 +1153,8 @@ class Crawler:
         if link.count() == 0:
             raise RuntimeError("제목 링크를 찾지 못했습니다")
 
-        link.click()
-        self.br.page.wait_for_load_state("domcontentloaded", timeout=self.br.timeout_ms)
-        self.br.page.wait_for_timeout(300)
+        what = f"{course.name}/{MENU_LABELS.get(key, key)}/{row['title']}"
+        entered = self._enter_detail(link, what)
 
         body = ""
         for sel in DETAIL_BODY:
@@ -1136,7 +1188,7 @@ class Crawler:
         self._finish_post(
             state_key, md, att,
             expected_file=bool(row.get("has_file")),
-            what=f"{course.name}/{MENU_LABELS.get(key, key)}/{row['title']}",
+            what=what, entered=entered,
             extra={"title": row["title"], "attachments": [f.name for f in att.saved]},
         )
 
@@ -1179,10 +1231,12 @@ class Crawler:
                 limit=limit,
             )
         except PageReadError as exc:
-            return f"(화면을 읽지 못했습니다: {exc})"
+            return f"{self._describe_frames()}\n      (화면을 읽지 못했습니다: {exc})"
+        head = self._describe_frames()
         if not found:
-            return "(누를 만한 것이 하나도 없습니다 — 상세 화면이 안 열렸을 수 있습니다)"
-        lines = []
+            return (f"{head}\n      (누를 만한 것이 하나도 없습니다 — "
+                    "상세 화면이 안 열렸을 수 있습니다)")
+        lines = [head]
         for item in found:
             bits = [f"<{item['tag'].lower()}"]
             if item["cls"]:
@@ -1194,6 +1248,32 @@ class Crawler:
             bits.append(f"> {item['text']!r}")
             lines.append("".join(bits))
         return "\n      ".join(lines)
+
+    def _describe_frames(self) -> str:
+        """프레임 구성을 한 줄로. '어느 문서를 보고 있는가' 가 먼저입니다.
+
+        _attachment_locators 는 메인 문서와 프레임을 전부 뒤지지만,
+        0개로 끝났을 때 그 0 이 "프레임이 없다" 인지 "프레임은 있는데
+        그 안에도 없다" 인지가 로그에 안 남았습니다. 둘은 고칠 곳이
+        완전히 다릅니다.
+        """
+        page = self.br.page
+        try:
+            frames = list(page.frames)
+        except Exception as exc:
+            return f"[프레임 정보를 못 읽었습니다: {exc}]"
+        bits = []
+        for f in frames:
+            try:
+                n_fd = f.locator("[onclick*='fileDown']").count()
+                n_any = f.locator("[onclick]").count()
+                url = (f.url or "")[-60:]
+            except Exception as exc:
+                bits.append(f"{f.name or '이름없음'}=읽기실패({exc})")
+                continue
+            where = "본문" if f is page.main_frame else (f.name or "이름없음")
+            bits.append(f"{where}(fileDown={n_fd}, onclick={n_any}, …{url})")
+        return f"[현재 {page.url}]\n      [프레임 {len(frames)}개] " + " / ".join(bits)
 
     def _attachment_locators(self):
         """첨부 링크를 담은 locator 를 찾습니다. 프레임 안까지 봅니다.
@@ -1234,36 +1314,71 @@ class Crawler:
         page = self.br.page
         target = filedown.url(page.url, call)
         name = safe_name(filedown.filename(call), max_len=120) or "첨부"
-        try:
-            resp = page.request.get(target, timeout=self.br.timeout_ms)
-        except Exception as exc:
-            log.warning("첨부 요청 실패(%s): %s", name, exc)
-            return None
-        if not resp.ok:
-            log.warning("첨부 응답 %s (%s)", resp.status, name)
-            return None
 
-        ctype = (resp.headers.get("content-type") or "").lower()
-        body = resp.body()
-        if not body:
-            log.warning("첨부가 0바이트입니다: %s", name)
-            return None
-        # 세션이 끊기면 서버가 파일 대신 로그인 화면(HTML)을 줍니다.
-        # 그걸 .pdf 로 저장하면 사용자는 깨진 파일 14개를 받습니다.
-        if any(h in ctype for h in self._HTMLISH) and not name.lower().endswith(
-            (".htm", ".html")
-        ):
-            log.error(
-                "첨부 대신 HTML 이 왔습니다(%s, content-type=%s). "
-                "세션이 끊겼거나 권한이 없는 파일입니다.", name, ctype,
-            )
-            self.stats.errors.append(f"첨부를 받지 못했습니다(HTML 응답): {name}")
-            return None
+        # page.request 는 쿠키와 User-Agent 는 브라우저에서 물려받지만
+        # **Referer 는 보내지 않습니다**(직접 확인: page.request 의 UA 는
+        # HeadlessChrome/… 이고 Referer 는 None. "Playwright/x.y" UA 가
+        # 나가는 것은 독립 컨텍스트 playwright.request.new_context() 쪽
+        # 입니다 — 여기가 아닙니다. 그래서 UA 는 건드릴 필요가 없습니다).
+        #
+        # 다운로드 주소에 Referer 를 요구하는 서버는 흔하고(직링크 차단),
+        # 그럴 때 돌아오는 것은 403 이 아니라 거부 안내 HTML 입니다.
+        # 그러면 우리는 그걸 "세션이 끊겼다" 로 오진합니다.
+        #
+        # 로컬 픽스처에서는 아무 효과가 없고 실제 서버에서만 의미가
+        # 있습니다. 틀려도 손해가 없는 쪽입니다.
+        headers = {
+            "Referer": page.url,
+            "Accept": "*/*",
+            "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+        }
 
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        out = unique_path(dest_dir / name)
-        out.write_bytes(body)
-        return out
+        reason = ""
+        for attempt in (0, 1):
+            try:
+                resp = page.request.get(target, headers=headers,
+                                        timeout=self.br.timeout_ms)
+            except Exception as exc:
+                reason = f"요청 실패: {exc}"
+                break
+
+            if resp.ok:
+                ctype = (resp.headers.get("content-type") or "").lower()
+                body = resp.body()
+                if not body:
+                    reason = "0바이트 응답"
+                    break
+                htmlish = (any(h in ctype for h in self._HTMLISH)
+                           and not name.lower().endswith((".htm", ".html")))
+                if not htmlish:
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    out = unique_path(dest_dir / name)
+                    out.write_bytes(body)
+                    return out
+                # 세션이 끊기면 서버가 파일 대신 로그인 화면(HTML)을 줍니다.
+                # 그걸 .pdf 로 저장하면 사용자는 깨진 파일 14개를 받습니다.
+                reason = f"파일 대신 HTML (content-type={ctype}, {len(body)}B)"
+            else:
+                reason = f"HTTP {resp.status}"
+
+            # 401/403/HTML 은 세션 만료일 수 있습니다. 로그인 -> 게시판
+            # 순회가 길어지면 중간에 세션이 떨어집니다. 딱 한 번 다시
+            # 로그인하고 같은 주소를 다시 받아 봅니다.
+            if attempt == 0 and (not resp.ok and resp.status in (401, 403)
+                                 or resp.ok):
+                log.warning("첨부 %s: %s — 세션을 다시 잡고 한 번만 재시도합니다.",
+                            name, reason)
+                try:
+                    self.br.login(force=True)
+                except Exception as exc:
+                    reason = f"{reason} / 재로그인 실패: {exc}"
+                    break
+                continue
+            break
+
+        log.error("첨부를 받지 못했습니다(%s): %s", name, reason)
+        self.stats.errors.append(f"첨부 실패: {name} — {reason}")
+        return None
 
     def _download_attachments(self, dest_dir: Path) -> Attachments:
         """상세 화면의 첨부를 전부 받습니다.

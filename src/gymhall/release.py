@@ -667,13 +667,23 @@ def upload_many(
     store=None,
     root: Path | None = None,
     on_done: Callable[[Path, dict], None] | None = None,
+    tally: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     """여러 파일을 올리되 이미 올린 것(해시 동일)은 건너뜁니다.
 
     root 를 주면 에셋 이름을 그 기준 상대 경로로 만듭니다. 주지 않으면
     파일 이름만 쓰므로, 과목마다 있는 같은 이름 파일이 서로 덮어씁니다.
+
+    tally 를 주면 왜 안 올라갔는지를 종류별로 세어 담습니다. 돌려주는
+    리스트에는 **성공한 것만** 들어가서, 호출부에서는 "전부 중복이라
+    0건" 과 "전부 실패해서 0건" 이 똑같이 빈 리스트로 보입니다.
+    2026-11-12 실행이 정확히 그 모양이었습니다 — 업로드 0건인데
+    종료 코드 0, CI 초록불.
     """
     results = []
+    counts = tally if tally is not None else {}
+    for k in ("uploaded", "skipped", "failed", "collision", "missing"):
+        counts.setdefault(k, 0)
     # 한 번의 실행 안에서 같은 에셋 이름이 두 번 나오면 반드시 버그입니다
     # (두 번째가 첫 번째를 지웁니다). 조용히 넘어가면 사용자는 전부
     # 올라간 줄 압니다 — 2026-11-12 실행에서 16개 중 14개가 이렇게
@@ -683,6 +693,7 @@ def upload_many(
         path = Path(path)
         if not path.exists():
             log.warning("건너뜀(파일 없음): %s", path)
+            counts["missing"] += 1
             continue
         rel = None
         if root is not None:
@@ -696,6 +707,7 @@ def upload_many(
                 "에셋 이름이 겹칩니다: %s <- %s / %s. 덮어쓰지 않고 건너뜁니다.",
                 target, taken[target], path,
             )
+            counts["collision"] += 1
             continue
         taken[target] = path
 
@@ -703,11 +715,13 @@ def upload_many(
         repo_slug = getattr(uploader, "slug", "")
         if store is not None and store.is_uploaded(digest, repo_slug):
             log.info("건너뜀(이미 업로드됨): %s", rel or path.name)
+            counts["skipped"] += 1
             continue
         try:
             result = uploader.upload(path, tag, prefix=prefix, rel_path=rel)
         except ReleaseError as exc:
             log.error("업로드 실패: %s -> %s", rel or path.name, exc)
+            counts["failed"] += 1
             continue
         if store is not None:
             store.mark_uploaded(
@@ -719,6 +733,7 @@ def upload_many(
         if on_done:
             on_done(path, result)
         results.append(result)
+        counts["uploaded"] += 1
     return results
 
 

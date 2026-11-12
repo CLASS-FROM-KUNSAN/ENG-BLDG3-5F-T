@@ -277,16 +277,21 @@ def cmd_eclass_sync(args) -> int:
         log.info("업로드는 생략합니다.")
         return 0
 
-    _upload_eclass(cfg, layout, store, term, dry_run=args.dry_run)
-    return 0
+    return _upload_eclass(cfg, layout, store, term, dry_run=args.dry_run)
 
 
-def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: bool) -> None:
-    """과목(=레포)마다 따로 올립니다.
+def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: bool) -> int:
+    """과목(=레포)마다 따로 올립니다. 종료 코드를 돌려줍니다.
 
     한 과목이 실패해도 나머지는 그대로 올라가야 합니다. 예전에는 학기
     폴더 전체를 한 레포로 한 번에 올려서, 중간에 하나가 터지면 그 뒤가
     전부 멈췄습니다.
+
+    **0 을 아무 때나 돌려주면 안 됩니다.** check_access 의 사전 차단을
+    경고로 낮췄으므로(Actions 토큰은 contents:write 가 있어도
+    /repos/ 응답의 permissions.push 가 false 로 옵니다), 이제 실패를
+    알아채는 자리는 여기 하나뿐입니다. 2026-11-12 실행은 업로드 0건에
+    종료 코드 0, CI 초록불이었습니다.
     """
     import tempfile
 
@@ -316,7 +321,7 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
     root = layout.eclass / safe_name(term)
     if not root.exists():
         log.info("업로드할 폴더가 없습니다: %s", root)
-        return
+        return 0
 
     files = [p for p in iter_files(root) if not (set(p.parts) & excluded_labels)]
     files, dropped = upload_filter(
@@ -330,12 +335,12 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
         log.info("업로드에서 뺀 파일 %d개 — 로컬에는 그대로 있습니다.", len(dropped))
     if not files:
         log.info("새로 올릴 파일이 없습니다.")
-        return
+        return 0
 
     groups = group_by_top_folder(root, files)
     if not groups:
         log.info("새로 올릴 폴더가 없습니다.")
-        return
+        return 0
 
     tag = tag_for(
         str(cfg.get("github.tag_strategy", "monthly")),
@@ -362,6 +367,8 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
         log.info("업로드 건너뜀(이 PC 담당 과목이 아님): %s", folder)
 
     ok, failed = 0, []
+    tally: dict[str, int] = {"uploaded": 0, "skipped": 0, "failed": 0,
+                             "collision": 0, "missing": 0}
     for course, folders in plan.items():
         where = course.slug if course is not None else "기본 레포"
         try:
@@ -391,7 +398,7 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
                     index = Path(work) / f"INDEX_{cfg.machine_label or 'this-pc'}.md"
                     bundles.append(write_index(index, rows, tag=tag))
                 done = upload_many(uploader, bundles, tag, prefix=prefix,
-                                   store=store, root=Path(work))
+                                   store=store, root=Path(work), tally=tally)
             ok += len(done)
         except ReleaseError as exc:
             # 한 과목이 막혀도 나머지는 올라가야 합니다.
@@ -404,6 +411,36 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
     log.info("업로드 완료 %d건 (중복/실패 제외)", ok)
     if failed:
         log.error("업로드하지 못한 레포 %d곳: %s", len(failed), ", ".join(failed))
+
+    # 사전 점검을 없앴으면 사후 검증이 반드시 있어야 합니다.
+    blocked = (tally["failed"] + tally["collision"] + tally["missing"]
+               + len(failed))
+    if blocked:
+        detail = (f"성공 {ok}건 / 실패 {tally['failed']} / 이름충돌 "
+                  f"{tally['collision']} / 파일없음 {tally['missing']} / "
+                  f"레포단위실패 {len(failed)}")
+        if ok == 0:
+            log.error("업로드 0건 — 한 개도 못 올렸습니다. %s", detail)
+            _actions_error("업로드 전부 실패", f"{detail}. 로그의 첫 오류를 보세요.")
+        else:
+            log.error("일부만 올라갔습니다. %s", detail)
+            _actions_error("업로드 일부 실패", detail)
+        return 1
+    if ok == 0 and tally["skipped"]:
+        log.info("새로 올릴 것이 없습니다(전부 이미 올라가 있음 %d건).",
+                 tally["skipped"])
+    return 0
+
+
+def _actions_error(title: str, message: str) -> None:
+    """GitHub Actions 요약에 빨간 줄로 띄웁니다.
+
+    warning 은 초록불 옆에 작게 뜨고 아무도 안 봅니다. 결정적 실패는
+    ::error:: 여야 리뷰어 눈에 들어옵니다.
+    """
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        clean = str(message).replace("\n", " ")[:400]
+        print(f"::error title={title}::{clean}", flush=True)
 
 
 # ---------------------------------------------------------------------------
