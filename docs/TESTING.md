@@ -178,3 +178,33 @@ TypeError: 'Event' object is not callable
 이 있는지 직접 검사하는 테스트가
 `tests/test_eclass_detail_entry.py::test_enter_detail_actually_waits_for_navigation`
 입니다. 못생겼지만, 동작으로 못 잡는 것을 잡습니다.
+
+
+---
+
+## wiring 테스트는 실물 객체에 묶습니다
+
+이 코드베이스에서 "테스트가 전부 초록인데 기능은 죽어 있다" 가 두 번
+나왔습니다. 둘 다 구조가 같습니다.
+
+| 사례 | 테스트가 확인한 것 | 실제로 죽은 것 |
+|---|---|---|
+| `page.evaluate` 인자 | 로컬에서는 인자를 넘겨도 동작 | 러너의 playwright 에서 `refs.set` 오류 |
+| `_silence_verdict` | `FakeRecorder` 에 `.results` 가 있음 | 진짜 `AudioRecorder` 에 그 속성이 없음 |
+
+**테스트 대역이 실물과 다른 인터페이스를 가져도, 테스트는 대역에 맞춰
+쓰이므로 초록입니다.** 그리고 `getattr(obj, "attr", default)` 같은
+관대한 기본값이 그 어긋남을 조용히 삼킵니다 — 예외도 안 납니다.
+
+규칙:
+
+1. `Fake*` 는 **로직** 검증용입니다. "조용한 트랙이 전부일 때만 멈춘다"
+   같은 판단 규칙은 대역으로 짜도 됩니다.
+2. **`getattr(obj, "name", default)` 를 쓴 곳에는 반드시 실물 객체에
+   묶은 테스트를 붙입니다.** 그 기본값이 실패를 삼키는 지점입니다.
+3. 설정값이 두 단계 이상 넘어가면(`cfg → Recorder → Track`) 끝까지
+   도착하는지 따로 봅니다. 중간에서 멈춰도 아무도 안 터집니다.
+   `test_silence_peak_reaches_the_track` 이 그 예입니다.
+
+`tests/test_silence.py` 아래쪽의 "가짜가 아니라 진짜 AudioRecorder 와
+맞물리는지" 묶음이 이 규칙을 따른 것입니다.

@@ -182,16 +182,35 @@ def test_entering_detail_waits_for_the_form_post(crawler, tmp_path):
 # 이것이 이 회귀가 빠져나간 경로 그 자체입니다 — 정적 픽스처와 로컬
 # 서버로는 타이밍 버그를 못 잡습니다. 그래서 아래는 '기다린다' 는
 # 수단 자체를 고정합니다. 동작으로 못 잡으면 수단으로 잡습니다.
-def test_enter_detail_actually_waits_for_navigation():
-    """expect_navigation 을 쓰는지 소스로 확인합니다.
+# 기다리는 방법은 여러 가지입니다. 하나만 박아 두면 나중에 똑같이
+# 올바른 리팩터가 테스트를 빨갛게 만듭니다. 목록으로 둡니다.
+#
+# 여기에 뭔가를 추가할 때는 "그 호출이 **화면이 바뀔 때까지 막는가**"
+# 를 기준으로 보세요. wait_for_load_state('domcontentloaded') 는
+# 그렇지 않아서(이미 그 상태면 즉시 반환) 목록에 없습니다. 그게 바로
+# 이 버그였습니다.
+WAITS_FOR_NAVIGATION = (
+    "expect_navigation",
+    "wait_for_url",
+    "wait_for_function",
+    "wait_for_load_state(\"networkidle\")",
+    "wait_for_load_state('networkidle')",
+)
 
-    로컬에서는 어느 쪽이든 초록이라, 이걸 빼도 테스트가 안 빨개집니다.
-    실제 서버에서만 터지는 종류의 버그입니다.
+
+def test_enter_detail_actually_waits_for_navigation():
+    """화면이 바뀔 때까지 막는 호출이 있는지 소스로 확인합니다.
+
+    로컬 127.0.0.1 에서는 기다리든 말든 둘 다 초록이라, 이 검사를
+    빼면 회귀가 그대로 통과합니다. 실제 서버에서만 터집니다.
     """
     import inspect
 
     src = inspect.getsource(C.Crawler._enter_detail)
-    assert "expect_navigation" in src, "클릭 뒤 navigation 을 안 기다립니다"
+    assert any(w in src for w in WAITS_FOR_NAVIGATION), (
+        "클릭 뒤에 화면이 바뀔 때까지 막는 호출이 없습니다. "
+        f"허용 목록: {WAITS_FOR_NAVIGATION}"
+    )
 
 
 def test_entering_detail_reports_failure_when_nothing_navigates(crawler, server):

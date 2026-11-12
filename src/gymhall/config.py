@@ -121,6 +121,7 @@ DEFAULTS: dict[str, Any] = {
             "preset": "veryfast",
             "crf": 30,
             "window_title": "",
+            "monitor": 0,
             "draw_mouse": True,
         },
         "audio": {
