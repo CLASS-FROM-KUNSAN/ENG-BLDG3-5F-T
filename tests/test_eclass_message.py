@@ -360,3 +360,94 @@ def test_finishing_clears_the_pending_marker(tmp_path):
                    expected_file=True, what="w", extra={})
     assert c.store.get_meta("pending:KEY") is None
     assert c.store.is_downloaded("KEY")
+
+
+# --- evaluate 에 인자를 넘기지 않기 -----------------------------------
+# 2026-11-12 러너 기록:
+#   인자 없음   + 복합 반환 -> 정상 (list_courses 가 9과목을 찾음)
+#   문자열 인자 + 복합 반환 -> 조용히 None (read_lesson_weeks)
+#   리스트/객체 인자        -> TypeError: refs.set is not a function
+# 터지는 쪽은 인자입니다. playwright 의 역직렬화기가 인자를 풀면서
+# refs.set 을 부르는데 그 refs 가 Map 이 아닙니다.
+import inspect  # noqa: E402
+import re as _re  # noqa: E402
+
+
+def _crawler_source() -> str:
+    return inspect.getsource(C)
+
+
+def test_no_evaluate_call_passes_a_runtime_argument():
+    """page.evaluate(expr, arg) 가 하나라도 있으면 러너에서 깨집니다."""
+    src = _crawler_source()
+    bad = []
+    for m in _re.finditer(r"\.evaluate\(", src):
+        # 호출 괄호를 균형 맞춰 읽습니다.
+        i, depth = m.end() - 1, 0
+        while i < len(src):
+            if src[i] == "(":
+                depth += 1
+            elif src[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        call = src[m.end():i]
+        # 문자열 리터럴을 지운 뒤 최상위 쉼표가 남으면 인자가 있는 것입니다.
+        stripped = _re.sub(r'""".*?"""', "S", call, flags=_re.S)
+        stripped = _re.sub(r'"[^"]*"|\'[^\']*\'', "S", stripped)
+        if "," in stripped.replace("S", "").strip(" \n)"):
+            bad.append(call[:60])
+    assert not bad, f"evaluate 에 인자를 넘기는 곳: {bad}"
+
+
+def test_values_are_baked_into_the_js_source():
+    """선택자는 인자가 아니라 JS 소스에 리터럴로 들어갑니다."""
+    assert "__SEL__" in _crawler_source()
+    assert "_js_literal" in _crawler_source()
+
+
+def test_eval_json_refuses_an_unfilled_placeholder(tmp_path):
+    """자리를 안 채우고 보내면 페이지에 가기 전에 막습니다."""
+    class P:
+        url = "x"
+
+        def evaluate(self, *a, **k):
+            raise AssertionError("페이지까지 가면 안 됩니다")
+
+    with pytest.raises(C.PageReadError, match="채우지 못한"):
+        C._eval_json(P(), "() => __SEL__")
+
+
+def test_eval_json_refuses_a_typo_in_the_placeholder_name(tmp_path):
+    class P:
+        url = "x"
+
+        def evaluate(self, *a, **k):
+            raise AssertionError("페이지까지 가면 안 됩니다")
+
+    with pytest.raises(C.PageReadError, match="자리가 없습니다"):
+        C._eval_json(P(), "() => 1", nope="x")
+
+
+def test_eval_json_parses_the_json_string(tmp_path):
+    class P:
+        url = "x"
+
+        def evaluate(self, expression):
+            assert "\"td a\"" in expression, expression
+            return '[{"a": 1}]'
+
+    assert C._eval_json(P(), "() => __SEL__", sel="td a") == [{"a": 1}]
+
+
+def test_eval_json_rejects_a_non_string_result(tmp_path):
+    """복합 반환은 러너에서 조용히 None 이 됩니다. 문자열만 받습니다."""
+    class P:
+        url = "x"
+
+        def evaluate(self, expression):
+            return [{"a": 1}]
+
+    with pytest.raises(C.PageReadError, match="문자열"):
+        C._eval_json(P(), "() => 1")

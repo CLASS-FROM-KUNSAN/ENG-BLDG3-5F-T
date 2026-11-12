@@ -625,6 +625,24 @@ def upload_many(
     return results
 
 
+def machine_prefix(label: str) -> str:
+    """에셋 이름 앞에 붙일 기기 표시.
+
+    같은 과목이 두 강의실 PC 에 배포되면 두 PC 가 같은 레포에 올립니다.
+    이름이 같으면 뒤에 올린 쪽이 앞엣것을 지웁니다(upload_one 이 같은
+    이름을 교체합니다). 중복 제거 기록은 PC 안에만 있어서 서로를 못
+    봅니다. 그래서 이름에 기기를 넣어 애초에 겹치지 않게 합니다.
+    """
+    norm = unicodedata.normalize("NFC", label or "")
+    safe = _ASSET_SAFE.sub("_", norm).strip("_")
+    # 한글이 깎이면 '공학관-401호' 와 '과학관-401호' 가 둘 다 '-401' 이
+    # 됩니다. 글자가 하나라도 날아갔으면 해시를 붙여 구분합니다.
+    if any(ord(ch) > 127 for ch in norm) or not safe:
+        digest = hashlib.sha1(norm.encode("utf-8")).hexdigest()[:6]
+        safe = f"{safe}_{digest}".strip("_") if safe else digest
+    return f"{safe}_"
+
+
 def make_archive(root: Path, files: Iterable[Path], dest: Path) -> Path | None:
     """files 를 root 기준 상대 경로 그대로 담은 zip 을 만듭니다.
 
