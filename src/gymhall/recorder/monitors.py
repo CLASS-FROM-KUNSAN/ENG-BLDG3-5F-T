@@ -97,11 +97,24 @@ def _win_monitors() -> list[Monitor]:  # pragma: no cover - Windows 전용
         return 1
 
     user32.EnumDisplayMonitors(None, None, CALLBACK(_cb), 0)
-    # 주 모니터를 1번으로 두면 사람이 세는 순서와 맞습니다.
-    found.sort(key=lambda m: (not m.primary, m.x, m.y))
+    return primary_first(found)
+
+
+def primary_first(found: list[Monitor]) -> list[Monitor]:
+    """주 모니터를 1번으로 두고 번호를 다시 매깁니다.
+
+    사람은 주 모니터를 "1번" 이라고 셉니다. EnumDisplayMonitors 는
+    그 순서를 보장하지 않으므로, 설정에 적은 `monitor = 1` 이 엉뚱한
+    화면을 가리킬 수 있습니다.
+
+    이 정렬이 _win_monitors 안에 있을 때는 리눅스 CI 에서 한 줄도 안
+    돌았습니다(그 함수 전체가 Windows 전용). 순수 함수로 빼면
+    어느 OS 에서나 시험할 수 있습니다 — docs/TESTING.md 원칙 2.
+    """
+    ordered = sorted(found, key=lambda m: (not m.primary, m.x, m.y))
     return [
         Monitor(i + 1, m.x, m.y, m.width, m.height, m.primary)
-        for i, m in enumerate(found)
+        for i, m in enumerate(ordered)
     ]
 
 

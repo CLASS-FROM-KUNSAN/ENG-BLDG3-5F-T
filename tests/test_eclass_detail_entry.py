@@ -39,9 +39,9 @@ LIST_HTML = """<!doctype html><html><head><meta charset="utf-8"></head><body>
 <form name="boardForm" method="post" action="/detail">
   <input type="hidden" name="boardContentsId" value="">
 </form>
-<table><tbody>
+<table class="boardListBasic"><tbody>
   <tr class="boardRow">
-    <td><a href="javascript:moveBoardView('BOAD_1','2');"
+    <td class="textLeft"><a href="javascript:moveBoardView('BOAD_1','2');"
            onclick="document.boardForm.boardContentsId.value='BOAD_1';
                     document.boardForm.submit(); return false;">공지 제목</a></td>
   </tr>
@@ -58,8 +58,8 @@ DETAIL_HTML = """<!doctype html><html><head><meta charset="utf-8"></head><body>
 
 # 눌러도 아무 데도 안 가는 화면(navigation 없음).
 DEAD_HTML = """<!doctype html><html><head><meta charset="utf-8"></head><body>
-<table><tbody><tr class="boardRow">
-  <td><a href="#" onclick="return false;">아무 일도 안 일어남</a></td>
+<table class="boardListBasic"><tbody><tr class="boardRow">
+  <td class="textLeft"><a href="#" onclick="return false;">아무 일도 안 일어남</a></td>
 </tr></tbody></table>
 </body></html>"""
 
@@ -162,7 +162,7 @@ def crawler(browser, server, tmp_path):
 
 
 def _link(crawler):
-    return crawler.br.page.locator("tr.boardRow a").first
+    return crawler.br.page.locator("tr.boardRow td.textLeft a").first
 
 
 # --- 상세 진입 --------------------------------------------------------
@@ -302,3 +302,73 @@ def test_diagnostics_name_the_frames(crawler):
     assert "[프레임" in text, text
     assert "fileDown=" in text, text
     assert "현재 http" in text, text
+
+
+# --- 진입 실패의 '결과' 를 검사합니다 (C4 / C8) ------------------------
+# 기존 테스트는 _finish_post 를 직접 불러 로그 문구만 봤습니다. 그래서
+# _open_post 가 entered 를 **안 넘겨도** 전부 초록이었습니다. 그러면
+# 26건을 "링크를 못 찾았다" 로 잘못 진단한 사고가 그대로 재발합니다.
+#
+# 로그 문구가 아니라 부작용을 봅니다 — docs/TESTING.md 원칙 5.
+def _outdir(tmp_path):
+    d = tmp_path / "out"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _row():
+    return {"index": 0, "no": "1", "title": "공지 제목", "date": "2026-11-13",
+            "has_file": True, "author": "이교수", "cells": []}
+
+
+def test_open_post_reports_the_entry_failure_not_a_missing_link(
+        crawler, tmp_path, monkeypatch, server):
+    """entered 를 안 넘기면 원인이 통째로 바뀝니다(변이 C4)."""
+    crawler.br.page.goto(server + "/dead")
+    monkeypatch.setattr(crawler, "_download_attachments",
+                        lambda d: C.Attachments())
+    crawler._open_post(C.Course("X", "과목가"), "notice", _row(),
+                       _outdir(tmp_path), "key-c4")
+    joined = " ".join(crawler.stats.errors)
+    assert "상세 화면에 못 들어갔습니다" in joined, joined
+    assert "링크를 찾지 못했습니다" not in joined, joined
+
+
+def test_open_post_keeps_the_post_pending_when_entry_fails(
+        crawler, tmp_path, monkeypatch, server):
+    """진입 실패를 '완료' 로 적으면 다음 실행이 건너뜁니다."""
+    crawler.br.page.goto(server + "/dead")
+    monkeypatch.setattr(crawler, "_download_attachments",
+                        lambda d: C.Attachments())
+    crawler._open_post(C.Course("X", "과목가"), "notice", _row(),
+                       _outdir(tmp_path), "key-c4b")
+    assert not crawler.store.is_downloaded("key-c4b")
+
+
+def test_open_message_reports_the_entry_failure_too(
+        crawler, tmp_path, monkeypatch, server):
+    """쪽지 쪽에서 같은 사고입니다(변이 C8)."""
+    crawler.br.page.goto(server + "/dead")
+    monkeypatch.setattr(crawler, "_download_attachments",
+                        lambda d: C.Attachments())
+    row = {"index": 0, "no": "1", "title": "쪽지 제목", "date": "2026-11-13",
+           "has_file": True}
+    crawler._open_message(row, "보낸이-abc123", _outdir(tmp_path),
+                          "key-c8", "받은쪽지함")
+    joined = " ".join(crawler.stats.errors)
+    assert "상세 화면에 못 들어갔습니다" in joined, joined
+
+
+def test_a_successful_entry_blames_the_selector_instead(
+        crawler, tmp_path, monkeypatch):
+    """진입은 됐는데 첨부가 0개면 그때는 선택자 문제입니다.
+
+    두 메시지가 뒤바뀌면 다음 사람이 엉뚱한 곳을 고칩니다.
+    """
+    monkeypatch.setattr(crawler, "_download_attachments",
+                        lambda d: C.Attachments())
+    crawler._open_post(C.Course("X", "과목가"), "notice", _row(),
+                       _outdir(tmp_path), "key-ok")
+    joined = " ".join(crawler.stats.errors)
+    assert "링크를 찾지 못했습니다" in joined, joined
+    assert "상세 화면에 못 들어갔습니다" not in joined, joined

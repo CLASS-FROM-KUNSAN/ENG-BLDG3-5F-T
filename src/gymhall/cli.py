@@ -789,10 +789,25 @@ def cmd_upload(args) -> int:
         print("과목을 알 수 없어 올리지 않았습니다. --course 로 지정하세요.")
         print(f"고를 수 있는 과목: {', '.join(c.name for c in course_list) or '(없음)'}")
         return 1
+    tally: dict[str, int] = {}
     results = upload_many(uploader, files, tag,
                           prefix=f"{cfg.machine_label}_", store=store,
-                          root=target if is_dir else target.parent)
+                          root=target if is_dir else target.parent,
+                          tally=tally)
     print(f"완료 {len(results)}건")
+
+    # _upload_eclass 와 같은 자리입니다. 여기도 오래 0 을 돌려주고
+    # 있었습니다 — 전부 실패해도 "완료 0건" 을 찍고 종료 코드 0.
+    # 변이 테스트 세트가 eclass 경로만 봐서 이쪽은 안 걸렸습니다.
+    blocked = (tally.get("failed", 0) + tally.get("collision", 0)
+               + tally.get("missing", 0))
+    if blocked:
+        detail = (f"성공 {len(results)}건 / 실패 {tally.get('failed', 0)} / "
+                  f"이름충돌 {tally.get('collision', 0)} / "
+                  f"파일없음 {tally.get('missing', 0)}")
+        print(f"올리지 못한 파일이 있습니다. {detail}")
+        _actions_error("업로드 실패", detail)
+        return 1
     return 0
 
 
