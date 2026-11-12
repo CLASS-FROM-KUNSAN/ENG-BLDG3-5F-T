@@ -45,35 +45,72 @@ REAL_ONCLICK = (
 
 
 def test_filedown_decodes_korean_names():
-    args = F.parse(REAL_ONCLICK)
-    assert args is not None
-    assert F.filename(args) == "1장_웹프로그래밍.pdf"
-    assert F.decode(args[2]) == "/lmsdata/contents/2026211605005/1장.pdf"
+    call = F.parse(REAL_ONCLICK)
+    assert call is not None
+    assert F.filename(call) == "1장_웹프로그래밍.pdf"
+    assert F.decode(call.path) == "/lmsdata/contents/2026211605005/1장.pdf"
 
 
 def test_filedown_url_keeps_the_server_encoding():
     """인자를 다시 인코딩하면 '*' 가 '%2A' 가 되어 다른 파일을 찾습니다."""
-    args = F.parse(REAL_ONCLICK)
-    url = F.url("https://eclass.kunsan.ac.kr/Lesson.do?cmd=x", args)
+    url = F.url("https://eclass.kunsan.ac.kr/Lesson.do?cmd=x", F.parse(REAL_ONCLICK))
     assert url.startswith("https://eclass.kunsan.ac.kr/fileDown?")
     assert "*EC*9E*A5" in url
     assert "%2A" not in url
 
 
+def test_the_two_download_functions_use_different_endpoints():
+    """이름이 비슷하지만 주소가 다릅니다. 섞으면 404 가 납니다.
+
+        FileDown.js      fileDown(...)      -> fileDown?...
+        FileDownload.js  fileDownload(...)  -> fileDownServlet?...
+
+    두 JS 원문을 모두 받아 확인한 값입니다.
+    """
+    down = F.parse("fileDown('a','b','c')")
+    load = F.parse("fileDownload('a','b','c')")
+    assert down.fn == "fileDown" and down.endpoint == "fileDown"
+    assert load.fn == "fileDownload" and load.endpoint == "fileDownServlet"
+    base = "https://eclass.kunsan.ac.kr/Course.do?x=1"
+    assert F.url(base, down).startswith("https://eclass.kunsan.ac.kr/fileDown?")
+    assert F.url(base, load).startswith("https://eclass.kunsan.ac.kr/fileDownServlet?")
+
+
+def test_filedownload_is_not_read_as_filedown():
+    """'fileDownload' 안에 'fileDown' 이 들어 있습니다.
+
+    짧은 쪽으로 잘못 읽히면 fileDown 엔드포인트로 가서 404 가 납니다.
+    (이름 뒤에 '(' 를 요구하므로 교대 순서와는 무관합니다 — 확인했습니다.)
+    """
+    call = F.parse("fileDownload('a','b','c')")
+    assert call.fn == "fileDownload", call
+    assert call.endpoint == "fileDownServlet"
+
+
+def test_a_bare_function_name_without_parens_is_not_a_call():
+    """'(' 요구가 빠지면 fileDownload 를 fileDown 으로 읽게 됩니다."""
+    assert F.parse("fileDownload") is None
+    assert F.parse("var x = fileDown;") is None
+
+
 def test_filedown_handles_spaces_and_parens():
     """실제 파일명에 공백(*20)과 괄호(*28/*29)가 들어 있습니다."""
-    args = F.parse("fileDown('2*EC*9E*A5_HTML5*20*EA*B8*B0*EB*B3*B8*281*29.pdf','x','y')")
-    assert F.filename(args) == "2장_HTML5 기본(1).pdf"
+    call = F.parse("fileDown('2*EC*9E*A5_HTML5*20*EA*B8*B0*EB*B3*B8*281*29.pdf','x','y')")
+    assert F.filename(call) == "2장_HTML5 기본(1).pdf"
 
 
-def test_filedown_ignores_a_non_filedown_onclick():
+def test_filedown_ignores_a_non_download_onclick():
     assert F.parse("javascript:moveBoardView('BOAD_1','2');") is None
+    assert F.parse("javascript:moveMessageView('MESG_1','MESG_2');") is None
     assert F.parse("") is None
 
 
-def test_filedown_falls_back_to_the_path_when_name_is_empty():
-    args = F.parse("fileDown('','','*2Fa*2Fb*2F1*EC*9E*A5.pdf')")
-    assert F.filename(args) == "1장.pdf"
+def test_filedown_falls_back_when_the_display_name_is_empty():
+    """게시판 첨부는 보여 줄 이름이 비어도 저장명이 있습니다."""
+    call = F.parse("fileDownload('','COMF_26083020.hwp','*2Fbusiness*2Fboard*2Fx*2F')")
+    assert F.filename(call) == "COMF_26083020.hwp"
+    call = F.parse("fileDown('','','*2Fa*2Fb*2F1*EC*9E*A5.pdf')")
+    assert F.filename(call) == "1장.pdf"
 
 
 def test_filedown_js_in_the_fixture_still_matches_our_parser():
@@ -352,15 +389,17 @@ def test_only_a_selectors_find_nothing_on_the_detail_page(detail):
     assert sum(page.locator(sel).count() for sel in only_anchors) == 0
 
 
-def test_detail_attachment_falls_back_to_click(detail):
-    """fileDownload 는 FileDown.js 가 아니라 FileDownload.js 가 다룹니다.
+def test_detail_attachment_uses_the_servlet_endpoint(detail):
+    """게시판 첨부는 fileDownServlet 로 갑니다(FileDownload.js 원문 기준).
 
-    그 파일을 받아 보지 못했으므로 주소를 지어내지 않고, 사이트의 JS 가
-    돌도록 클릭에 맡깁니다. parse 가 None 을 내야 그 경로로 갑니다.
+    강의 목록 쪽 fileDown 과 섞으면 주소가 틀려 404 가 납니다.
     """
     onclick = detail._attachment_locators().first.get_attribute("onclick")
-    assert "fileDownload(" in onclick
-    assert F.parse(onclick) is None, "fileDown 으로 잘못 읽어 엉뚱한 주소를 만듭니다"
+    call = F.parse(onclick)
+    assert call is not None and call.fn == "fileDownload", onclick
+    assert call.endpoint == "fileDownServlet"
+    assert F.filename(call) == "보고서양식.hwp"
+    assert F.decode(call.path) == "/business/board/2026210357604-N/"
 
 
 def test_detail_attachment_name_is_korean(detail):

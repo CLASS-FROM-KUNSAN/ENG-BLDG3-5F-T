@@ -1,0 +1,1103 @@
+<!-- 출처: 2026-11-12 실제 쪽지함(받은 쪽지). 사람 이름·사번·과목명만
+     가명/자리표시자로 바꿨고 구조와 JS 는 그대로입니다. -->
+
+
+
+
+
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko">
+<head>
+	<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no" />
+	<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+	<meta http-equiv="Content-Script-Type" content="text/javascript" />
+	<meta http-equiv="Content-Style-Type" content="text/css" />
+	<meta name="author" content="메디오피아테크" />
+	<meta name="description" content="군산대학교 e-class" />
+	<meta name="keywords" content="군산대학교,e-class" />
+	<title>군산대학교 eClass</title>
+	
+	<link rel="shortcut icon" href="/lmsdata/kunsan/ko/common/favicon.ico" />
+	<!-- Stylesheets -->
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+
+
+
+
+
+
+
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+</head>
+<body class="cbp-spmenu-push">
+<script language="javascript">
+</script>
+<div id="Cover">
+	<!-- Header 영역 부분 -->
+	<button id="showRightPush"><i class="fa fa-bars" title="메뉴"></i></button>
+	<nav class="cbp-spmenu cbp-spmenu-vertical cbp-spmenu-right" id="cbp-spmenu-s2">
+	    <div id="mobile-menu">
+	    	<ul class="menu-list"> 
+<li> 
+	<a href="#"><span>내 강의실</span></a> 
+<div class="twoDep"> 
+	<ul><li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00030">내 강의실 홈</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00031">수강 과목</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00035">공개 강좌</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00077">쪽지</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00033">내정보</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00252">학습 시간표</a></li> 
+	</ul> 
+</div> 
+</li><li> 
+	<a href="#"><span>학습도우미</span></a> 
+<div class="twoDep"> 
+	<ul><li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00247">학습도우미 홈</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00237">공지사항</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00249">질의응답</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00250">행사안내</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00215">자주찾는질문</a></li> 
+	</ul> 
+</div> 
+</li></ul> 
+
+	    </div>
+	</nav>
+	<div id="header">
+		<div class="topCover">
+			<h1><a href="/Main.do?cmd=viewHome&localeKey=ko"><img src="/lmsdata/kunsan/ko/template1/logo.png" alt="군산대학교 eClass" /></a></h1>			
+			<div class="util">				
+				<ul class="menu">
+					<li><a href="/Main.do?cmd=viewHome&localeKey=ko">HOME</a></li>
+					<li><a href="https://988.co.kr/kunsan" target="_blank">원격지원</a></li>
+					
+						<li><a href="/Main.do?cmd=viewHome&localeKey=en">ENG</a></li>
+					
+				</ul>
+			</div>
+		</div>
+		
+
+
+
+
+
+
+
+
+
+
+<div class="gnbArea">
+	<h2 class="blind">전체메뉴</h2>
+	<div id="gnb" style="height:62px;">
+		<ul class="gnbList"> 
+<li class="g1" > 
+	<a href="#"><span class="first"></span>내 강의실</a> 
+<div class="twoDep"> 
+	<p class="navGuide"></p>	<ul><li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00030">내 강의실 홈</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00031">수강 과목</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00035">공개 강좌</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00077">쪽지</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00033">내정보</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00252">학습 시간표</a></li> 
+	</ul> 
+</div> 
+<script>$('#menu01').attr('href', "/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00030")</script></li><li class="g2" > 
+	<a href="#"><span class="first"></span>학습도우미</a> 
+<div class="twoDep"> 
+	<p class="navGuide"></p>	<ul><li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00247">학습도우미 홈</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00237">공지사항</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00249">질의응답</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00250">행사안내</a></li> 
+<li><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00215">자주찾는질문</a></li> 
+	</ul> 
+</div> 
+<script>$('#menu01').attr('href', "/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00247")</script></li></ul> 
+
+	</div><!-- //End gnb -->
+</div><!-- //End gnbArea -->
+<script type="text/javascript">
+	/* GNB 메뉴 */
+	var oneNum = -1;		//subPage onedepth number
+	var twoNum = -1;		//subpage twodepth number
+	jQuery(document).ready(function(){
+		getLocationInfo();
+		if(oneNum != -1) activePage();
+		jQuery(".gnbList").children("li").each(function(q){
+			jQuery(this).hover(function(){
+				if(oneNum != -1) {
+					jQuery(".gnbList").children("li").eq(oneNum).removeClass("on");
+				}
+				jQuery("#gnb").stop().animate({height:280}, 400);
+				jQuery("#gnb").addClass("action");
+				jQuery(this).addClass("on");
+			}, function(){
+				jQuery("#gnb").stop().animate({height:62}, 400);
+				jQuery("#gnb").removeClass("action");
+				jQuery(this).removeClass("on");
+	
+				if(oneNum != -1) {
+					activePage();
+				}
+			})
+		})
+	})
+	
+	function getLocationInfo()
+	{
+		if(location.pathname.indexOf("/#/") > -1) {
+			oneNum = 0;
+		}
+		if(location.pathname.indexOf("/#/") > -1) {
+			oneNum = 1;
+		} 
+		if(location.pathname.indexOf("/#/") > -1) {
+			oneNum = 2;
+		} 
+		if(location.pathname.indexOf("/#/") > -1) {
+			oneNum = 3;
+		}
+		if(location.pathname.indexOf("/#/") > -1) {
+			oneNum = 4;
+		}
+		if(location.pathname.indexOf("/#/") > -1) {
+			oneNum = 5;
+		}
+	}
+	
+	function activePage()
+	{
+		jQuery("#gnb").addClass("action");
+		jQuery(".gnbList").children("li").eq(oneNum).addClass("on");
+	}
+</script>
+	</div>
+	<div id="container" class="sub_layout">
+		<!-- leftAside 영역 부분 -->
+		<div id="aside">			
+			
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+function viewCourse(courseIdNownerName){
+
+	var courseId = courseIdNownerName.split(",")[0];
+// 	var courseOwnerName = courseIdNownerName.split(",")[1].trim();
+	var courseOwnerName = trim(courseIdNownerName.split(",")[1]);
+	var openType        = trim(courseIdNownerName.split(",")[2]);
+	
+	if(courseId!="" && courseOwnerName != ""){
+		
+		if(openType!=="open"){
+			location.href="/Course.do?"+
+					 "cmd=viewStudyHome"+
+					 "&courseDTO.courseId="+courseId+
+					 "&boardInfoDTO.boardInfoGubun=study_home&gubun=study_course";
+		}else{
+			location.href="/Lesson.do?"+
+					 "cmd=viewLessonContentsList"+
+					 "&courseDTO.courseId="+courseId+
+					 "&pageGubun=study_home"+
+					 "&type=U"+
+					 "&boardInfoDTO.boardInfoGubun=openkyoan&gubun=study_course&pageGubun=study_home";
+		}
+		
+	}else{
+		if(courseId =="") {
+			alert("강의실을 선택하여 주세요");
+		} else {
+			alert("해당 과목의 책임교수가 지정되지 않았습니다.");
+		}
+		return;
+	}
+}
+
+
+function moveContentsList(courseId,formName,boardInfoGubun,infoId,cmdName,actionName,userType,parentMenuId,menuId){
+	var url ="";	
+	var infoIdString = "";
+	if(actionName=="Etest"  ){
+		url = "/Etest.do?";
+		infoIdString = "&etestInfoDTO.etestInfoId=" + infoId;
+		
+	}else 	if(actionName=="Forum"  ){
+		url = "/Forum.do?";
+		infoIdString = "&forumInfoDTO.forumInfoId=" + infoId;
+		
+	}else 	if(actionName=="Report"  ){
+		url = "/Report.do?";
+		infoIdString = "&reportInfoDTO.reportInfoId=" + infoId;
+		
+	}else 	if(actionName=="Lesson"  ){
+		url = "/Lesson.do?";
+		
+	}else 	if(actionName=="Research"  ){
+		url = "/Research.do?";
+		infoIdString = "&researchInfoDTO.researchInfoId=" + infoId;
+	}else 	if(actionName=="Teamact"  ){
+		url = "/Teamact.do?";
+		infoIdString = "&teamactInfoDTO.teamactId=" + infoId;
+	}
+	
+	url+= "cmd="+cmdName+
+		   "&courseDTO.courseId="+courseId+
+		   "&boardInfoDTO.boardInfoGubun="+boardInfoGubun+
+		   "&boardGubun=study_course"+
+		   "&gubun=todayList"+
+		   "&pageGubun=study_home"+
+		   infoIdString +
+		   "&mainDTO.parentMenuId="+parentMenuId+
+		   "&mainDTO.menuId="+menuId;
+	location.href= url;
+}
+
+function viewLessonContentsStudy(courseId,lessonElementId,lessonContentsId, courseName){
+	
+	var url = "/Attend.do?cmd=viewAttendProfForm&courseDTO.courseId="+courseId+"&attendStatusDTO.lessonContentsId="+lessonContentsId+"&attendStatusDTO.elementType=online&attendStatusDTO.lessonElementId="+lessonElementId;
+	
+	var popTitle="수강생 별 출결 현황";
+	var addContent  = "<div style='-webkit-overflow-scrolling: touch;' ><iframe id='viewLessonUserForm' name='viewAttendUserForm' width='100%' height='100%' "
+		+ "frameborder='0' scrolling='yes' src='"+url+"' title='"+popTitle+"'/></div>";
+		
+	popupFormDialog = $(addContent).appendTo("body");
+	
+	popupFormDialog.dialog({
+		title: courseName + " - 수강생 별 출결 현황",
+		resizable: false,
+		autoOpen: true,
+		width:'800',
+		height:'600',
+		modal: true,
+		
+	});
+	
+}
+
+// 할일목록 읽어오기 호출
+function viewTodayList(){
+	var url = getUrlEncode(document.URL);
+	document.location.href = "Main.do?cmd=movePageForToday&url="+url;
+}
+
+</script>
+
+<div class="lm-tit">	
+	<h2>내 강의실</h2>	
+</div>	
+<ul class="lnb">	
+<li ><h3><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00030" >내 강의실 홈</a></h3></li>
+<li ><h3><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00031" >수강 과목</a></h3></li>
+<li ><h3><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00035" >공개 강좌</a></h3></li>
+<li  id='subMenuTab_menu_00077'  class='over'><h3><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00077" >쪽지</a></h3></li>
+<li ><h3><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00033" >내정보</a></h3></li>
+<li ><h3><a href="/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00252" >학습 시간표</a></h3></li>
+</ul>	
+		
+
+
+		</div>
+		<!-- 본문 content 부분 -->
+		<div id="bodyContent">
+			
+
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+	var commonResultMessage = "null";
+	if(commonResultMessage=="" || commonResultMessage=="null") {
+		commonResultMessage = "null";
+	}
+	var localeKey = "ko";
+</script>
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xml:lang="ko-kr"  lang="ko-kr" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>message</title>
+
+<script type="text/JavaScript" language="JavaScript" src="/lmsdata/js/FileDownload.js"></script>
+
+
+
+
+
+<script type="text/javascript">
+
+
+var popupFormDialog = null;
+//초기 실행
+function initPage(){
+	
+	displayMessage();	
+}
+
+function searchSubmit(){
+	var f = document.messageForm;
+	f["cmd"].value = "viewMessageList";
+	f.submit();
+}
+
+
+//받은쪽지 -> 휴지통
+function deleteMessage() {
+	var f = document.messageForm;
+	var ids = f.messagIdChkBox;
+	
+	var deleteMessageIds = "";
+	var cnt = 0;
+	
+	// 선택된 항목 추출
+	if(ids.length == undefined) {
+		if(ids.checked == true){
+			deleteMessageIds = ids.value.split(",")[0];
+		}
+	} else {
+		for(var i=0;i<ids.length;i++){ // > </ids.length>
+		   if(ids[i].checked == true){
+			   if(cnt > 0) {
+				   deleteMessageIds += ",";
+			   } 
+			   
+			   // checkbox의 value 값으로 messageId,senderId 를 설정해 놓아 분리가 필요.
+			   deleteMessageIds += ids[i].value.split(",")[0];
+			   cnt++;
+		   }
+		}
+	}
+	
+	
+	if(deleteMessageIds == "") {
+		alert("선택된 항목이 없습니다.");
+	} else {
+		if(confirm("휴지통으로 이동시키겠습니까?")) {
+			f["cmd"].value = "deleteFlagMessage";
+			f["messageBoxDTO.messageId"].value = deleteMessageIds;
+			f.submit();
+		}
+	}
+}
+
+// 전체 선택 / 해제
+function checkAll(obj) {
+	
+	var d = document.all;
+	
+	if(d.messagIdChkBox.length) {
+		for(i=0; i < d.messagIdChkBox.length; i++) {
+			d.messagIdChkBox[i].checked = (obj.checked) ? true : false;
+		}
+	} else {
+		d.messagIdChkBox.checked = (obj.checked) ? true : false;
+	}
+}
+
+
+
+//쪽지 폼 이동
+function goMessage(){
+	
+	var name = "";
+	var messageId = "";
+	var messageSendId = "";
+	var userId   = ""; 
+	
+		// 답장은 한명에게만 할 수 있다.
+		if($("[name='messagIdChkBox']:checked").length > 1){
+			alert("답장은 한 명에게만 보낼 수 있습니다.");
+			return ;
+		} else if($("[name='messagIdChkBox']:checked").length == 1){
+			for(var i = 0; i < $("[name='messagIdChkBox']:checked").length; i++){
+				var idx = $("[name='messagIdChkBox']:checked").eq(i).val().split(",")[1];
+				var messageId = $("[name='messagIdChkBox']:checked").eq(i).val().split(",")[0];
+				name += idx;
+			}
+			var gubun = "R";
+		}
+		var popTitle="쪽지 보내기";
+		var url = "/Message.do?cmd=sendMessageFormByMessageBox&messageSendDTO.receiverId="+name
+				+ "&popupName=lessonPopBox&gubun="+gubun+"&messageBoxDTO.messageId="+messageId
+				+"&messageSendDTO.courseId="+"";
+		
+		
+		var addContent  = "<div style='-webkit-overflow-scrolling: touch;' ><iframe id='goMessageForm' name='viewAttendUserForm' width='100%' height='100%' "
+			+ "frameborder='0' scrolling='yes' src='"+url+"' title='"+popTitle+"' /></div>";
+
+			popupFormDialog = $(addContent); 
+			popupFormDialog.dialog({
+			title:"쪽지 보내기",
+			resizable: false,
+			autoOpen: true,
+			width:'1200',
+			height:'700',
+			modal: true,
+			appendTo:"body",
+			open: function(event, ui){
+				$(this).find("iframe").focus();
+			},
+			close: function() {
+				$(this).remove();
+			}
+		});
+				
+}
+
+function userViewPopup(url, title, width, height){
+	winOpen(url,"PopFmsAttach_1");
+}
+
+function winOpen(url, name){
+	
+	var popWidth = 750;
+	var popHeight = 800;
+	var winHeight = document.body.clientHeight; // 현재창의 높이 
+	var winWidth = document.body.clientWidth; // 현재창의 너비 
+	var winX = window.screenLeft; // 현재창의 x좌표 
+	var winY = window.screenTop; // 현재창의 y좌표 
+
+	var popX = winX + (winWidth - popWidth)/2; 
+	var popY = winY + (winHeight - popHeight)/2; 
+
+	return window.open(url,name,"width="+popWidth+"px,height="+popHeight+"px,top="+popY+",left="+popX);
+}
+
+// 상세 페이지 이동
+function moveMessageView(messageId, messageSendId) {
+	var f = document.messageForm;
+	
+	f["cmd"].value = "viewMessageContents";
+	f["messageBoxDTO.messageId"].value = messageId;
+	f["messageBoxDTO.messageSendId"].value = messageSendId;
+	
+	f.submit();
+}
+
+//압축 후 zip파일로 다운로드
+function compressFile(messageSendId, fileNum, title) {
+	var f = document.messageForm;
+	
+	if(fileNum <= 0 ){
+		alert("첨부된 파일이 없습니다.");
+		return;
+	} else {
+		var messageSendDTO 	= new Object();
+		messageSendDTO 	= {messageSendId:messageSendId,
+									title : title	
+							};
+		
+		MessageWork.compressDownloadAttachFile(messageSendDTO, compressDownloadCallback);
+	}
+}
+
+//압축 후 zip파일로 다운로드 Callback
+function compressDownloadCallback(ProcessResultDTO) {
+
+	var messageSendDTO = ProcessResultDTO.returnDto;
+	// 오류
+	if (ProcessResultDTO.returnResult == -1) {
+		commonResultMessage = "파일 압축하기 중에 오류가 발생하였습니다.";
+		displayMessage();
+		return;
+	}
+
+	var filePath = messageSendDTO.filePath;
+	var fileName = messageSendDTO.fileName;
+
+	filePath = getUrlEncode(filePath);
+	fileName = getUrlEncode(fileName);
+	
+	fileDownload(fileName, fileName, filePath);
+}
+
+
+</script>
+</head>
+<body onload="javascript:initPage();">	
+
+	<form name="messageForm" method="post" action="/Message.do">
+	
+	<input type="hidden" name="curPage" value="1">
+	<input type="hidden" name="messageType" value="RECEIVE">
+	<input type="hidden" name="messageBoxDTO.messageId" value="">
+	<input type="hidden" name="messageBoxDTO.messageSendId" value="">
+	
+	
+	
+	
+
+	
+	
+	
+	
+	<input type="hidden" name="cmd" />
+	
+		<div id="">
+		<div class="contentTitle">
+			<div class="location"><ul> 
+<li><a href="#" style="cursor:default;"></a></li><li><a href="#" style="cursor:default;">내 강의실</a></li><li><a href="#" style="cursor:default;">쪽지</a></li></ul></div> 
+<div id='listBox'><div class='subCon'><h3 class='subTit'>쪽지</h3></div></div>
+
+		</div>			
+			<ul class="groupTab" style="margin:20px 0 0 0;">
+				
+					
+						
+						
+						 
+							<li class="on">
+						 
+							 
+						<h3>
+							<a href="Message.do?cmd=viewMessageList&messageType=RECEIVE">
+								받은 쪽지
+							</a>
+						</h3>
+						</li>
+					
+						
+						
+						 
+						<li>
+						 
+							 
+						<h3>
+							<a href="/Message.do?cmd=viewMessageList&messageType=SEND">
+								보낸 쪽지
+							</a>
+						</h3>
+						</li>
+					
+						
+						
+						 
+						<li>
+						 
+							 
+						<h3>
+							<a href="/Message.do?cmd=viewMessageList&messageType=WASTEBASKET">
+								휴지통
+							</a>
+						</h3>
+						</li>
+					
+				
+			</ul>			
+			<div class="boardOption">
+				
+				<ul>
+					<li><select name="searchKey" class="default" title="선택해주세요">
+<option value="title">제목</option>
+<option value="user_id">아이디</option>
+<option value="user_name">이름</option>
+<option value="message_contents">내용</option>
+</select>
+
+</li>
+					<li id="searchbox" class="mr0">
+						<input type="text" name="searchTxt" maxlength="100" value="" onkeyup="inputCheckSpecial(this)" id="search" title="">
+						<a href="#" onclick="javascript:searchSubmit();"><input type="image" name="" src="/lmsdata/img/common/search_btn.png" alt="search"></a>
+					</li>
+				</ul>
+				<ul class="fr posBtn">
+					<li class="selectButton select"> 
+					
+					<a class="btn small" href="javascript:goMessage();"><i class="icon-balloon-color"></i>쪽지 보내기</a>
+					</li>
+					<li><a class="btn small btn-red" href="javascript:deleteMessage();"><i class="icon-eraser-color"></i>휴지통</a></li>
+					<li class="m0" id="listScaleSection">
+						<select name="listScale" class="default" title="선택해주세요">
+<option value="10" selected>10</option>
+<option value="20">20</option>
+<option value="40">40</option>
+<option value="50">50</option>
+<option value="100">100</option>
+<option value="300">300</option>
+<option value="500">500</option>
+</select>
+
+
+					</li>
+				</ul>
+			</div>
+			
+			<div id="listBox">
+				<table class="boardListBasic" summary="쪽지 리스트입니다.">
+					<caption>쪽지 리스트</caption>
+					<thead>
+						<tr>
+							<th class="check">
+								<input type="checkbox" name="checkAll_1" id="checkAll_1" onclick="checkAll(this)" title="선택해주세요"  />
+							</th>
+							<th class="num">번 호</th>
+							<th>보낸이</th>
+							<th style="width:50%">제목</th>
+							<th>파일</th>
+							<th>읽음</th>
+							
+							<th>받은 날짜</th>
+						</tr>
+					</thead>
+					<tbody>
+						
+						
+							
+								
+								
+								<tr>
+									<td>
+										<input type="checkbox" name="messagIdChkBox" title="선택" value="MESG_261110104247ae884c89,000000" />
+									</td>
+									<td>
+										28
+									</td>
+									<td> 	
+										최교수 (000000)
+									</td>
+									<td class="textLeft" style="max-width:400px;">
+										
+										<a class="clip fcBlack"   href="#" onclick="moveMessageView('MESG_261110104247ae884c89','MESG_261110104245ae884acb');"  >
+											과목다 수업 공지
+										</a>
+										
+									</td>
+									<td>
+										
+									</td>
+									<td>
+										
+										
+											<i class="icon-message-not-color m0">다운로드</i>
+										
+									</td>
+								
+									<td>
+										2026-11-10
+									</td>
+								</tr>
+							
+								
+								
+								<tr>
+									<td>
+										<input type="checkbox" name="messagIdChkBox" title="선택" value="MESG_261110104247ae884d55,000000" />
+									</td>
+									<td>
+										27
+									</td>
+									<td> 	
+										최교수 (000000)
+									</td>
+									<td class="textLeft" style="max-width:400px;">
+										
+										<a class="clip fcBlack"   href="#" onclick="moveMessageView('MESG_261110104247ae884d55','MESG_261110104246ae884ba7');"  >
+											과목다 수업 공지
+										</a>
+										
+									</td>
+									<td>
+										
+									</td>
+									<td>
+										
+										
+											<i class="icon-message-not-color m0">다운로드</i>
+										
+									</td>
+								
+									<td>
+										2026-11-10
+									</td>
+								</tr>
+							
+								
+								
+								<tr>
+									<td>
+										<input type="checkbox" name="messagIdChkBox" title="선택" value="MESG_261110104247ae884d37,000000" />
+									</td>
+									<td>
+										26
+									</td>
+									<td> 	
+										최교수 (000000)
+									</td>
+									<td class="textLeft" style="max-width:400px;">
+										
+										<a class="clip fcBlack"   href="#" onclick="moveMessageView('MESG_261110104247ae884d37','MESG_261110104246ae884b63');"  >
+											과목다 수업 공지
+										</a>
+										
+									</td>
+									<td>
+										
+									</td>
+									<td>
+										
+										
+											<i class="icon-message-not-color m0">다운로드</i>
+										
+									</td>
+								
+									<td>
+										2026-11-10
+									</td>
+								</tr>
+							
+								
+								
+								<tr>
+									<td>
+										<input type="checkbox" name="messagIdChkBox" title="선택" value="MESG_261110104247ae884d10,000000" />
+									</td>
+									<td>
+										25
+									</td>
+									<td> 	
+										최교수 (000000)
+									</td>
+									<td class="textLeft" style="max-width:400px;">
+										
+										<a class="clip fcBlack"   href="#" onclick="moveMessageView('MESG_261110104247ae884d10','MESG_261110104246ae884b2c');"  >
+											과목다 수업 공지
+										</a>
+										
+									</td>
+									<td>
+										
+									</td>
+									<td>
+										
+										
+											<i class="icon-message-not-color m0">다운로드</i>
+										
+									</td>
+								
+									<td>
+										2026-11-10
+									</td>
+								</tr>
+							
+								
+								
+								<tr>
+									<td>
+										<input type="checkbox" name="messagIdChkBox" title="선택" value="MESG_261110104247ae884ccd,000000" />
+									</td>
+									<td>
+										24
+									</td>
+									<td> 	
+										최교수 (000000)
+									</td>
+									<td class="textLeft" style="max-width:400px;">
+										
+										<a class="clip fcBlack"   href="#" onclick="moveMessageView('MESG_261110104247ae884ccd','MESG_261110104246ae884b01');"  >
+											과목다 수업 공지
+										</a>
+										
+									</td>
+									<td>
+										
+									</td>
+									<td>
+										
+										
+											<i class="icon-message-not-color m0">다운로드</i>
+										
+									</td>
+								
+									<td>
+										2026-11-10
+									</td>
+								</tr>
+							
+								
+								
+								<tr>
+									<td>
+										<input type="checkbox" name="messagIdChkBox" title="선택" value="MESG_261110104247ae884ca2,000000" />
+									</td>
+									<td>
+										23
+									</td>
+									<td> 	
+										최교수 (000000)
+									</td>
+									<td class="textLeft" style="max-width:400px;">
+										
+										<a class="clip fcBlack"   href="#" onclick="moveMessageView('MESG_261110104247ae884ca2','MESG_261110104246ae884add');"  >
+											과목다 수업 공지
+										</a>
+										
+									</td>
+									<td>
+										
+									</td>
+									<td>
+										
+										
+											<i class="icon-message-not-color m0">다운로드</i>
+										
+									</td>
+								
+									<td>
+										2026-11-10
+									</td>
+								</tr>
+							
+								
+								
+								<tr>
+									<td>
+										<input type="checkbox" name="messagIdChkBox" title="선택" value="MESG_261110104246ae884c05,000000" />
+									</td>
+									<td>
+										22
+									</td>
+									<td> 	
+										최교수 (000000)
+									</td>
+									<td class="textLeft" style="max-width:400px;">
+										
+										<a class="clip fcBlack"   href="#" onclick="moveMessageView('MESG_261110104246ae884c05','MESG_261110104245ae884abd');"  >
+											과목다 수업 공지
+										</a>
+										
+									</td>
+									<td>
+										
+									</td>
+									<td>
+										
+										
+											<i class="icon-message-not-color m0">다운로드</i>
+										
+									</td>
+								
+									<td>
+										2026-11-10
+									</td>
+								</tr>
+							
+								
+								
+								<tr>
+									<td>
+										<input type="checkbox" name="messagIdChkBox" title="선택" value="MESG_261110104243ae884a76,000000" />
+									</td>
+									<td>
+										21
+									</td>
+									<td> 	
+										최교수 (000000)
+									</td>
+									<td class="textLeft" style="max-width:400px;">
+										
+										<a class="clip fcBlack"   href="#" onclick="moveMessageView('MESG_261110104243ae884a76','MESG_261110104242ae884a2d');"  >
+											과목다 수업 공지
+										</a>
+										
+									</td>
+									<td>
+										
+									</td>
+									<td>
+										
+										
+											<i class="icon-message-not-color m0">다운로드</i>
+										
+									</td>
+								
+									<td>
+										2026-11-10
+									</td>
+								</tr>
+							
+								
+								
+								<tr>
+									<td>
+										<input type="checkbox" name="messagIdChkBox" title="선택" value="MESG_261110104240ae884a21,000000" />
+									</td>
+									<td>
+										20
+									</td>
+									<td> 	
+										최교수 (000000)
+									</td>
+									<td class="textLeft" style="max-width:400px;">
+										
+										<a class="clip fcBlack"   href="#" onclick="moveMessageView('MESG_261110104240ae884a21','MESG_261110104239ae8849d8');"  >
+											과목다 수업 공지
+										</a>
+										
+									</td>
+									<td>
+										
+									</td>
+									<td>
+										
+										
+											<i class="icon-message-not-color m0">다운로드</i>
+										
+									</td>
+								
+									<td>
+										2026-11-10
+									</td>
+								</tr>
+							
+								
+								
+								<tr>
+									<td>
+										<input type="checkbox" name="messagIdChkBox" title="선택" value="MESG_261105102525ee3127e1,000000" />
+									</td>
+									<td>
+										19
+									</td>
+									<td> 	
+										김교수 (000000)
+									</td>
+									<td class="textLeft" style="max-width:400px;">
+										
+										<a class="clip fcBlack"   href="#" onclick="moveMessageView('MESG_261105102525ee3127e1','MESG_261105102525ee3127d4');"  >
+											[과목사] 한문단쓰기 자료 탑재 완료 알림
+										</a>
+										
+									</td>
+									<td>
+										
+											<a href="javascript:compressFile('MESG_261105102525ee3127d4', '4','[과목사] 한문단쓰기 자료 탑재 완료 알림');">
+												<i class="icon-download-color m0">다운로드</i>
+											</a>
+										
+									</td>
+									<td>
+										
+										
+											<i class="icon-message-not-color m0">다운로드</i>
+										
+									</td>
+								
+									<td>
+										2026-11-05
+									</td>
+								</tr>
+							
+						
+						
+						
+						
+					</tbody>
+				</table>
+				
+				
+				
+				<div class='paginator' id='paginator3' ></div>										
+<div class='paginator_pages'>3 pages</div>						
+<script type='text/javascript'>														
+ pag3 = new Paginator('paginator3', 3, 10, 1, '/Message.do?cmd=viewMessageList&messageType=RECEIVE&searchKey=&listScale=10&searchTxt=&curPage=');	
+</script>																			
+
+
+			</div>
+		</div>
+		
+		<script type="text/javascript">
+			$('#listScaleSection').change(function() {
+				var f = document.messageForm;
+				
+				f["listScale"].value = $(this).find('option:selected').val();
+				f["cmd"].value = "viewMessageList";
+				f.submit();
+			})
+		</script>
+		
+	</form>
+</body>
+<iframe name="hiddenFrame" width="0" height="0" frameborder="0" title="파일다운로드프레임" ></iframe>
+</html>
+
+		</div>
+	</div>
+	
+<!-- footer 영역 부분 -->
+<div id="footer">		
+	<div class="foot-link">
+		<dl>
+			<dt>사이트 바로가기 <i class="fa fa-angle-right"></i></dt>
+			<dd><a href="http://www.kunsan.ac.kr" target="_blank">홈페이지</a></dd>
+			<dd><a href="http://portal.kunsan.ac.kr" target="_blank">포털</a></dd>
+			<dd><a href="https://tkis.kunsan.ac.kr/" target="_blank">통합정보</a></dd>
+			<dd><a href="https://career.kunsan.ac.kr/main.do" target="_blank">취업정보</a></dd>
+			<dd><a href="http://safetyedu.org/" target="_blank">연구실안전교육</a></dd>
+			<dd><a href="https://mail.kunsan.ac.kr/" target="_blank">웹메일</a></dd>
+			<dd><a href="https://idisk.kunsan.ac.kr" target="_blank">인터넷디스크</a></dd>
+			<dd><a href="https://ums.kunsan.ac.kr:10010/" target="_blank">푸시서비스</a></dd>
+			
+			<dd><a href="http://e-class.kunsan.ac.kr" target="_blank">(구)e-Class</a></dd>
+		</dl>
+	</div>
+	<div class="inner-wrap">			
+		<ul class="copy">
+			<li><address>군산대학교 (54150) 전라북도 군산시 대학로 558(미룡동) TEL. 063-469-4113~4  &nbsp;/&nbsp;Copyright (c) Kunsan National University. All rights reserved.  </address></li>
+			<!-- <li>Copyright (c) Kunsan National University. All rights reserved.</li> -->
+		</ul>
+	</div>
+</div>
+<!-- //footer 영역 부분 -->
+	<a title="컨텐츠 상단으로 이동" class="" id="toTop" style="display:none;" href="#"></a>
+</div>	
+</body>
+</html>

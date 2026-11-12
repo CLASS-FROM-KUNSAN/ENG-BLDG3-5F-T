@@ -231,6 +231,7 @@ def cmd_eclass_sync(args) -> int:
             menus=cfg.section("eclass.menus"),
             risky=cfg.section("eclass.risky"),
             menu_id_overrides=cfg.section("eclass.menu_ids"),
+            message_boxes=cfg.get("eclass.message_boxes", ["RECEIVE"]),
         )
         stats = crawler.run(
             list(cfg.get("eclass.courses", [])),

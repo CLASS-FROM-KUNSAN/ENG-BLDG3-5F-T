@@ -77,7 +77,9 @@ DEFAULTS: dict[str, Any] = {
             "team": False,
             "progress": False,
             "grade": False,
+            "message": True,
         },
+        "message_boxes": ["RECEIVE"],
         "risky": {
             "i_understand_the_risk": False,
             "exam": False,

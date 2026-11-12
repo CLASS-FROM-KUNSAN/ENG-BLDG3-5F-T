@@ -65,6 +65,9 @@ BOARD_KINDS: dict[str, tuple[str, str]] = {
     "materials": ("pds", "P"),      # 강의자료실 / 학습자료실
 }
 
+# 쪽지함 종류
+MESSAGE_BOXES = ("RECEIVE", "SEND", "WASTEBASKET")
+
 # 위험 메뉴: 열람 자체가 LMS 기록에 남을 수 있는 것들
 RISKY_MENUS = {"exam", "survey", "discussion"}
 
@@ -85,6 +88,7 @@ MENU_LABELS: dict[str, str] = {
     "survey": "설문",
     "discussion": "토론",
     "progress": "학습현황",
+    "message": "쪽지",
 }
 
 # 좌측 메뉴에서 찾을 때 쓰는 링크 텍스트(과목마다 표기가 조금씩 다름)
@@ -104,6 +108,7 @@ MENU_LINK_TEXTS: dict[str, tuple[str, ...]] = {
     "survey": ("설문",),
     "discussion": ("토론",),
     "progress": ("학습 현황", "학습현황"),
+    "message": ("쪽지",),
 }
 
 
@@ -136,6 +141,17 @@ class Site:
             "/Main.do",
             {"cmd": "moveMenu", "mainDTO.parentMenuId": "menu_00026", "mainDTO.menuId": "menu_00030"},
         )
+
+    # -- 쪽지 --------------------------------------------------------
+    def messages(self, box: str = "RECEIVE", page: int = 1) -> str:
+        """쪽지함. 게시판과 달리 페이지 이동이 평범한 GET 입니다."""
+        box = box.upper()
+        if box not in MESSAGE_BOXES:
+            raise ValueError(f"알 수 없는 쪽지함: {box}")
+        params = {"cmd": "viewMessageList", "messageType": box}
+        if page > 1:
+            params["curPage"] = str(page)
+        return self._u("/Message.do", params)
 
     # -- 과목 --------------------------------------------------------
     def course_home(self, course_id: str) -> str:
