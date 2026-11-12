@@ -263,6 +263,61 @@ def test_crawl_lecture_list_writes_markdown_with_every_week(lesson, tmp_path):
     assert text.count("\n## ") == 16, "주차 16개가 다 들어가지 않았습니다"
 
 
+# --- "교안 0개" 경고는 진짜 고장일 때만 ---------------------------------
+# 2026-11-13 실기 sync 에서 경고 7건이 떴는데 전부 '강의 항목이 한 줄도
+# 없는 과목' 이었습니다. 그리고 이미 다 받은 과목은 두 번째 실행부터
+# 매번 같은 경고가 뜹니다(내용이 같은 파일은 saved 에서 빠지므로).
+# 정상이 고장 사이에 섞이면 둘 다 안 보게 됩니다.
+def _warnings(caplog):
+    return [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+
+
+def test_a_second_run_does_not_cry_zero_handouts(lesson, caplog):
+    """CI 는 상태 파일을 이어 가므로 매 실행이 '두 번째 실행' 입니다."""
+    SERVER_MODE["mode"] = "pdf"
+    course = C.Course("2026211605005", "과목가", "이교수")
+    lesson.crawl_lecture_list(course)
+    caplog.clear()
+    with caplog.at_level("INFO", logger="gymhall"):
+        lesson.crawl_lecture_list(course)
+    assert not any("교안을 하나도" in m for m in _warnings(caplog)), _warnings(caplog)
+    assert any("이미 받음 14개" in r.getMessage() for r in caplog.records), \
+        "이미 받은 교안을 세지 않았습니다"
+
+
+def test_already_downloaded_files_are_counted(lesson, tmp_path):
+    SERVER_MODE["mode"] = "pdf"
+    lesson._download_attachments(tmp_path / "a")
+    again = lesson._download_attachments(tmp_path / "b")
+    assert again.saved == [] and again.known == 14, again
+
+
+def test_weeks_without_any_item_are_not_a_warning(lesson, monkeypatch, caplog):
+    """교수가 강의목록을 안 쓰는 과목. 받을 게 없는 것이 정상입니다."""
+    weeks = [{"title": f"{i}. {i}주차", "rows": []} for i in range(1, 17)]
+    monkeypatch.setattr(lesson, "read_lesson_weeks", lambda: weeks)
+    monkeypatch.setattr(lesson, "_download_attachments", lambda _d: C.Attachments())
+    with caplog.at_level("INFO", logger="gymhall"):
+        lesson.crawl_lecture_list(C.Course("2026211784801", "과목나", "교수"))
+    assert _warnings(caplog) == [], _warnings(caplog)
+    assert any("강의 항목이 하나도" in r.getMessage() for r in caplog.records)
+
+
+def test_items_without_any_handout_still_warn_with_what_was_on_screen(
+        lesson, monkeypatch, caplog):
+    """항목은 있는데 첨부를 못 찾으면 여전히 경고 — 선택자 고장과 같은 모양입니다.
+
+    경고만 남기면 다음 사람이 또 선택자를 찍어 맞혀야 합니다. 화면에
+    무엇이 있었는지를 같이 남깁니다.
+    """
+    monkeypatch.setattr(lesson, "_download_attachments", lambda _d: C.Attachments())
+    with caplog.at_level("INFO", logger="gymhall"):
+        lesson.crawl_lecture_list(C.Course("2026211605005", "과목가", "이교수"))
+    w = _warnings(caplog)
+    assert any("강의 항목 15개" in m and "교안을 하나도" in m for m in w), w
+    assert any("이 화면에 있는 것들" in m for m in w), w
+
+
 def test_filedown_actually_saves_the_pdf(lesson, tmp_path):
     """클릭이 아니라 주소로 직접 받아 파일이 디스크에 남아야 합니다."""
     SERVER_MODE["mode"] = "pdf"
