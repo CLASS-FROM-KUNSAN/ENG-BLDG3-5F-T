@@ -604,9 +604,15 @@ def cmd_record_start(args) -> int:
     label = args.label or f"수동_{datetime.now():%H%M}"
     course = _resolve_course(cfg, course_id=getattr(args, "course", "") or "",
                              label=label, when=datetime.now())
-    _run_recording(cfg, layout, label, minutes=args.minutes,
-                   upload=not args.no_upload, dry_run=args.dry_run,
-                   language=args.language, course=course)
+    # _run_recording 은 다른 녹화가 이미 돌고 있으면 None 을 돌려줍니다.
+    # 그걸 버리고 0 을 돌려주면, 한 프레임도 안 찍고 "성공" 으로
+    # 끝납니다. 사용자가 직접 누른 명령이니 더더욱 알려야 합니다.
+    result = _run_recording(cfg, layout, label, minutes=args.minutes,
+                            upload=not args.no_upload, dry_run=args.dry_run,
+                            language=args.language, course=course)
+    if result is None:
+        log.error("녹화를 하나도 하지 못했습니다(다른 녹화가 돌고 있습니다).")
+        return 1
     return 0
 
 
@@ -705,15 +711,25 @@ def cmd_transcribe_queue(args) -> int:
                              model=str(cfg.get("transcribe.batch.model", "small")),
                              device=device))
         return 0
-    results = run_queue(cfg, layout, limit=args.limit, language=args.language)
+    tally: dict[str, int] = {}
+    results = run_queue(cfg, layout, limit=args.limit, language=args.language,
+                        tally=tally)
+    # "큐가 비어서 0건" 과 "20건을 전부 실패해서 0건" 은 다릅니다.
+    # 밤새 돌려 놓은 무인 작업이 조용히 성공으로 끝나면 안 됩니다.
+    if tally.get("failed") or tally.get("missing"):
+        log.error("전사 실패 %d건 / 파일 사라짐 %d건 (성공 %d건). "
+                  "실패한 것은 대기열에 남아 있습니다.",
+                  tally.get("failed", 0), tally.get("missing", 0), len(results))
+        _actions_error(
+            "전사 실패",
+            f"시도 {tally.get('attempted', 0)}건 중 성공 {len(results)}건",
+        )
+        _print_transcribe_results(results)
+        return 1
     if not results:
         return 0
 
-    print(f"\n전사 완료 {len(results)}건")
-    for r in results:
-        print(f"  {r.audio.name}  ({r.speed:.1f}x)")
-        for out in r.outputs:
-            print(f"    -> {out}")
+    _print_transcribe_results(results)
 
     if not args.no_upload and cfg.get("github.enabled"):
         from .release import tag_for, upload_many
@@ -729,9 +745,30 @@ def cmd_transcribe_queue(args) -> int:
         if uploader is None:
             log.info("전사 결과 %d개는 로컬에만 둡니다.", len(files))
         else:
-            upload_many(uploader, files, tag,
-                        prefix=f"{cfg.machine_label}_", store=store)
+            up_tally: dict[str, int] = {}
+            got = upload_many(uploader, files, tag,
+                              prefix=f"{cfg.machine_label}_", store=store,
+                              tally=up_tally)
+            blocked = (up_tally.get("failed", 0) + up_tally.get("collision", 0)
+                       + up_tally.get("missing", 0))
+            if blocked:
+                detail = (f"성공 {len(got)}건 / 실패 {up_tally.get('failed', 0)} / "
+                          f"이름충돌 {up_tally.get('collision', 0)} / "
+                          f"파일없음 {up_tally.get('missing', 0)}")
+                log.error("전사 결과를 올리지 못했습니다. %s", detail)
+                _actions_error("전사 결과 업로드 실패", detail)
+                return 1
     return 0
+
+
+def _print_transcribe_results(results) -> None:
+    if not results:
+        return
+    print(f"\n전사 완료 {len(results)}건")
+    for r in results:
+        print(f"  {r.audio.name}  ({r.speed:.1f}x)")
+        for out in r.outputs:
+            print(f"    -> {out}")
 
 
 def cmd_transcribe_warmup(args) -> int:

@@ -233,8 +233,19 @@ def transcribe_file(
 
 
 def run_queue(cfg, layout: Layout, *, limit: int = 0,
-              language: str | None = None) -> list[Result]:
-    """대기열을 비웁니다. 모델은 한 번만 로드해 재사용합니다."""
+              language: str | None = None,
+              tally: dict[str, int] | None = None) -> list[Result]:
+    """대기열을 비웁니다. 모델은 한 번만 로드해 재사용합니다.
+
+    tally 를 주면 시도/성공/실패/사라진파일 을 따로 셉니다. 돌려주는
+    리스트에는 **성공한 것만** 들어가서, 호출부에서는 "큐가 비어서
+    0건" 과 "20건을 전부 실패해서 0건" 이 똑같이 빈 리스트로 보입니다.
+    야간 무인 작업이 그대로 성공으로 기록됩니다 — upload_many 에서
+    고친 것과 같은 모양입니다.
+    """
+    counts = tally if tally is not None else {}
+    for k in ("attempted", "succeeded", "failed", "missing"):
+        counts.setdefault(k, 0)
     queue = Queue(layout.state / QUEUE_FILE)
     if not len(queue):
         log.info("전사 대기열이 비어 있습니다.")
@@ -278,6 +289,7 @@ def run_queue(cfg, layout: Layout, *, limit: int = 0,
         if not audio.exists():
             log.warning("파일이 사라져 대기열에서 제거합니다: %s", audio)
             queue.remove(item["audio"])
+            counts["missing"] += 1
             continue
         out_dir = Path(item["out_dir"])
         stem = out_dir / f"{audio.stem}"
@@ -285,6 +297,7 @@ def run_queue(cfg, layout: Layout, *, limit: int = 0,
         # 과목마다 언어가 다를 수 있습니다(영어 수업 등).
         # 대기열에 적힌 값이 있으면 전역 설정보다 우선합니다.
         item_language = language or item.get("language") or default_language
+        counts["attempted"] += 1
         try:
             results.append(
                 transcribe_file(
@@ -298,7 +311,9 @@ def run_queue(cfg, layout: Layout, *, limit: int = 0,
                 )
             )
             queue.remove(item["audio"])
+            counts["succeeded"] += 1
         except Exception as exc:
+            counts["failed"] += 1
             log.error("전사 실패(대기열에 남겨 둡니다): %s -> %s", audio.name, exc)
 
     return results

@@ -393,6 +393,29 @@ preview 전용인 데다 `subprocess(text=True)` 는 안 봅니다.
 `_run_recording(video_not_before=X)` → **세션에 무엇이 들어갔나** 를
 봐야 합니다. `tests/test_recording_seams.py` 가 그 묶음입니다.
 
+### 원칙 7 — 버그의 "모양" 으로 전 코드를 훑습니다
+
+변이 세트를 "최근 PR 변경분" 으로 잡았더니, **같은 모양이 다른 곳에
+그대로 남아 있었습니다.** `cmd_upload` 가 `_upload_eclass` 와 똑같이
+"전부 실패해도 `return 0`" 이었는데, 변경분이 아니라 기존 코드라
+범위 밖이었습니다.
+
+**변이 세트의 단위는 "PR 변경분" 이 아니라 "같은 실패 패턴" 입니다.**
+버그를 하나 찾으면 그 모양으로 전 코드를 grep 하세요.
+
+`rg "return 0" src/gymhall/cli.py` 로 훑어 나온 것 셋:
+
+| 자리 | 조용한 0 |
+|---|---|
+| `cmd_transcribe_queue` | 큐 20건을 **전부 실패**해도 `run_queue` 가 `[]` 를 돌려주고 종료 코드 0. 야간 무인 작업이 그대로 성공으로 기록됩니다. |
+| `cmd_transcribe_queue` (업로드) | 전사 결과 업로드에 tally 가 없었습니다. 전사는 됐는데 결과가 하나도 안 올라가도 0. |
+| `cmd_record_start` | 다른 녹화가 돌고 있으면 `_run_recording` 이 `None` 을 돌려주는데, 그걸 버리고 0. **한 프레임도 안 찍고 "성공"** 입니다. |
+
+셋 다 `upload_many` 와 같은 처방(tally + `::error::` + 종료 코드 1)을
+했고, `tests/test_silent_zero.py` 가 **그 grep 자체를 고정**합니다 —
+성공한 것만 돌려주는 함수(`upload_many`, `run_queue`)를 `tally` 없이
+부르면 빨개집니다.
+
 ---
 
 ## 유닛 테스트로 잡을 수 없는 것
