@@ -125,7 +125,7 @@ def test_sensitive_upload_warning(config_file):
     """성적을 수집하면서 업로드 제외를 지우면 경고해야 합니다."""
     cfg = cfgmod.load(config_file([
         ("grade          = false", "grade          = true"),
-        ('exclude_menus = ["grade", "attendance"]', "exclude_menus = []"),
+        ('exclude_menus = ["grade", "attendance", "progress"]', "exclude_menus = []"),
     ]))
     notes = " ".join(cfgmod.warnings_for(cfg))
     assert "grade" in notes

@@ -165,12 +165,16 @@ def test_navigation_is_form_post_not_links():
 
 def test_fixtures_contain_no_personal_data():
     """픽스처에 실제 학번/이름/이메일이 섞여 들어가지 않게 합니다."""
+    # @media 같은 CSS 를 이메일로 오해하지 않도록 주소 모양만 봅니다.
+    email = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]*\w")
     for path in FIXTURES.glob("*.html"):
         text = path.read_text(encoding="utf-8")
-        assert "@" not in text.replace("&amp;", ""), f"{path.name} 에 이메일 같은 문자열"
+        assert not email.search(text), f"{path.name} 에 이메일: {email.search(text).group(0)}"
         # 0000000 은 일부러 넣은 자리표시자입니다
         real_ids = [m for m in re.findall(r"\b\d{7}\b", text) if m != "0000000"]
         assert not real_ids, f"{path.name} 에 학번 같은 7자리 숫자: {real_ids}"
+        # 실명이 다시 섞여 들어가는 것을 막습니다(가명만 허용).
+        assert "최성빈" not in text, f"{path.name} 에 실명"
 
 
 # ---------------------------------------------------------------------------

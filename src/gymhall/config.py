@@ -26,6 +26,12 @@ class ConfigError(Exception):
 # ---------------------------------------------------------------------------
 # 기본값. config.toml 에 없는 키는 여기서 채웁니다.
 # ---------------------------------------------------------------------------
+# 성적·출석·진도율은 본인 개인정보입니다. 수집은 선택이고, 켜더라도
+# 기본적으로 릴리스에는 올리지 않습니다. 업로드 제외 목록의 기본값과
+# 경고 문구가 같은 목록을 보도록 한곳에 둡니다 — 따로 적어 두면
+# 둘 중 하나만 고쳐져서 조용히 어긋납니다.
+SENSITIVE_MENUS: tuple[str, ...] = ("grade", "attendance", "progress")
+
 DEFAULTS: dict[str, Any] = {
     "general": {
         "data_dir": "",
@@ -59,6 +65,7 @@ DEFAULTS: dict[str, Any] = {
         "courses": [],
         "exclude_courses": [],
         "menus": {
+            "curriculum": True,
             "lecture_list": True,
             "syllabus": True,
             "course_info": True,
@@ -68,6 +75,7 @@ DEFAULTS: dict[str, Any] = {
             "assignment": True,
             "attendance": False,
             "team": False,
+            "progress": False,
             "grade": False,
         },
         "risky": {
@@ -78,7 +86,7 @@ DEFAULTS: dict[str, Any] = {
         },
         "upload": {
             "enabled": True,
-            "exclude_menus": ["grade", "attendance"],
+            "exclude_menus": list(SENSITIVE_MENUS),
             "allow_extensions": [],
             "max_file_mb": 0,
         },
@@ -426,7 +434,7 @@ def warnings_for(cfg: Config) -> list[str]:
 
     if cfg.get("eclass.upload.enabled"):
         excluded = set(cfg.get("eclass.upload.exclude_menus", []))
-        for sensitive in ("grade", "attendance"):
+        for sensitive in SENSITIVE_MENUS:
             if cfg.get(f"eclass.menus.{sensitive}") and sensitive not in excluded:
                 notes.append(
                     f"'{sensitive}' 수집 결과가 릴리스에 업로드됩니다. "

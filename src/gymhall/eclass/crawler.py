@@ -51,6 +51,18 @@ DETAIL_BODY = (
 # 첨부가 아닌 버튼. 클릭하면 목록으로 나가거나 글을 지웁니다.
 SKIP_LINK_TEXTS = frozenset({"목록", "수정", "삭제", "답글", "이전글", "다음글", "인쇄"})
 
+# 목록의 '파일' 칸에 붙는 첨부 표시. 어떤 아이콘 클래스가 쓰이는지는
+# 사이트 스프라이트(icon_button.css)에서 뽑은 후보를 전부 넣었습니다.
+# 덤프에 게시판 목록 HTML 이 없어 '이 중 어느 것' 인지는 확인하지
+# 못했습니다. 틀려도 수집은 됩니다 — has_file 은 표시용 힌트일 뿐,
+# 첨부를 실제로 찾는 것은 상세 화면의 ATTACHMENT 선택자입니다.
+FILE_ICON = (
+    ".icon-data-color, .icon-disk, .icon-disk-black, .icon-disk-white, "
+    ".icon-save-color, .icon-download-color, .icon-download-black, "
+    ".icon-filelist-black, .icon-filelist-white, "
+    'img[alt*="첨부"], img[src*="file"], img[src*="disk"]'
+)
+
 # 상세 화면의 첨부 링크 후보
 ATTACHMENT = (
     "a[onclick*='ownload']", "a[href*='ownload']",
@@ -168,9 +180,17 @@ class Crawler:
         return courses
 
     # -- 진입 --------------------------------------------------------
+    # 강의실 홈이 /Lesson.do 인 개설 유형. 사이트의 viewCourse() 가
+    #   if (openType !== "open" && openType !== "mooc") -> /Course.do
+    # 로 갈라지므로 두 값을 똑같이 다뤄야 합니다. 'mooc' 를 빠뜨리면
+    # 그 과목만 엉뚱한 화면에 들어가 조용히 0건으로 끝납니다.
+    # 'bnormal'(법정의무교육 등)은 분기에 없으므로 일반 과목과 같습니다.
+    LESSON_HOME_TYPES = frozenset({"open", "mooc"})
+
     def open_course(self, course: Course) -> bool:
         url = (self.site.open_course_home(course.course_id)
-               if course.open_type == "open" else self.site.course_home(course.course_id))
+               if course.open_type in self.LESSON_HOME_TYPES
+               else self.site.course_home(course.course_id))
         try:
             self.br.goto(url)
             return True
@@ -260,6 +280,141 @@ class Crawler:
         log.info("저장: %s / %s", course.name, label)
         return out
 
+    # -- 학습 목차 ---------------------------------------------------
+    # 학습 목차 화면은 한 번에 세 주차만 보여 주고 좌우 화살표
+    #   <a href="javascript:viewNextPage('12','next');">
+    # 로 창을 옮깁니다. 들어가자마자 보이는 것은 '이번 주' 근처 세 칸뿐이라,
+    # 화면을 그대로 저장하면 16주 중 3주만 남습니다. 학기 중에는 그래도
+    # 뭔가 저장되니 비어 보이지 않고, 그래서 빠진 줄도 모릅니다.
+    CURRICULUM_TABLE = "#listBox table"
+    CURRICULUM_PREV = "p.arrowLeft a, a[href*=\"viewNextPage\"][href*=prev]"
+    CURRICULUM_NEXT = "p.arrowRight a, a[href*=\"viewNextPage\"][href*=next]"
+    MAX_WEEK_STEPS = 30          # 학기가 이보다 길 수는 없습니다.
+
+    def _curriculum_window(self) -> dict[str, Any] | None:
+        """지금 보이는 세 주차를 주차별로 쪼개서 읽습니다."""
+        try:
+            return self.br.page.evaluate(
+                """(sel) => {
+                     const t = document.querySelector(sel);
+                     if (!t) return null;
+                     const weeks = Array.from(t.querySelectorAll('thead th[scope="col"]'))
+                       .map(th => (th.innerText||'').replace(/\\s+/g,' ').trim());
+                     if (!weeks.length) return null;
+                     const rows = Array.from(t.querySelectorAll('tbody tr')).map(tr => {
+                       // 행 머리에는 이름 옆에 '더보기' 링크가 붙어 있어서
+                       // innerText 를 그대로 쓰면 '강의영상 더보기' 가 됩니다.
+                       const head = tr.querySelector('th .text') || tr.querySelector('th');
+                       return {
+                         label: (head ? head.innerText : '').replace(/\\s+/g,' ').trim(),
+                         cells: Array.from(tr.querySelectorAll('td'))
+                                  .map(td => (td.innerText||'').replace(/[ \\t]+/g,' ').trim()),
+                       };
+                     });
+                     return {weeks, rows};
+                   }""",
+                self.CURRICULUM_TABLE,
+            )
+        except Exception as exc:
+            log.debug("학습목차 창 읽기 실패: %s", exc)
+            return None
+
+    def _step_week(self, selector: str) -> bool:
+        """화살표를 눌러 주차 창을 옮깁니다. 실제로 바뀌어야 True."""
+        page = self.br.page
+        before = self._curriculum_window()
+        before_weeks = before["weeks"] if before else None
+        loc = page.locator(selector).first
+        try:
+            if loc.count() == 0:
+                return False
+            loc.click(timeout=self.br.timeout_ms)
+            page.wait_for_load_state("domcontentloaded", timeout=self.br.timeout_ms)
+            page.wait_for_timeout(300)
+        except Exception as exc:
+            log.debug("주차 이동 실패(%s): %s", selector, exc)
+            return False
+        after = self._curriculum_window()
+        # 눌렸지만 아무 일도 없었던 경우를 성공으로 치면 영원히 돕니다.
+        return bool(after) and after["weeks"] != before_weeks
+
+    def collect_curriculum(self, course: Course) -> dict[str, list[tuple[str, str]]]:
+        """맨 앞 주차까지 되감은 뒤 끝까지 넘기며 전 주차를 모읍니다."""
+        found: dict[str, list[tuple[str, str]]] = {}
+
+        def take() -> None:
+            win = self._curriculum_window()
+            if not win:
+                return
+            for i, week in enumerate(win["weeks"]):
+                if not week or week in found:
+                    continue
+                items = [
+                    (row["label"], row["cells"][i])
+                    for row in win["rows"]
+                    if i < len(row["cells"]) and row["cells"][i]
+                ]
+                found[week] = items
+
+        take()
+        rewound = 0
+        while rewound < self.MAX_WEEK_STEPS and self._step_week(self.CURRICULUM_PREV):
+            rewound += 1
+            take()
+        advanced = 0
+        while advanced < self.MAX_WEEK_STEPS and self._step_week(self.CURRICULUM_NEXT):
+            advanced += 1
+            take()
+
+        if rewound >= self.MAX_WEEK_STEPS or advanced >= self.MAX_WEEK_STEPS:
+            msg = (f"{course.name}/학습목차: 주차 이동이 {self.MAX_WEEK_STEPS}번을 넘었습니다. "
+                   "일부 주차가 빠졌을 수 있습니다.")
+            log.warning(msg)
+            self.stats.errors.append(msg)
+        return found
+
+    def save_curriculum(self, course: Course) -> Path | None:
+        weeks = self.collect_curriculum(course)
+        if not weeks:
+            log.info("%s / 학습목차: 주차 표를 찾지 못해 화면 전체를 저장합니다.", course.name)
+            return self.save_page_text(course, "curriculum")
+
+        lines: list[str] = []
+        for week, items in weeks.items():
+            lines.append(f"## {week}")
+            lines.append("")
+            if items:
+                for label, cell in items:
+                    lines.append(f"### {label}" if label else "###")
+                    lines.append("")
+                    lines.append(cell)
+                    lines.append("")
+            else:
+                lines.append("(내용 없음)")
+                lines.append("")
+        body = "\n".join(lines).strip()
+
+        digest = sha256_text(body)
+        state_key = f"page:{course.course_id}:curriculum"
+        if self.store.data["downloaded"].get(state_key, {}).get("sha256") == digest:
+            self.stats.skipped += 1
+            log.debug("변경 없음: %s / 학습목차", course.name)
+            return None
+
+        out = self._dir(course, "curriculum") / safe_name("학습목차.md")
+        header = (
+            f"# {course.name} - 학습목차\n\n"
+            f"- 과목코드: `{course.course_id}`\n"
+            f"- 담당: {course.professor}\n"
+            f"- 수집시각: {datetime.now().astimezone():%Y-%m-%d %H:%M:%S}\n"
+            f"- 주차 수: {len(weeks)}\n\n---\n\n"
+        )
+        out.write_text(header + body + "\n", encoding="utf-8")
+        self.store.mark_downloaded(state_key, path=str(out), digest=digest)
+        self.stats.posts += 1
+        log.info("저장: %s / 학습목차 (%d주차)", course.name, len(weeks))
+        return out
+
     def _allowed_file(self, path: Path) -> bool:
         if self.allow_extensions and path.suffix.lower().lstrip(".") not in self.allow_extensions:
             log.info("확장자 제외: %s", path.name)
@@ -273,7 +428,7 @@ class Crawler:
         """목록 테이블의 각 행을 읽습니다. 인덱스는 클릭할 때 씁니다."""
         try:
             return self.br.page.evaluate(
-                """(sel) => {
+                """([sel, FILE_ICON]) => {
                      const rows = Array.from(document.querySelectorAll(sel));
                      return rows.map((tr, i) => {
                        const tds = Array.from(tr.querySelectorAll('td'));
@@ -284,14 +439,14 @@ class Crawler:
                          index: i,
                          no: text[0] || '',
                          title: (link ? (link.innerText||'') : (text[1]||'')).replace(/\\s+/g,' ').trim(),
-                         has_file: !!tr.querySelector('.icon-data-color, img[alt*="첨부"], a[href*="ile"]'),
+                         has_file: !!tr.querySelector(FILE_ICON),
                          author: text.length > 3 ? text[text.length-3] : '',
                          date: text.length > 2 ? text[text.length-2] : '',
                          cells: text
                        };
                      }).filter(Boolean).filter(r => r.title);
                    }""",
-                BOARD_ROW,
+                [BOARD_ROW, FILE_ICON],
             )
         except Exception as exc:
             log.warning("게시판 목록 읽기 실패: %s", exc)
@@ -561,6 +716,8 @@ class Crawler:
                     self.crawl_board(course, key, titles_only=True)
                 elif key in board_keys:
                     self.crawl_board(course, key)
+                elif key == "curriculum":
+                    self.save_curriculum(course)
                 else:
                     self.save_page_text(course, key)
             except Exception as exc:

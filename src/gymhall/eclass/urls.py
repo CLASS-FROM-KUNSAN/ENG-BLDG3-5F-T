@@ -21,9 +21,14 @@ from dataclasses import dataclass
 from urllib.parse import urlencode
 
 # --- 메뉴 그룹(부모) ---------------------------------------------------
+# 전부 실제 페이지의 좌측 메뉴(<ul id="leftMenu">)에서 그대로 옮긴 값입니다.
+# 추측한 값은 하나도 없습니다.
 PARENT_CURRICULUM = "menu_00091"   # 학습 목차
 PARENT_INFO = "menu_00048"         # 학습 정보
 PARENT_ACTIVITY = "menu_00104"     # 학습 활동
+PARENT_PROGRESS = "menu_00101"     # 학습 현황
+PARENT_COURSE_INFO = "menu_00047"  # 과목 정보
+PARENT_GRADE = "menu_00105"        # 성적
 
 # --- 개별 메뉴 ---------------------------------------------------------
 # 학습 목차
@@ -36,10 +41,24 @@ MENU_DISCUSSION = "menu_00065"     # 토론   (위험)
 MENU_EXAM = "menu_00067"           # 시험   (위험)
 MENU_SURVEY = "menu_00069"         # 설문   (위험)
 MENU_TEAM = "menu_00071"           # 팀활동
+# 학습 현황 / 과목 정보 / 성적
+MENU_PROGRESS = "menu_00100"       # 학습 현황
+MENU_SYLLABUS = "menu_00052"       # 수업 계획서
+MENU_COURSE_INFO = "menu_00053"    # 과목 정보
+MENU_GRADE = "menu_00106"          # 성적보기
 # 학습 정보(게시판 3종은 같은 menuId 를 쓰고 boardClass 로 구분)
 MENU_BOARD = "menu_00236"
 
+# 강의실 홈 '더보기' 로 게시판에 들어갈 때만 쓰이는 별도 메뉴 쌍.
+# 같은 자료실인데 진입 경로에 따라 menuId 가 달라집니다
+# (ViewBoardContent 의 boardClass === 'pds' 분기).
+PARENT_PDS_ALT = "menu_00291"
+MENU_PDS_ALT = "menu_00292"
+
 # 게시판 종류 -> (boardClass, boardInfoId 접미사)
+# 실제로 게시판을 고르는 것은 boardInfoId 의 접미사(-N/-Q/-P)입니다.
+# boardClass 는 화면/메뉴 분기에만 쓰여서, 사이트 자체도 일관되지 않습니다
+# (강의실 홈의 자료실 '더보기' 는 pds 대신 'notice' 를 넘깁니다).
 BOARD_KINDS: dict[str, tuple[str, str]] = {
     "notice": ("notice", "N"),      # 공지사항
     "qna": ("qna", "Q"),            # 질의응답
@@ -65,6 +84,7 @@ MENU_LABELS: dict[str, str] = {
     "exam": "시험",
     "survey": "설문",
     "discussion": "토론",
+    "progress": "학습현황",
 }
 
 # 좌측 메뉴에서 찾을 때 쓰는 링크 텍스트(과목마다 표기가 조금씩 다름)
@@ -83,6 +103,7 @@ MENU_LINK_TEXTS: dict[str, tuple[str, ...]] = {
     "exam": ("시험",),
     "survey": ("설문",),
     "discussion": ("토론",),
+    "progress": ("학습 현황", "학습현황"),
 }
 
 
@@ -160,16 +181,21 @@ class Site:
         if kind not in BOARD_KINDS:
             raise ValueError(f"알 수 없는 게시판 종류: {kind}")
         board_class, suffix = BOARD_KINDS[kind]
+        # 실제 좌측 메뉴 링크와 글자 하나까지 같게 맞춘 주소입니다.
+        # boardInfoGubun 과 boardType 을 빼도 보통은 열리지만, 서버가
+        # 둘 중 하나로 화면을 고르는 분기가 있으면 조용히 다른 게시판이
+        # 열립니다. 빼서 얻을 것이 없으므로 그대로 둡니다.
         return self._u(
             "/Course.do",
             {
                 "cmd": "viewBoardContentsList",
-                "mainDTO.parentMenuId": PARENT_INFO,
-                "mainDTO.menuId": MENU_BOARD,
-                "courseDTO.courseId": course_id,
-                "courseDTO.shareCourseId": "",
+                "boardInfoDTO.boardInfoGubun": board_class,
                 "boardInfoDTO.boardInfoId": f"{course_id}-{suffix}",
                 "boardInfoDTO.boardClass": board_class,
+                "boardInfoDTO.boardType": "course",
+                "courseDTO.courseId": course_id,
+                "mainDTO.parentMenuId": PARENT_INFO,
+                "mainDTO.menuId": MENU_BOARD,
             },
         )
 
@@ -177,8 +203,12 @@ class Site:
     def menu_url(self, course_id: str, key: str, overrides: dict[str, str] | None = None) -> str | None:
         """내부 메뉴 키로 직접 URL 을 만듭니다.
 
-        만들 수 없는 메뉴(강의계획서/과목정보/성적)는 None 을 돌려줍니다.
-        그런 메뉴는 crawler 가 좌측 메뉴 링크를 '클릭'해서 들어갑니다.
+        모르는 키는 None 을 돌려줍니다. 그런 메뉴는 crawler 가 좌측 메뉴
+        링크를 '클릭'해서 들어갑니다.
+
+        2026-11 덤프의 <ul id="leftMenu"> 에서 15개 메뉴의 주소를 전부
+        확인했으므로, 이제 클릭 경로로 빠지는 메뉴는 없습니다. 클릭 경로는
+        학교가 menuId 를 바꿨을 때를 위한 대비책으로만 남깁니다.
         """
         overrides = overrides or {}
         mid = overrides.get(key)
@@ -195,6 +225,10 @@ class Site:
             "exam": (PARENT_ACTIVITY, MENU_EXAM),
             "survey": (PARENT_ACTIVITY, MENU_SURVEY),
             "team": (PARENT_ACTIVITY, MENU_TEAM),
+            "progress": (PARENT_PROGRESS, MENU_PROGRESS),
+            "syllabus": (PARENT_COURSE_INFO, MENU_SYLLABUS),
+            "course_info": (PARENT_COURSE_INFO, MENU_COURSE_INFO),
+            "grade": (PARENT_GRADE, MENU_GRADE),
         }
         if key in table:
             parent, default_menu = table[key]
