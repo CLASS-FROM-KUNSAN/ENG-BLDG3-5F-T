@@ -87,6 +87,18 @@ TypeError: 'Event' object is not callable
 | `no_speech_prob` 단독 판정 | 0.6~0.85 구간에서 모델이 확신 없이 지어낸 문장을 놓침 | `test_logprob_rule_needs_both_signals_bad` |
 | 후보 밖 언어 오판 | 한국어 강의의 영어 용어 구간이 일본어로 판정됨 | `test_wrong_language_is_corrected_to_best_candidate` |
 
+### 참고 저장소 정독 후 찾은 것 (2차)
+
+처음에 겉핥기로 넘긴 저장소들을 파일 단위로 다시 읽어 찾았습니다.
+
+| 버그 | 증상 | 테스트 |
+|---|---|---|
+| GPU 선택이 VRAM 을 안 봄 | 2GB 내장 GPU 에서도 cuda 를 골라 모델 로딩 중 OOM | `test_small_vram_gpu_is_rejected` |
+| `float16` 하드코딩 | 지원하지 않는 카드에서 로딩 실패 | `test_compute_type_is_asked_not_hardcoded` |
+| 첨부 탐색이 프레임을 안 봄 | 본문이 iframe 안에 그려지면 첨부를 영영 못 찾음 | (프레임 순회 추가) |
+| Actions 가 시크릿 없이 실패 | 설정 전까지 하루 3회 실패 알림이 쌓임 | (게이트 단계 추가) |
+| 소요 시간이 지어낸 숫자 | "1시간에 10분" — 기기·부하에 따라 몇 배씩 다름 | `test_describe_says_whether_it_is_measured` |
+
 ### 기타
 
 | 버그 | 증상 | 테스트 |

@@ -48,6 +48,9 @@ DETAIL_BODY = (
     "div.boardViewContent", "div.viewContent", "div.bbsContent",
     "td.boardContents", "div#bodyContent div.cont", "div#bodyContent",
 )
+# 첨부가 아닌 버튼. 클릭하면 목록으로 나가거나 글을 지웁니다.
+SKIP_LINK_TEXTS = frozenset({"목록", "수정", "삭제", "답글", "이전글", "다음글", "인쇄"})
+
 # 상세 화면의 첨부 링크 후보
 ATTACHMENT = (
     "a[onclick*='ownload']", "a[href*='ownload']",
@@ -483,18 +486,34 @@ class Crawler:
         )
         self.store.save()
 
+    def _attachment_locators(self):
+        """첨부 링크를 담은 locator 를 찾습니다. 프레임 안까지 봅니다.
+
+        page.locator() 는 iframe 을 넘어가지 않습니다. 이 LMS 는 프레임을
+        쓰므로(숨은 '파일다운로드프레임' 이 그 증거), 본문이 프레임 안에
+        그려지는 화면에서는 메인 문서만 봐서는 첨부를 영영 못 찾습니다.
+        기숙사 자동화 저장소가 같은 학교 포털에서 프레임을 전부 뒤지는
+        방식을 쓰는 것도 같은 이유입니다.
+        """
+        page = self.br.page
+        # 메인 문서 -> 프레임 순으로, 먼저 걸리는 것을 씁니다.
+        contexts = [page, *[f for f in page.frames if f != page.main_frame]]
+        for context in contexts:
+            for sel in ATTACHMENT:
+                try:
+                    loc = context.locator(sel)
+                    if loc.count() > 0:
+                        where = "본문" if context is page else f"프레임({context.name or '이름없음'})"
+                        log.debug("첨부 후보 %d개 발견 — %s / %s", loc.count(), where, sel)
+                        return loc
+                except Exception:
+                    continue
+        return None
+
     def _download_attachments(self, dest_dir: Path) -> list[Path]:
         """상세 화면의 첨부를 전부 받습니다."""
         saved: list[Path] = []
-        links = None
-        for sel in ATTACHMENT:
-            loc = self.br.page.locator(sel)
-            try:
-                if loc.count() > 0:
-                    links = loc
-                    break
-            except Exception:
-                continue
+        links = self._attachment_locators()
         if links is None:
             return saved
 
@@ -505,13 +524,13 @@ class Crawler:
                 text = _clean(item.inner_text())
             except Exception:
                 text = ""
-            if text in {"목록", "수정", "삭제", "답글"}:
+            if text in SKIP_LINK_TEXTS:
                 continue
             with self.br.capture_download(dest_dir) as got:
                 try:
                     item.click()
                 except Exception as exc:
-                    log.debug("첨부 클릭 실패: %s", exc)
+                    log.debug("첨부 클릭 실패(%s): %s", text or f"#{i}", exc)
             for path in got:
                 digest = sha256_file(path)
                 if self.store.is_downloaded(f"file:{digest}"):

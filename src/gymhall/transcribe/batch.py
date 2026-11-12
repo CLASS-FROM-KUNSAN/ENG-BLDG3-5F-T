@@ -26,6 +26,7 @@ from .language import describe as describe_language
 from .language import parse as parse_language
 from .language import restrict as restrict_language
 from .language import whisper_argument
+from .perf import Profile, describe_estimate, human_duration
 
 log = get_logger("transcribe.batch")
 
@@ -81,15 +82,42 @@ class Queue:
     def __len__(self) -> int:
         return len(self.items)
 
-    def describe(self) -> str:
+    def describe(self, profile: Profile | None = None,
+                 model: str = "small", device: str = "cpu") -> str:
         if not self.items:
             return "전사 대기열이 비어 있습니다."
         lines = [f"전사 대기 {len(self.items)}건", "=" * 50]
         for item in self.items:
             path = Path(item["audio"])
             size = f"{path.stat().st_size/1024/1024:.0f} MB" if path.exists() else "파일 없음"
-            lines.append(f"  [{item['track']}] {path.name}  ({size})")
+            lang = f" [{item['language']}]" if item.get("language") else ""
+            lines.append(f"  [{item['track']}]{lang} {path.name}  ({size})")
+        if profile is not None:
+            total = _queue_audio_seconds(self.items)
+            if total > 0:
+                lines.append("")
+                lines.append(f"  오디오 합계 {human_duration(total)}")
+                lines.append(f"  {describe_estimate(profile, total, model, device)}")
         return "\n".join(lines)
+
+
+PROFILE_FILE = "perf_profile.json"
+
+
+def _queue_audio_seconds(items: list[dict[str, Any]]) -> float:
+    """대기열에 쌓인 오디오의 총 길이. 못 재면 0."""
+    from ..recorder.ffmpeg_util import duration_of
+
+    total = 0.0
+    for item in items:
+        path = Path(item.get("audio", ""))
+        if not path.exists():
+            continue
+        try:
+            total += duration_of(path) or 0.0
+        except Exception:
+            continue
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +147,8 @@ def transcribe_file(
     model=None,
     header: str = "",
     cleaner: Cleaner | None = None,
+    perf: Profile | None = None,
+    device: str = "cpu",
 ) -> Result:
     """오디오 하나를 전사해 결과 파일들을 씁니다."""
     audio = Path(audio)
@@ -162,6 +192,12 @@ def transcribe_file(
             log.info("  ... %.0f분 지점까지 전사", seg.end / 60)
             last_report = time.time()
     cleaner.report(audio.name)
+
+    if perf is not None:
+        perf.record(
+            float(getattr(info, "duration", 0.0) or 0.0),
+            time.time() - started, spec.model, device,
+        )
 
     spent = time.time() - started
     audio_seconds = float(getattr(info, "duration", 0.0) or 0.0)
@@ -214,11 +250,28 @@ def run_queue(cfg, layout: Layout, *, limit: int = 0,
     default_language = language or str(cfg.get("transcribe.language", "ko"))
     vad = bool(cfg.get("transcribe.batch.vad_filter", True))
 
-    model = spec.load()
+    from .engine import pick_device
+
+    device, _compute = pick_device(spec.device)
+    perf = Profile(layout.state / PROFILE_FILE)
+
     results: list[Result] = []
     items = list(queue.items)
     if limit:
         items = items[:limit]
+
+    # 시작하기 전에 전체가 얼마나 걸릴지 알려 줍니다. 저사양 노트북에서
+    # 3시간짜리를 medium 으로 돌리면 몇 시간이 걸리는데, 그걸 모르고
+    # 시작하면 배터리로 나갔다가 중간에 꺼집니다.
+    total_audio = _queue_audio_seconds(items)
+    if total_audio > 0:
+        log.info(
+            "전사 대기 %d건, 오디오 %s — %s",
+            len(items), human_duration(total_audio),
+            describe_estimate(perf, total_audio, spec.model, device),
+        )
+
+    model = spec.load()
 
     for item in items:
         audio = Path(item["audio"])
@@ -241,6 +294,7 @@ def run_queue(cfg, layout: Layout, *, limit: int = 0,
                     # 파일마다 새로 만듭니다. 하나를 돌려쓰면 앞 파일의
                     # 마지막 문장이 다음 파일의 첫 문장과 '반복' 으로 묶입니다.
                     cleaner=cleaner_from_config(cfg),
+                    perf=perf, device=device,
                 )
             )
             queue.remove(item["audio"])

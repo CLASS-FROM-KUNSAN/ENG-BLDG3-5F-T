@@ -453,7 +453,14 @@ def cmd_transcribe_queue(args) -> int:
     cfg, layout = _load(args)
     queue = Queue(layout.state / "transcribe_queue.json")
     if args.show:
-        print(queue.describe())
+        from .transcribe.engine import pick_device
+        from .transcribe.perf import Profile
+
+        device, _ = pick_device(str(cfg.get("transcribe.batch.device", "auto")))
+        profile = Profile(layout.state / "perf_profile.json")
+        print(queue.describe(profile,
+                             model=str(cfg.get("transcribe.batch.model", "small")),
+                             device=device))
         return 0
     results = run_queue(cfg, layout, limit=args.limit, language=args.language)
     if not results:
