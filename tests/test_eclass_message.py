@@ -451,3 +451,33 @@ def test_eval_json_rejects_a_non_string_result(tmp_path):
 
     with pytest.raises(C.PageReadError, match="문자열"):
         C._eval_json(P(), "() => 1")
+
+
+# --- 이미 받은 첨부가 글을 영원히 미완료로 만들지 않아야 합니다 --------
+# 내용이 같은 첨부는 두 번째부터 saved 에서 빠집니다(해시 중복 제거).
+# 그걸 '못 받았다' 로 치면, 미완료로 남아 재시도되는 글이 매번 같은
+# 판정을 받아 영원히 완료되지 않습니다. 같은 파일이 강의목록에도
+# 걸려 있으면 첫 실행에서도 납니다.
+def test_an_already_downloaded_attachment_completes_the_post(tmp_path):
+    c = _c(tmp_path)
+    md = tmp_path / "a.md"
+    md.write_text("x", encoding="utf-8")
+    att = Attachments(saved=[], failed=[], already=1, candidates=1)
+    c._finish_post("KEY-ALREADY", md, att, expected_file=True,
+                   what="공지", extra={})
+    assert c.store.is_downloaded("KEY-ALREADY"), (
+        "이미 받아 둔 첨부인데 글을 미완료로 남겼습니다 — "
+        "다음 실행에서도 같은 판정이라 영원히 안 끝납니다"
+    )
+    assert not c.stats.errors, c.stats.errors
+
+
+def test_nothing_at_all_still_keeps_the_post_pending(tmp_path):
+    """이미 받은 것도 없으면 그때는 진짜 미완료입니다."""
+    c = _c(tmp_path)
+    md = tmp_path / "b.md"
+    md.write_text("x", encoding="utf-8")
+    c._finish_post("KEY-NONE", md, Attachments(), expected_file=True,
+                   what="공지", extra={})
+    assert not c.store.is_downloaded("KEY-NONE")
+    assert c.stats.errors

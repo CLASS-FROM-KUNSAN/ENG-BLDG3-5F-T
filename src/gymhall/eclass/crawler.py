@@ -250,10 +250,26 @@ class Attachments:
 
     saved: list[Path] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
+    # 내용이 같아 건너뛴 것. saved 에 안 들어가므로, 이게 없으면
+    # 두 번째 실행에서 '하나도 못 받았다' 와 구별이 안 됩니다.
+    already: int = 0
+    # 화면에 있던 누를 만한 것의 수. 0 이면 '첨부가 애초에 없는 화면'
+    # 이고, 0 이 아닌데 아무것도 못 받았으면 그때가 진짜 문제입니다.
+    candidates: int = 0
 
     @property
     def ok(self) -> bool:
         return not self.failed
+
+    @property
+    def nothing_to_get(self) -> bool:
+        """이 화면에는 받을 것이 애초에 없었습니다."""
+        return self.candidates == 0
+
+    @property
+    def got_nothing_new(self) -> bool:
+        """후보는 있었는데 새로 받은 것도, 이미 받은 것도 없습니다."""
+        return bool(self.candidates) and not self.saved and not self.already
 
     def __len__(self) -> int:         # 기존 len(files) 호출부 호환
         return len(self.saved)
@@ -733,28 +749,39 @@ class Crawler:
             self.save_page_text(course, "lecture_list")
 
         files = self._download_attachments(out_dir)
-        log.info("%s / 강의목록: 주차 %d개, 교안 %d개",
-                 course.name, len(weeks), len(files))
+        log.info("%s / 강의목록: 주차 %d개, 교안 %d개%s",
+                 course.name, len(weeks), len(files),
+                 f" (이미 받은 것 {files.already}개)" if files.already else "")
         if files.failed:
             msg = (f"{course.name}/강의목록: 교안 {len(files.failed)}개를 "
                    f"받지 못했습니다 ({', '.join(files.failed[:3])})")
             log.error("%s", msg)
             self.stats.errors.append(msg)
-        if weeks and not files:
-            # 받을 게 정말 없을 수도 있지만, 선택자가 어긋나도 똑같이
-            # 조용합니다. 둘을 구분할 수 없으니 기록은 남깁니다.
+
+        # '교안 0개' 는 세 가지가 섞여 있습니다. 2026-11-13 수집에서
+        # 7과목이 이 경고를 냈는데, 확인해 보니 **전부 정상**이었습니다
+        # (교안을 쓰지 않는 과목). 정상이 매번 경고로 뜨면 진짜 고장이
+        # 그 사이에 묻힙니다.
+        #
+        # 게다가 이미 받은 파일은 내용 해시가 같아 saved 에서 빠집니다.
+        # 그래서 **두 번째 sync 부터는 멀쩡히 받아 둔 과목도** "교안
+        # 0개" 로 찍혔습니다. 제가 넣은 경고가 그대로 거짓이었습니다.
+        if not weeks or files.saved or files.failed:
+            pass
+        elif files.nothing_to_get:
+            # 화면에 누를 것이 아예 없습니다. 교안을 안 쓰는 과목입니다.
+            log.info("%s / 강의목록: 교안이 올라온 주차가 없습니다(정상).",
+                     course.name)
+        elif files.already:
+            log.info("%s / 강의목록: 교안 %d개는 이미 받아 뒀습니다.",
+                     course.name, files.already)
+        else:
+            # 후보는 있는데 하나도 못 받았습니다. 이때가 진짜 문제입니다.
             log.warning(
-                "%s / 강의목록: 주차는 %d개인데 받은 교안이 0개입니다. "
-                "교수가 안 올렸거나, 첨부 링크 모양이 바뀐 것입니다.",
-                course.name, len(weeks),
+                "%s / 강의목록: 누를 것이 %d개 있는데 받은 교안이 0개입니다. "
+                "첨부 링크 모양이 바뀌었을 수 있습니다.",
+                course.name, files.candidates,
             )
-            # 그 둘을 다음 실행에서 갈라 주는 유일한 수단입니다.
-            #
-            # 진단 덤프가 여태 _finish_post(게시판 경로)에만 걸려
-            # 있었습니다. 강의목록은 상세 진입이 없는 단일 페이지라
-            # 그 경로를 안 탑니다. 그래서 2026-11-13 수집에서 6과목이
-            # "교안 0개" 로 끝났는데 로그에 단서가 한 줄도 없었습니다.
-            #
             # 읽는 법:
             #   fileDown=0, onclick=0   페이지가 안 열렸거나 다른 화면
             #   fileDown=0, onclick>0   선택자 문제 — onclick 샘플에서
@@ -1143,7 +1170,12 @@ class Crawler:
         그 글을 건너뛰어 실패한 첨부를 영영 다시 받지 않습니다.
         """
         missing = list(att.failed)
-        if expected_file and not att.saved and not missing:
+        # att.already 를 빼면 안 됩니다. 내용이 같은 첨부는 두 번째부터
+        # saved 에서 빠지므로, 미완료로 남아 재시도되는 글은 매번
+        # "링크를 찾지 못했습니다" 가 되어 **영원히** 완료되지 않습니다.
+        # (같은 파일이 강의목록에도 걸려 있으면 첫 실행에도 납니다.)
+        got_something = att.saved or att.already
+        if expected_file and not got_something and not missing:
             # 원인을 두 갈래로 갈라 적습니다. 섞어 놓으면 다음 사람이
             # 선택자만 들여다보다 하루를 씁니다.
             missing.append(
@@ -1414,6 +1446,7 @@ class Crawler:
             return out
 
         count = links.count()
+        out.candidates = count
         for i in range(count):
             item = links.nth(i)
             try:
@@ -1461,6 +1494,7 @@ class Crawler:
                 if self.store.is_downloaded(f"file:{digest}"):
                     path.unlink(missing_ok=True)
                     self.stats.skipped += 1
+                    out.already += 1
                     continue
                 self.store.mark_downloaded(f"file:{digest}", path=str(path), digest=digest)
                 saved.append(path)
