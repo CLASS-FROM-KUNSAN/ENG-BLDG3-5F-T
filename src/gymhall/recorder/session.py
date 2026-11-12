@@ -67,12 +67,16 @@ class RecordingSession:
         layout: Layout,
         label: str,
         *,
+        course=None,
         realtime_queue: queue.Queue | None = None,
         on_segment_done: Callable[[Segment], None] | None = None,
     ) -> None:
         self.cfg = cfg
         self.layout = layout
         self.label = safe_name(label)
+        # 이 녹화가 어느 과목인지. None 이면 과목 폴더 없이 예전 경로 그대로고,
+        # 업로드도 하지 않습니다(어느 레포로 갈지 모르므로).
+        self.course = course
         self.realtime_queue = realtime_queue
         self.on_segment_done = on_segment_done
         self._stop_event = threading.Event()
@@ -101,7 +105,7 @@ class RecordingSession:
     def run(self, *, duration_minutes: float | None = None) -> SessionResult:
         cfg = self.cfg
         started = datetime.now()
-        out_dir = self.layout.session_dir(started, self.label)
+        out_dir = self.layout.session_dir(started, self.course, self.label)
         out_dir.mkdir(parents=True, exist_ok=True)
 
         result = SessionResult(label=self.label, started_at=started, directory=out_dir)

@@ -164,3 +164,61 @@ def test_a_timetable_row_with_a_broken_time_is_skipped_not_fatal():
     cs = C.load(c)
     when = datetime(2026, 11, 9, 9, 30)
     assert C.resolve(c, cs, when=when) is None
+
+
+# --- 업로더 라우팅 네 경우 --------------------------------------------
+# 마지막이 중요합니다. 매핑을 적어 둔 PC 에서 과목을 모르는 녹화를
+# 기본 레포로 흘리면 **A과목 녹화가 B과목 레포로 갑니다.**
+
+
+class _Cfg(Cfg):
+    """_uploader 가 쓰는 키까지 갖춘 설정."""
+
+    def __init__(self, repos):
+        super().__init__({
+            "github": {"owner": "org", "repo": "fallback-repo",
+                       "retry_count": 1, "retry_backoff": 0.1,
+                       "split_size_mb": 1900, "draft": False, "prerelease": False},
+            "eclass": {"course_repos": repos},
+        })
+
+
+REPOS = [{"id": "1", "name": "자료구조", "repo": "ds-2026-2"}]
+
+
+def _uploader(cfg, course=None):
+    from gymhall.cli import _uploader as f
+
+    return f(cfg, dry_run=True, course=course)
+
+
+def test_no_mapping_and_no_course_uses_the_default_repo():
+    """예전 동작. 1과목 PC 와 기존 설정이 안 깨져야 합니다."""
+    up = _uploader(_Cfg([]), None)
+    assert up is not None and up.repo == "fallback-repo"
+
+
+def test_no_mapping_but_a_course_still_uses_the_default_repo():
+    up = _uploader(_Cfg([]), C.Course("1", "자료구조", "org", ""))
+    assert up is not None and up.repo == "fallback-repo"
+
+
+def test_a_mapped_course_goes_to_its_own_repo():
+    cfg = _Cfg(REPOS)
+    course = C.load(cfg)[0]
+    up = _uploader(cfg, course)
+    assert up is not None and up.repo == "ds-2026-2"
+
+
+def test_an_unknown_course_is_skipped_once_mapping_exists():
+    """여기서 기본 레포로 흘리면 A과목 녹화가 B과목 레포로 갑니다."""
+    assert _uploader(_Cfg(REPOS), None) is None
+
+
+def test_the_skip_is_logged_so_it_is_not_silent(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        _uploader(_Cfg(REPOS), None)
+    assert "--course" in caplog.text
+    assert "로컬에 그대로" in caplog.text

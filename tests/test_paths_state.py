@@ -104,7 +104,7 @@ def test_layout_sanitises_components(tmp_path):
 
 def test_session_dir_is_dated(tmp_path):
     layout = Layout(tmp_path)
-    path = layout.session_dir(datetime(2026, 11, 11, 9, 0), "자료구조")
+    path = layout.session_dir(datetime(2026, 11, 11, 9, 0), None, "자료구조")
     assert "2026-11-11" in str(path)
     assert path.name == "자료구조"
 
@@ -271,3 +271,47 @@ def test_forget_is_safe_on_a_missing_key(tmp_path):
     s = Store.open(tmp_path / "s.json")
     s.forget("meta", "없는키")
     s.save()
+
+
+# --- 세션 경로에 과목 칸 ------------------------------------------------
+class _Course:
+    def __init__(self, name):
+        self.name = name
+
+
+def test_a_session_without_a_course_keeps_the_old_path(tmp_path):
+    """과목을 모르면 '_미지정' 같은 폴더를 만들지 않습니다.
+
+    만들면 이미 있던 녹화 폴더와 경로가 어긋나고, 옛 세션을 다시
+    올리거나 찾을 때 길이 끊깁니다.
+    """
+    from gymhall.paths import Layout
+
+    layout = Layout(tmp_path)
+    when = datetime(2026, 11, 11, 9, 0)
+    assert layout.session_dir(when, None, "수업_0900") == (
+        tmp_path / "recordings" / "2026-11-11" / "수업_0900"
+    )
+    assert layout.transcript_dir(when, None, "수업_0900") == (
+        tmp_path / "transcripts" / "2026-11-11" / "수업_0900"
+    )
+
+
+def test_a_session_with_a_course_gets_one_more_folder(tmp_path):
+    from gymhall.paths import Layout
+
+    layout = Layout(tmp_path)
+    when = datetime(2026, 11, 11, 9, 0)
+    assert layout.session_dir(when, _Course("자료구조"), "수업_0900") == (
+        tmp_path / "recordings" / "2026-11-11" / "자료구조" / "수업_0900"
+    )
+
+
+def test_a_course_with_an_empty_name_is_treated_as_unknown(tmp_path):
+    from gymhall.paths import Layout
+
+    layout = Layout(tmp_path)
+    when = datetime(2026, 11, 11, 9, 0)
+    assert layout.session_dir(when, _Course(""), "s") == (
+        tmp_path / "recordings" / "2026-11-11" / "s"
+    )

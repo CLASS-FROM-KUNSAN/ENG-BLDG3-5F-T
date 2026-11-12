@@ -51,13 +51,30 @@ def _store(layout: Layout, name: str) -> Store:
     return Store.open(layout.state / f"{name}.json")
 
 
-def _uploader(cfg, *, dry_run: bool = False, course=None):
-    """과목을 주면 그 과목의 레포로, 안 주면 github.owner/repo 로.
+def _uploader(cfg, *, dry_run: bool = False, course=None, what: str = ""):
+    """어디로 올릴지 정합니다. **모르면 None 입니다.**
 
-    과목 = 레포지터리입니다. 라우팅 판단은 courses.resolve 한 곳에서만
-    하고, 여기서는 받은 과목을 그대로 씁니다.
+    네 경우가 있습니다.
+
+        course_repos 비었음 + 과목 모름  -> github.repo   (기존 동작)
+        course_repos 비었음 + 과목 있음  -> github.repo   (1과목 PC)
+        course_repos 있음  + 과목 맞음   -> 그 과목의 레포
+        course_repos 있음  + 과목 모름   -> None (올리지 않음)
+
+    마지막이 중요합니다. 여기서 기본 레포로 흘리면 **A과목 녹화가
+    B과목 레포로 갑니다.** 안 올라가는 쪽이 낫습니다.
     """
+    from . import courses as courses_mod
     from .release import ReleaseUploader
+
+    if course is None and courses_mod.load(cfg):
+        log.warning(
+            "업로드 건너뜀%s: 이 자료의 과목을 알 수 없습니다. "
+            "--course 로 지정하거나 [[eclass.course_repos]] 에 매핑을 "
+            "추가하세요. 파일은 로컬에 그대로 있습니다.",
+            f"({what})" if what else "",
+        )
+        return None
 
     return ReleaseUploader(
         owner=str(getattr(course, "owner", "") or cfg.get("github.owner", "")),
@@ -393,11 +410,12 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
 # record
 # ---------------------------------------------------------------------------
 def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
+                          course=None,
                           upload: bool, dry_run: bool, language: str | None = None):
     from .release import tag_for
     from .transcribe.batch import enqueue_segment
 
-    uploader = _uploader(cfg, dry_run=dry_run) if upload else None
+    uploader = _uploader(cfg, dry_run=dry_run, course=course, what=label) if upload else None
     tag = tag_for(
         str(cfg.get("github.tag_strategy", "monthly")),
         str(cfg.get("github.tag_prefix_recording", "recordings")),
@@ -406,7 +424,8 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
 
     def on_done(segment) -> None:
         try:
-            enqueue_segment(cfg, layout, segment, label, language=language)
+            enqueue_segment(cfg, layout, segment, label, language=language,
+                            course=course)
         except Exception:
             log.exception("전사 대기열 등록 실패")
 
@@ -437,7 +456,7 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
 
 def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
                    upload: bool, dry_run: bool, stop_when=None,
-                   language: str | None = None):
+                   language: str | None = None, course=None):
     from .recorder import lock as rec_lock
 
     # 한 PC 에서 녹화는 한 번에 하나만. RecordSchedule 과 RecordWatch 는
@@ -456,6 +475,7 @@ def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
         return _run_recording_locked(
             cfg, layout, label, minutes=minutes, upload=upload,
             dry_run=dry_run, stop_when=stop_when, language=language,
+            course=course,
         )
     finally:
         guard.__exit__(None, None, None)
@@ -463,21 +483,22 @@ def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
 
 def _run_recording_locked(cfg, layout: Layout, label: str, *, minutes: float | None,
                           upload: bool, dry_run: bool, stop_when=None,
-                          language: str | None = None):
+                          language: str | None = None, course=None):
     from .recorder.session import RecordingSession
     from .transcribe import realtime
 
     store = _store(layout, "recordings")
-    out_dir = layout.session_dir(datetime.now(), label)
+    out_dir = layout.session_dir(datetime.now(), course, label)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     rt = realtime.maybe_start(cfg, out_dir, label)
     session = RecordingSession(
         cfg, layout, label,
+        course=course,
         realtime_queue=rt.audio_queue if rt else None,
         on_segment_done=_post_segment_factory(cfg, layout, store, label,
                                               upload=upload, dry_run=dry_run,
-                                              language=language),
+                                              language=language, course=course),
     )
 
     if stop_when is not None:
@@ -506,12 +527,23 @@ def _run_recording_locked(cfg, layout: Layout, label: str, *, minutes: float | N
     return result
 
 
+def _resolve_course(cfg, *, course_id: str = "", label: str = "", when=None):
+    """이 녹화가 어느 과목인지. 판단은 courses.resolve 한 곳에서만 합니다."""
+    from . import courses as courses_mod
+
+    return courses_mod.resolve(
+        cfg, courses_mod.load(cfg), course_id=course_id, label=label, when=when
+    )
+
+
 def cmd_record_start(args) -> int:
     cfg, layout = _load(args)
     label = args.label or f"수동_{datetime.now():%H%M}"
+    course = _resolve_course(cfg, course_id=getattr(args, "course", "") or "",
+                             label=label, when=datetime.now())
     _run_recording(cfg, layout, label, minutes=args.minutes,
                    upload=not args.no_upload, dry_run=args.dry_run,
-                   language=args.language)
+                   language=args.language, course=course)
     return 0
 
 
@@ -541,9 +573,14 @@ def cmd_record_schedule(args) -> int:
         if not sched.wait_until(nxt.start):
             return 0
         minutes = max(1.0, (nxt.end - datetime.now()).total_seconds() / 60)
+        course = _resolve_course(
+            cfg,
+            course_id=str(getattr(nxt.slot, "course_id", "") or ""),
+            label=nxt.slot.name, when=nxt.start,
+        )
         _run_recording(cfg, layout, nxt.slot.name, minutes=minutes,
                        upload=not args.no_upload, dry_run=args.dry_run,
-                       language=nxt.slot.language)
+                       language=nxt.slot.language, course=course)
         if args.once:
             return 0
 
@@ -561,11 +598,16 @@ def cmd_record_watch(args) -> int:
 
     def on_start(hit: str) -> None:
         label = args.label or f"감지_{Path(hit).stem}_{datetime.now():%H%M}"
+        # 감지 트리거는 과목을 모릅니다. 시간표로 되짚고, 그래도 모르면
+        # None — 로컬에만 저장하고 올리지 않습니다. '첫 과목으로' 같은
+        # 폴백은 두지 않습니다(운영체제 녹화가 자료구조 레포로 갑니다).
+        course = _resolve_course(cfg, course_id=getattr(args, "course", "") or "",
+                                 label=label, when=datetime.now())
         _run_recording(
             cfg, layout, label, minutes=None,
             upload=not args.no_upload, dry_run=args.dry_run,
             stop_when=watcher.wait_until_gone,
-            language=args.language,
+            language=args.language, course=course,
         )
         if args.once:
             raise KeyboardInterrupt
@@ -613,8 +655,12 @@ def cmd_transcribe_queue(args) -> int:
             fixed=str(cfg.get("github.fixed_tag", "archive")),
         )
         files = [p for r in results for p in r.outputs]
-        upload_many(_uploader(cfg, dry_run=args.dry_run), files, tag,
-                    prefix=f"{cfg.machine_label}_", store=store)
+        uploader = _uploader(cfg, dry_run=args.dry_run, what="전사 결과")
+        if uploader is None:
+            log.info("전사 결과 %d개는 로컬에만 둡니다.", len(files))
+        else:
+            upload_many(uploader, files, tag,
+                        prefix=f"{cfg.machine_label}_", store=store)
     return 0
 
 
@@ -662,7 +708,18 @@ def cmd_upload(args) -> int:
     # 폴더를 올릴 때 root 를 넘기지 않으면 에셋 이름이 '파일 이름' 만으로
     # 정해져서, 하위 폴더가 다른 동명 파일(courseA/자료.md, courseB/자료.md)이
     # 같은 이름이 됩니다. 실행 내 중복 검사에 걸려 두 번째가 통째로 빠집니다.
-    results = upload_many(_uploader(cfg, dry_run=args.dry_run), files, tag,
+    from . import courses as courses_mod
+
+    course_list = courses_mod.load(cfg)
+    course = courses_mod.resolve(
+        cfg, course_list, course_id=getattr(args, "course", "") or ""
+    )
+    uploader = _uploader(cfg, dry_run=args.dry_run, course=course, what=str(target))
+    if uploader is None:
+        print("과목을 알 수 없어 올리지 않았습니다. --course 로 지정하세요.")
+        print(f"고를 수 있는 과목: {', '.join(c.name for c in course_list) or '(없음)'}")
+        return 1
+    results = upload_many(uploader, files, tag,
                           prefix=f"{cfg.machine_label}_", store=store,
                           root=target if is_dir else target.parent)
     print(f"완료 {len(results)}건")
@@ -731,6 +788,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = rec.add_parser("start", help="지금 바로 녹화")
     p.add_argument("-l", "--label", help="세션 이름 (폴더명에 쓰임)")
+    p.add_argument("--course", default="",
+                   help="과목(코드 또는 이름). [[eclass.course_repos]] 를 쓸 때 필요합니다.")
     p.add_argument("-m", "--minutes", type=float, help="녹화 길이(분). 생략 시 config 의 최대값")
     p.add_argument("--language", help="이 녹화의 전사 언어 (ko / en / auto / ko+en)")
     p.add_argument("--no-upload", action="store_true")
@@ -746,6 +805,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = rec.add_parser("watch", help="프로그램이 뜨면 자동 녹화")
     p.add_argument("-l", "--label")
+    p.add_argument("--course", default="",
+                   help="과목(코드 또는 이름). [[eclass.course_repos]] 를 쓸 때 필요합니다.")
     p.add_argument("--language", help="전사 언어 (ko / en / auto / ko+en)")
     p.add_argument("--once", action="store_true")
     p.add_argument("--no-upload", action="store_true")
@@ -769,6 +830,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("upload", help="임의 파일/폴더를 릴리스에 올림")
     p.add_argument("path")
     p.add_argument("--tag", help="릴리스 태그 (기본: 설정의 전략대로)")
+    p.add_argument("--course", default="",
+                   help="과목(코드 또는 이름). [[eclass.course_repos]] 를 쓸 때 필요합니다.")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_upload)
 
