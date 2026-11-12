@@ -20,6 +20,8 @@ from datetime import datetime
 from pathlib import Path
 
 from ..logging_setup import get as get_logger
+from .cleanup import Cleaner
+from .cleanup import from_config as _cleaner_from_config
 from .engine import EngineSpec
 
 log = get_logger("transcribe.realtime")
@@ -47,6 +49,7 @@ class RealtimeTranscriber(threading.Thread):
         language: str = "ko",
         print_to_console: bool = True,
         max_queue: int = 64,
+        cleaner: Cleaner | None = None,
     ) -> None:
         super().__init__(name="realtime-stt", daemon=True)
         self.out_path = Path(out_path)
@@ -61,6 +64,8 @@ class RealtimeTranscriber(threading.Thread):
         # 이름을 `_stop` 으로 바꾸면 안 됩니다. threading.Thread 가 3.12 까지
         # 내부 메서드 `_stop()` 을 가지고 있어 join() 이 TypeError 로 터집니다.
         self._stop_event = threading.Event()
+        # 실시간은 짧은 조각을 자주 돌려서 환각이 더 잘 생깁니다.
+        self.cleaner = cleaner or Cleaner()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -113,7 +118,14 @@ class RealtimeTranscriber(threading.Thread):
                 vad_filter=True,
                 condition_on_previous_text=False,
             )
-            text = " ".join(s.text.strip() for s in segments).strip()
+            kept = []
+            for s in segments:
+                drop, _reason = self.cleaner.should_drop(
+                    s.text, getattr(s, "no_speech_prob", None)
+                )
+                if not drop:
+                    kept.append(s.text.strip())
+            text = " ".join(kept).strip()
         except Exception as exc:
             log.debug("실시간 전사 조각 실패: %s", exc)
             return ""
@@ -209,6 +221,7 @@ class RealtimeTranscriber(threading.Thread):
                 handle.close()
             except (OSError, ValueError):
                 pass
+            self.cleaner.report("실시간")
             log.info("실시간 전사 종료: %d줄 -> %s", len(self.lines), self.out_path.name)
 
 
@@ -233,6 +246,7 @@ def maybe_start(cfg, out_dir: Path, label: str) -> RealtimeTranscriber | None:
         overlap_sec=float(cfg.get("transcribe.realtime.overlap_sec", 1.5)),
         language=str(cfg.get("transcribe.language", "ko")),
         print_to_console=bool(cfg.get("transcribe.realtime.print_to_console", True)),
+        cleaner=_cleaner_from_config(cfg),
     )
     log.warning(
         "실시간 전사를 시작합니다(모델=%s). 녹화 품질이 떨어지면 "

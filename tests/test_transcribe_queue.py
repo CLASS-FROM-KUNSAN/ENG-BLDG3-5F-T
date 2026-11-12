@@ -151,3 +151,89 @@ def test_enqueue_noop_when_track_absent(tmp_path):
     seg = FakeSegment({"mic": tmp_path / "m.wav"})
     enqueue_segment(FakeConfig(), layout, seg, "x")
     assert len(Queue(layout.state / QUEUE_FILE)) == 0
+
+
+# ---------------------------------------------------------------------------
+# 환각 필터가 실제로 전사 경로에 연결돼 있는지
+# ---------------------------------------------------------------------------
+class _Seg:
+    def __init__(self, start, end, text, no_speech_prob=0.1):
+        self.start = start
+        self.end = end
+        self.text = text
+        self.no_speech_prob = no_speech_prob
+        self.words = None
+
+
+class _Info:
+    language = "ko"
+    duration = 60.0
+
+
+class _Model:
+    def __init__(self, segments):
+        self.segments = segments
+
+    def transcribe(self, path, **kw):
+        return iter(self.segments), _Info()
+
+
+def test_transcribe_file_drops_hallucinations(tmp_path):
+    """파일로 떨어지는 결과에 상투어가 남으면 안 됩니다."""
+    from gymhall.transcribe.batch import transcribe_file
+    from gymhall.transcribe.cleanup import Cleaner
+    from gymhall.transcribe.engine import EngineSpec
+
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"\0" * 100)
+
+    model = _Model([
+        _Seg(0, 3, "자 오늘은 자료구조입니다"),
+        _Seg(3, 6, "시청해주셔서 감사합니다"),        # 상투어
+        _Seg(6, 9, "어", 0.97),                        # 무음
+        _Seg(9, 12, "트리의 높이는 log n 입니다"),
+    ])
+
+    result = transcribe_file(
+        audio, tmp_path / "out", spec=EngineSpec(), model=model,
+        output_formats=("txt", "json"), cleaner=Cleaner(),
+    )
+    text = (tmp_path / "out.txt").read_text(encoding="utf-8")
+    assert "자료구조" in text
+    assert "log n" in text
+    assert "시청해주셔서" not in text
+    assert len(result.outputs) == 2
+
+
+def test_cleanup_counts_land_in_json_meta(tmp_path):
+    import json
+
+    from gymhall.transcribe.batch import transcribe_file
+    from gymhall.transcribe.cleanup import Cleaner
+    from gymhall.transcribe.engine import EngineSpec
+
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"\0" * 100)
+    model = _Model([
+        _Seg(0, 3, "정상 문장"),
+        _Seg(3, 6, "구독과 좋아요"),
+    ])
+    transcribe_file(audio, tmp_path / "out", spec=EngineSpec(), model=model,
+                    output_formats=("json",), cleaner=Cleaner())
+    meta = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["meta"]
+    assert meta["cleanup"]["kept"] == 1
+    assert meta["cleanup"]["dropped_phrase"] == 1
+
+
+def test_disabled_cleaner_keeps_hallucinations(tmp_path):
+    """끄면 그대로 남아야 합니다 — 사용자가 끌 수 있다는 것을 보장."""
+    from gymhall.transcribe.batch import transcribe_file
+    from gymhall.transcribe.cleanup import Cleaner
+    from gymhall.transcribe.engine import EngineSpec
+
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"\0" * 100)
+    model = _Model([_Seg(0, 3, "시청해주셔서 감사합니다")])
+    transcribe_file(audio, tmp_path / "out", spec=EngineSpec(), model=model,
+                    output_formats=("txt",), cleaner=Cleaner(enabled=False))
+    assert "시청해주셔서" in (tmp_path / "out.txt").read_text(encoding="utf-8")
