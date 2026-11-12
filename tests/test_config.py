@@ -145,3 +145,105 @@ def test_dotted_get_and_missing_key(config_file):
     assert cfg.get("nope.nope", "fallback") == "fallback"
     with pytest.raises(cfgmod.ConfigError):
         cfg["nope.nope"]
+
+
+# ---------------------------------------------------------------------------
+# 문서와 코드가 같은 것을 말하는지
+#
+# "검사 없는 약속은 낡는다." config.example.toml 은 사용자가 읽는 문서이고
+# config.py 의 DEFAULTS 는 코드가 쓰는 값입니다. 둘이 어긋나면 사용자는
+# 있지도 않은 키를 적거나, 실제로 동작하는 키를 모르게 됩니다.
+# ---------------------------------------------------------------------------
+def _flatten(data, prefix=""):
+    out = set()
+    for key, value in data.items():
+        path = f"{prefix}{key}"
+        if isinstance(value, dict):
+            out |= _flatten(value, f"{path}.")
+        else:
+            out.add(path)
+    return out
+
+
+def _example_keys(text: str) -> set[str]:
+    cfg = cfgmod.Config(data=_parse_toml(text))
+    return _flatten(cfg.data)
+
+
+def _parse_toml(text: str) -> dict:
+    import sys
+
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:
+        import tomli as tomllib
+    return tomllib.loads(text)
+
+
+def test_example_file_has_no_unknown_keys(example_config_text):
+    """예시 파일에만 있고 코드가 모르는 키 = 사용자가 적어도 무시되는 설정."""
+    example = _example_keys(example_config_text)
+    known = _flatten(cfgmod.DEFAULTS)
+    # 시간표는 배열이라 평탄화 대상이 아닙니다.
+    unknown = {k for k in example - known if not k.startswith("recording.timetable")}
+    assert not unknown, f"예시 파일에만 있는 키(코드가 무시함): {sorted(unknown)}"
+
+
+def test_every_default_is_documented(example_config_text):
+    """코드에만 있고 예시 파일에 없는 키 = 사용자가 존재를 모르는 설정."""
+    example = _example_keys(example_config_text)
+    known = _flatten(cfgmod.DEFAULTS)
+    # menu_ids 는 비워 두는 것이 정상이라 예시에 값이 없습니다.
+    undocumented = {
+        k for k in known - example
+        if not k.startswith("eclass.menu_ids")
+        # timetable 은 [[배열]] 이라 비어 있으면 키 자체가 없습니다.
+        # 예시 파일은 주석으로 설명합니다.
+        and k != "recording.timetable"
+    }
+    assert not undocumented, (
+        "예시 파일에 설명이 없는 설정 키: " + ", ".join(sorted(undocumented))
+    )
+
+
+def test_example_values_match_code_defaults(example_config_text):
+    """같은 키인데 기본값이 다르면, 문서를 읽고 예상한 동작과 달라집니다."""
+    example = cfgmod.Config(data=_parse_toml(example_config_text))
+    defaults = cfgmod.Config(data=cfgmod.DEFAULTS)
+
+    mismatched = []
+    for key in sorted(_flatten(cfgmod.DEFAULTS)):
+        if key.startswith("eclass.menu_ids"):
+            continue
+        sentinel = object()
+        in_example = example.get(key, sentinel)
+        if in_example is sentinel:
+            continue
+        in_code = defaults.get(key)
+        # 예시 파일은 소유자/저장소처럼 사람이 채우는 칸을 미리 적어 둡니다.
+        if key in {"github.owner", "github.repo", "eclass.base_url", "eclass.login_url"}:
+            continue
+        if in_example != in_code:
+            mismatched.append(f"{key}: 예시={in_example!r} 코드={in_code!r}")
+
+    assert not mismatched, "문서와 코드의 기본값이 다릅니다:\n  " + "\n  ".join(mismatched)
+
+
+def test_workflow_substitution_targets_exist(example_config_text):
+    """회귀 방지: Actions 워크플로가 예시 파일의 문자열을 치환해
+    config.toml 을 만듭니다. str.replace 는 대상이 없어도 예외 없이
+    원본을 돌려주므로, 예시 파일이 바뀌면 **녹화·전사가 켜진 채로**
+    러너가 돌게 됩니다. 치환 대상이 사라졌는지 여기서 먼저 잡습니다.
+    """
+    required = [
+        'username = ""',
+        'data_dir = ""',
+        'machine_label = ""',
+        "[recording]\nenabled = true",
+        "[transcribe]\nenabled = true",
+    ]
+    missing = [t for t in required if t not in example_config_text]
+    assert not missing, (
+        "워크플로가 찾는 문자열이 예시 파일에 없습니다: "
+        f"{missing}\n.github/workflows/eclass-sync.yml 의 치환부도 같이 고치세요."
+    )
