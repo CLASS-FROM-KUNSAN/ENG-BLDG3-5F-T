@@ -72,6 +72,7 @@ class RecordingSession:
         *,
         course=None,
         stop_on_silence: bool = False,
+        video_not_before: float = 0.0,
         realtime_queue: queue.Queue | None = None,
         on_segment_done: Callable[[Segment], None] | None = None,
     ) -> None:
@@ -83,6 +84,12 @@ class RecordingSession:
         self.course = course
         # 무음으로 멈출지. 수동 녹화는 멈추지 않고 경고만 합니다.
         self.stop_on_silence = bool(stop_on_silence)
+        # 화면 캡처를 이 시각(epoch 초) 전에는 시작하지 않습니다.
+        # pre-roll 이 수업 시작 2분 전부터 녹화를 켜는데, 그 2분 동안
+        # 강의실 PC 앞에 앉은 사람의 화면이 그대로 찍혀 업로드됩니다.
+        # 소리는 그때부터 받고(수업이 일찍 시작해도 안 놓치려고),
+        # 화면만 정시에 시작합니다. mux 가 -itsoffset 으로 맞춥니다.
+        self.video_not_before = float(video_not_before or 0.0)
         self.silence_stop_sec = float(cfg.get("recording.audio.silence_stop_sec", 900))
         self.silence_abort_sec = float(cfg.get("recording.audio.silence_abort_sec", 3600))
         # 장치 무음으로 중단된 세션은 올리지 않습니다.
@@ -117,6 +124,26 @@ class RecordingSession:
                             "녹화를 멈춥니다. python -m gymhall devices 로 "
                             "장치를 확인하세요.")
         return None
+
+    def _wait_for_video_start(self) -> None:
+        """화면 캡처 시작 시각까지 기다립니다. 첫 세그먼트에서만 걸립니다.
+
+        기다리는 동안 소리는 이미 녹음되고 있습니다. 그래서 수업이
+        정시보다 일찍 시작해도 말은 놓치지 않습니다 — 놓치는 것은
+        그 시간의 화면뿐이고, 그건 놓치는 게 맞습니다.
+        """
+        if not self.video_not_before:
+            return
+        remain = self.video_not_before - time.time()
+        if remain <= 0:
+            return
+        log.info("화면 캡처는 %.0f초 뒤에 시작합니다(수업 전 화면은 찍지 않습니다). "
+                 "소리는 이미 녹음 중입니다.", remain)
+        deadline = self.video_not_before
+        while time.time() < deadline and not self._stop_event.is_set():
+            time.sleep(min(0.5, max(0.05, deadline - time.time())))
+        # 한 번 켠 뒤에는 다음 세그먼트에서 또 기다리면 안 됩니다.
+        self.video_not_before = 0.0
 
     # -- 종료 신호 ---------------------------------------------------
     def _install_signal_handlers(self) -> None:
@@ -209,6 +236,7 @@ class RecordingSession:
         video_rec = None
         video_path = None
         if video_on:
+            # 생성자는 ffmpeg 를 띄우지 않습니다. start() 가 띄웁니다.
             video_rec = VideoRecorder(
                 out_dir=work,
                 backend=str(cfg.get("recording.video.backend", "gdigrab")),
@@ -218,10 +246,10 @@ class RecordingSession:
                 preset=str(cfg.get("recording.video.preset", "veryfast")),
                 crf=int(cfg.get("recording.video.crf", 30)),
                 window_title=str(cfg.get("recording.video.window_title", "")),
+                monitor=int(cfg.get("recording.video.monitor", 0)),
                 draw_mouse=bool(cfg.get("recording.video.draw_mouse", True)),
                 container=container,
             )
-            video_path = video_rec.start(stem)
 
         audio_rec = None
         if audio_on:
@@ -241,6 +269,11 @@ class RecordingSession:
                 realtime_source=str(cfg.get("transcribe.source_track", "system")),
             )
             audio_rec.start(stem)
+
+        # 화면은 소리보다 늦게 켭니다(pre-roll 프라이버시).
+        if video_rec is not None:
+            self._wait_for_video_start()
+            video_path = video_rec.start(stem)
 
         # --- 대기 ---
         end_at = time.time() + minutes * 60

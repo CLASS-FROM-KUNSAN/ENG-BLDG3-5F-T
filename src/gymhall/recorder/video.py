@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ..logging_setup import get as get_logger
 from .ffmpeg_util import find_ffmpeg, popen, read_stderr_log
+from .monitors import enumerate_monitors, pick
 
 log = get_logger("recorder.video")
 
@@ -32,6 +33,10 @@ class VideoRecorder:
     preset: str = "veryfast"
     crf: int = 30
     window_title: str = ""
+    # 0 = 전체 바탕화면(지금까지의 동작). 1 부터는 그 화면만.
+    # window_title 이 있으면 이 값은 무시합니다 — 창 하나가 화면
+    # 하나보다 좁으니 더 좁은 쪽이 이깁니다.
+    monitor: int = 0
     draw_mouse: bool = True
     container: str = "mkv"
 
@@ -45,17 +50,48 @@ class VideoRecorder:
         if os.name != "nt":
             display = os.environ.get("DISPLAY", ":0.0")
             return ["-f", "x11grab", "-framerate", str(self.fps), "-i", display]
+        return self.win_input_args(enumerate_monitors())
+
+    def win_input_args(self, monitors: list) -> list[str]:
+        """Windows 입력 인자. 화면 목록을 **인자로 받습니다.**
+
+        직접 enumerate_monitors() 를 부르면 리눅스 CI 에서 이 함수가
+        한 줄도 안 돕니다 — _input_args 가 그 위에서 x11grab 으로
+        빠지기 때문입니다. 그러면 모니터 선택 전체가 "테스트는 초록,
+        코드는 한 번도 안 돌아봄" 이 됩니다(docs/TESTING.md 참고).
+        목록을 밖에서 받으면 어느 OS 에서나 시험할 수 있습니다.
+        """
+        # window_title 이 우선입니다. 창 하나는 화면 하나보다 좁고,
+        # 좁을수록 엉뚱한 것이 덜 찍힙니다.
+        if self.window_title:
+            if self.backend == "ddagrab":
+                log.warning("ddagrab 은 창 단위 캡처를 못 합니다. "
+                            "window_title 을 쓰려면 backend=gdigrab 으로 바꾸세요.")
+            else:
+                return ["-f", "gdigrab", "-framerate", str(self.fps),
+                        "-draw_mouse", "1" if self.draw_mouse else "0",
+                        "-i", f"title={self.window_title}"]
+
+        target = pick(monitors, self.monitor) if self.monitor else None
 
         if self.backend == "ddagrab":
             # ddagrab 는 필터 소스라 입력 지정 방식이 다릅니다.
-            return ["-f", "lavfi", "-i", f"ddagrab=framerate={self.fps}"]
+            # 화면 선택은 잘라내기가 아니라 output_idx(0부터)로 합니다.
+            src = f"ddagrab=framerate={self.fps}"
+            if target is not None:
+                src += f":output_idx={target.index - 1}"
+            return ["-f", "lavfi", "-i", src]
 
         args = ["-f", "gdigrab", "-framerate", str(self.fps),
                 "-draw_mouse", "1" if self.draw_mouse else "0"]
-        if self.window_title:
-            args += ["-i", f"title={self.window_title}"]
-        else:
-            args += ["-i", "desktop"]
+        if target is not None:
+            # gdigrab 은 가상 바탕화면 좌표계에서 잘라냅니다. 보조
+            # 모니터가 주 모니터 왼쪽에 있으면 x 가 음수입니다 —
+            # 정상이고, 그대로 넘겨야 맞습니다.
+            log.info("화면 %s 만 잡습니다.", target.describe())
+            args += ["-offset_x", str(target.x), "-offset_y", str(target.y),
+                     "-video_size", target.size]
+        args += ["-i", "desktop"]
         return args
 
     def _filter(self) -> list[str]:

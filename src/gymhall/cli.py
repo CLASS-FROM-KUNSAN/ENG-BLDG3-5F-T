@@ -18,7 +18,7 @@ import argparse
 import os
 import sys
 import traceback
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import config as config_module
@@ -175,8 +175,22 @@ def cmd_doctor(args) -> int:
 # ---------------------------------------------------------------------------
 def cmd_devices(args) -> int:
     from .recorder.devices import describe
+    from .recorder.monitors import enumerate_monitors
 
     print(describe())
+    print()
+    print("화면")
+    print("=" * 40)
+    mons = enumerate_monitors()
+    if not mons:
+        print("  (목록을 읽을 수 없습니다. Windows 가 아니거나 권한 문제입니다.)")
+        print("  monitor = 0 이면 전체 바탕화면을 잡습니다.")
+    else:
+        for m in mons:
+            print(f"  {m.describe()}")
+        print()
+        print("  [recording.video] monitor = <번호>  (0 = 전체 바탕화면)")
+        print("  window_title 을 적어 두면 monitor 는 무시됩니다.")
     return 0
 
 
@@ -500,7 +514,7 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
 def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
                    upload: bool, dry_run: bool, stop_when=None,
                    language: str | None = None, course=None,
-                   stop_on_silence: bool = False):
+                   stop_on_silence: bool = False, video_not_before: float = 0.0):
     from .recorder import lock as rec_lock
 
     # 한 PC 에서 녹화는 한 번에 하나만. RecordSchedule 과 RecordWatch 는
@@ -520,6 +534,7 @@ def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
             cfg, layout, label, minutes=minutes, upload=upload,
             dry_run=dry_run, stop_when=stop_when, language=language,
             course=course, stop_on_silence=stop_on_silence,
+            video_not_before=video_not_before,
         )
     finally:
         guard.__exit__(None, None, None)
@@ -528,7 +543,8 @@ def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
 def _run_recording_locked(cfg, layout: Layout, label: str, *, minutes: float | None,
                           upload: bool, dry_run: bool, stop_when=None,
                           language: str | None = None, course=None,
-                          stop_on_silence: bool = False):
+                          stop_on_silence: bool = False,
+                          video_not_before: float = 0.0):
     from .recorder.session import RecordingSession
     from .transcribe import realtime
 
@@ -541,6 +557,7 @@ def _run_recording_locked(cfg, layout: Layout, label: str, *, minutes: float | N
         cfg, layout, label,
         course=course,
         stop_on_silence=stop_on_silence,
+        video_not_before=video_not_before,
         realtime_queue=rt.audio_queue if rt else None,
         on_segment_done=_post_segment_factory(cfg, layout, store, label,
                                               upload=upload, dry_run=dry_run,
@@ -619,6 +636,11 @@ def cmd_record_schedule(args) -> int:
         if not sched.wait_until(nxt.start):
             return 0
         minutes = max(1.0, (nxt.end - datetime.now()).total_seconds() / 60)
+        # nxt.start 는 pre-roll 만큼 당겨진 시각입니다. 화면은 당기지
+        # 않고 진짜 수업 시작에 맞춰 켭니다 — 그 사이 강의실 PC 앞에
+        # 앉은 사람의 화면이 찍혀 올라가면 안 됩니다. 소리는 당겨서
+        # 받으므로 수업이 일찍 시작해도 말은 놓치지 않습니다.
+        video_at = (nxt.start + timedelta(minutes=pre)).timestamp() if pre > 0 else 0.0
         course = _resolve_course(
             cfg,
             course_id=str(getattr(nxt.slot, "course_id", "") or ""),
@@ -627,7 +649,7 @@ def cmd_record_schedule(args) -> int:
         _run_recording(cfg, layout, nxt.slot.name, minutes=minutes,
                        upload=not args.no_upload, dry_run=args.dry_run,
                        language=nxt.slot.language, course=course,
-                       stop_on_silence=True)
+                       stop_on_silence=True, video_not_before=video_at)
         if args.once:
             return 0
 
