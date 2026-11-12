@@ -250,6 +250,10 @@ class Attachments:
 
     saved: list[Path] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
+    # 내용이 같은 파일을 이미 받아 둬서 건너뛴 수. saved 에는 안 들어갑니다.
+    # 이걸 안 세면 두 번째 실행부터 "교안 0개" 와 "이미 다 받음" 이
+    # 똑같이 0 으로 보입니다.
+    known: int = 0
 
     @property
     def ok(self) -> bool:
@@ -733,16 +737,33 @@ class Crawler:
             self.save_page_text(course, "lecture_list")
 
         files = self._download_attachments(out_dir)
-        log.info("%s / 강의목록: 주차 %d개, 교안 %d개",
-                 course.name, len(weeks), len(files))
-        if weeks and not files:
-            # 받을 게 정말 없을 수도 있지만, 선택자가 어긋나도 똑같이
-            # 조용합니다. 둘을 구분할 수 없으니 기록은 남깁니다.
-            log.warning(
-                "%s / 강의목록: 주차는 %d개인데 받은 교안이 0개입니다. "
-                "교수가 안 올렸거나, 첨부 링크 모양이 바뀐 것입니다.",
-                course.name, len(weeks),
-            )
+        items = sum(len(w.get("rows") or []) for w in weeks)
+        log.info("%s / 강의목록: 주차 %d개, 항목 %d개, 교안 %d개(이미 받음 %d개)",
+                 course.name, len(weeks), items, len(files), files.known)
+        if weeks and not files and not files.known:
+            if items == 0:
+                # 주차 틀만 있고 강의 항목이 한 줄도 없습니다. 교수가
+                # 강의목록을 안 쓰는 과목입니다(2026-11-13 실행에서
+                # 9과목 중 7과목). 받을 게 없는 것이 정상이므로 경고하지
+                # 않습니다 — 정상이 진짜 고장 사이에 섞이면 둘 다 안
+                # 보게 됩니다.
+                log.info("%s / 강의목록: 주차 %d개에 강의 항목이 하나도 "
+                         "없습니다. 받을 교안이 없습니다(정상).",
+                         course.name, len(weeks))
+            else:
+                # 항목은 있는데 첨부를 하나도 못 찾았습니다. 교안 없는
+                # 강의일 수도 있지만 선택자가 어긋나도 똑같이 조용합니다.
+                # "교안" 이라는 글자로 가르지 않습니다 — 그 표시가 바뀌면
+                # 진짜 고장이 조용해집니다. 대신 화면에 무엇이 있었는지를
+                # 남겨 다음 실행 로그가 답을 주게 합니다.
+                log.warning(
+                    "%s / 강의목록: 강의 항목 %d개가 있는데 교안을 하나도 "
+                    "찾지 못했습니다. 교안 없는 강의이거나, 첨부 링크 "
+                    "모양이 바뀐 것입니다.",
+                    course.name, items,
+                )
+                log.warning("  이 화면에 있는 것들:\n      %s",
+                            self.describe_attachment_candidates())
         self.store.save()
 
     # -- 쪽지 --------------------------------------------------------
@@ -1441,6 +1462,7 @@ class Crawler:
                 if self.store.is_downloaded(f"file:{digest}"):
                     path.unlink(missing_ok=True)
                     self.stats.skipped += 1
+                    out.known += 1
                     continue
                 self.store.mark_downloaded(f"file:{digest}", path=str(path), digest=digest)
                 saved.append(path)
