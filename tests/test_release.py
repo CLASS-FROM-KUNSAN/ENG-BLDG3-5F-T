@@ -280,3 +280,75 @@ def test_upload_missing_file_raises(tmp_path):
 def test_owner_repo_required():
     with pytest.raises(ReleaseError):
         ReleaseUploader("", "repo")
+
+
+# ---------------------------------------------------------------------------
+# 업로드 필터
+#
+# eclass.upload.allow_extensions 와 max_file_mb 는 설정 파일에 적혀
+# 있고 CLI 가 읽어서 넘기기까지 했지만, 받는 쪽이 결과를 버려서
+# **아무 효과가 없었습니다.** 화이트리스트를 적어도 전부 올라갔고,
+# 용량 제한을 걸어도 2GB 파일이 그대로 올라갔습니다.
+# ---------------------------------------------------------------------------
+def _make(tmp_path, name: str, size: int = 10):
+    p = tmp_path / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"x" * size)
+    return p
+
+
+def test_upload_filter_passes_everything_by_default(tmp_path):
+    from gymhall.release import upload_filter
+
+    files = [_make(tmp_path, "a.pdf"), _make(tmp_path, "b.zip")]
+    keep, dropped = upload_filter(files)
+    assert keep == files
+    assert dropped == []
+
+
+def test_allow_extensions_actually_drops_other_files(tmp_path):
+    from gymhall.release import upload_filter
+
+    pdf = _make(tmp_path, "강의안.pdf")
+    exe = _make(tmp_path, "setup.exe")
+    keep, dropped = upload_filter([pdf, exe], allow_extensions=["pdf", ".PPTX"])
+    assert keep == [pdf]
+    assert [p for p, _ in dropped] == [exe]
+    assert "exe" in dropped[0][1]
+
+
+def test_max_file_mb_actually_drops_big_files(tmp_path):
+    from gymhall.release import upload_filter
+
+    small = _make(tmp_path, "small.pdf", 1024)
+    big = _make(tmp_path, "big.pdf", 3 * 1024 * 1024)
+    keep, dropped = upload_filter([small, big], max_file_mb=2)
+    assert keep == [small]
+    assert [p for p, _ in dropped] == [big]
+    assert "제한 2MB" in dropped[0][1]
+
+
+def test_dropped_files_stay_on_disk(tmp_path):
+    """뺀 파일은 지우지 않습니다. 로컬 보관이 목적입니다."""
+    from gymhall.release import upload_filter
+
+    big = _make(tmp_path, "big.pdf", 2 * 1024 * 1024)
+    upload_filter([big], max_file_mb=1)
+    assert big.exists()
+
+
+def test_missing_file_is_dropped_not_raised(tmp_path):
+    from gymhall.release import upload_filter
+
+    gone = tmp_path / "없는파일.pdf"
+    keep, dropped = upload_filter([gone], max_file_mb=1)
+    assert keep == []
+    assert len(dropped) == 1
+
+
+def test_extension_matching_ignores_case_and_dots(tmp_path):
+    from gymhall.release import upload_filter
+
+    f = _make(tmp_path, "자료.PDF")
+    keep, _ = upload_filter([f], allow_extensions=[".pdf"])
+    assert keep == [f]

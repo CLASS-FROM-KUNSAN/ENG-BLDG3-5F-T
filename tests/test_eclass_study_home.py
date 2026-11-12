@@ -194,7 +194,7 @@ def crawler(browser, server, tmp_path):
     pg = browser.new_page()
     pg.goto(f"{server}/{STUDY_HOME.name}")
     c = Crawler(
-        _Shim(pg), Site(), Layout(tmp_path), Store(tmp_path / "state.json"),
+        _Shim(pg), Site(), Layout(tmp_path), Store.open(tmp_path / "state.json"),
         term="2026-2", menus={},
     )
     yield c

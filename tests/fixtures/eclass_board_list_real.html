@@ -1,0 +1,1586 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<!-- saved from url=(0251)https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&mainDTO.parentMenuId=menu_00048&mainDTO.menuId=menu_00236&courseDTO.courseId=2026211605005&courseDTO.shareCourseId=&boardInfoDTO.boardInfoId=2026211605005-N&boardInfoDTO.boardClass=notice -->
+<html xml:lang="ko-kr" lang="ko-kr" xmlns="http://www.w3.org/1999/xhtml" class="fa-events-icons-ready"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+<title>국립군산대학교 eClass</title>
+
+<!-- Stylesheets -->
+<!-- 기본 -->
+<link rel="shortcut icon" href="https://eclass.kunsan.ac.kr/lmsdata/img/common/favicon.ico">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+   
+
+
+
+
+
+<style type="text/css">
+#headerContent h1 a {color:#000000;}
+</style>
+
+
+
+
+
+<style type="text/css">
+	#Cover {width:100%;background-color: #FFFFFF }
+</style>
+
+
+
+
+
+
+
+
+	<style type="text/css">
+	
+	#headerContent {width:100%; height:170px; overflow:hidden; background:url(../lmsdata/img/classroom/design_templet/visual_img_large01.jpg) repeat;}
+	</style>
+
+
+
+<!-- Scripts -->
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+
+
+	function bluring(){
+	if(event.srcElement.tagName=="A"||event.srcElement.tagName=="IMG") document.body.focus();}
+	document.onfocusin=bluring;
+</script>
+
+<!--[if lt IE 9]>
+<style type="text/css">
+#headerContent h1 {background-color: white;
+filter: progid:DXImageTransform.Microsoft.Chroma(color='white') progid:DXImageTransform.Microsoft.Alpha(opacity=100) progid:DXImageTransform.Microsoft.dropshadow(color=#ffffff,offX=1,offY=1) progid:DXImageTransform.Microsoft.dropshadow(color=#ffffff,offX=-1,offY=1) progid:DXImageTransform.Microsoft.dropshadow(color=#ffffff,offX=1,offY=-1) progid:DXImageTransform.Microsoft.dropshadow(color=#ffffff,offX=-1,offY=-1);}
+</style>
+<![endif]-->
+
+</head>
+<body>
+<script language="javascript">
+
+</script>
+<div id="Cover_class">
+
+
+<!-- Header 영역 부분 시작-->
+	<div id="header">
+		
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+<script type="text/javascript"> 
+
+function courseTopnoImage(){
+	if('learner' == 'professor' ) {
+		$("#login_image").attr("src", "../lmsdata/img/common/no_professor.gif");
+	} else {
+		$("#login_image").attr("src", "../lmsdata/img/common/no_user.gif");
+	}
+}
+function editProfile(){
+	var url   ="";
+	
+	url="/User.do?cmd=editUserForm&boardInfoDTO.boardInfoGubun=myprofile";
+	location.href= url;
+}
+
+function logOut(){
+	var url   ="";
+	//운영서버 로그아웃url
+	//url="/sso/logout.jsp";
+	url="/User.do?cmd=logoutUser";
+	location.href= url;
+}
+
+//포트폴리오 메인 페이지 이동
+function viewPortInfo(portId,portType){
+	if(portType=='L'){
+		location.href = "/PortInfo.do?cmd=viewInfoPortfolioMain&portId="+portId;
+	}else{
+		location.href = "/PortInfo.do?cmd=viewInfoPortfolioMain&portId="+portId;
+	}
+}
+
+</script> 
+
+
+
+
+
+
+
+
+
+	<div id="header">
+<div class="topCover">
+	<p>
+		<a href="https://eclass.kunsan.ac.kr/Main.do?cmd=viewHome&amp;userDTO.localeKey=ko">
+			<img class="ml20" src="./국립군산대학교 eClassdd_files/logo_course_top.png" alt="군산대학교 e-class" border="0" style="max-height:42px;">
+		</a>
+	</p>
+
+	<div class="hb"></div>
+	<script>
+		$("p.f16").click(function() {
+			$(".drawBox").toggle();
+		});
+	</script>
+	 
+	 
+	<ul class="util">
+		<li>
+			<div class="class_sbox">
+				<fieldset>
+					<legend>내강의실로 이동</legend>					
+					
+					  <select name="courseDTO.courseId" class="default" onchange="javascript:viewCourse(this.value)" title="내강의실 목록" style="display: none;"> 
+ <option value=""> 강의실 선택</option> 
+ <option value="2026211605005,이교수,normal" selected=""> 과목가_05</option> 
+ <option value="2026211784801,박교수,normal"> 과목나_01</option> 
+ <option value="2026210176501,최교수,normal"> 과목다_01</option> 
+ <option value="2026211562501,정교수,normal"> 과목라_01</option> 
+ <option value="2026210217623,김교수,normal"> 과목사_23</option> 
+ <option value="2026211043701,강교수,normal"> 과목마_01</option> 
+ <option value="2026210357604,조교수,normal"> 과목바_04</option> 
+ <option value="CORS_260422171741a6f75263,윤교수,bnormal"> [이수필수] 법정의무교육</option> 
+ <option value="CORS_2108251123450d720023,장교수,bnormal"> 생활관 안전교육(2)</option> 
+ </select><div class="chosen-container chosen-container-single chosen-container-single-nosearch" style="width: 187px;" title="내강의실 목록"><a class="chosen-single" tabindex="-1"><span> 과목가_05</span><div><b></b></div></a><div class="chosen-drop"><div class="chosen-search"><input type="text" autocomplete="off" readonly=""></div><ul class="chosen-results"></ul></div></div> 
+
+					 
+				</fieldset>
+			</div>	
+		</li>
+		<li class="hb p0"></li>
+		<li style="padding-right: 0px; padding-left: 0px;">
+			
+					<p>		
+						<a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveMenu&amp;mainDTO.parentMenuId=menu_00026&amp;mainDTO.menuId=menu_00030"><i class="fa fa-user"></i><span>내 강의실</span></a>
+					</p>
+				
+		</li>
+		
+		<li class="hb p0"></li>
+		
+		
+		<li>
+			 
+
+				<a href="https://eclass.kunsan.ac.kr/Message.do?cmd=viewMessageList&amp;messageType=RECEIVE" title="새 쪽지가  16 건 있습니다.">
+				<i class="icon-note-white"></i>쪽 지<span class="num bcSkyblue blinking">  16</span></a>
+	
+		</li>
+		<li class="hb p0"></li>
+
+		<li class="w230">
+			<div class="photoInfo">			
+				
+				
+
+						
+								<input type="image" name="" src="./국립군산대학교 eClassdd_files/no_user.gif" alt="common.home.alt.picture">
+						
+				
+					
+					
+					
+					
+					
+			</div>
+			<dl>
+				<dt class="fontB">홍길동</dt>
+				<dd class="mr5">
+					<a href="javascript:editProfile();">개인정보수정</a>
+				</dd>
+				<dd>
+					<a href="javascript:logOut();">로그아웃</a>
+				</dd>
+			</dl>
+		</li>
+		<li class="hb p0"></li>
+	</ul>
+</div>
+</div>
+
+
+
+	</div>
+	<!-- Header 영역 부분 끝-->
+	<!-- 본문 시작 -->
+	<div id="container" class="clearfix">
+
+		<!-- 본문 title 부분 -->
+		
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+
+
+var popupFormDialog = null;
+
+// function addLoadEvent(func){
+//     var oldonload = window.onload;
+//     if(typeof window.onload != 'function'){
+//         window.onload = func;
+//     }else{
+//         window.onload = function(){
+// //             oldonload();
+// //             func();
+            
+//             if (oldonload) {
+//                 oldonload();
+//             }
+//             func();
+            
+            
+//         };
+//     }
+
+// }
+
+// addLoadEvent(init);
+
+function init(){
+	getClassroom();
+}
+
+
+function getClassroom() {
+	
+	CourseWork.getClassroomMenu(getClassroomMenuCallback);
+}
+
+function getClassroomMenuCallback(classroom){
+	var status = classroom;
+	if(status=="open"){
+		initAadminClassRoomOpen();
+	}else if(status=="close"){
+		initAadminClassRoomClose();
+		
+	}
+}
+
+function initAadminClassRoomOpen(){
+	if($("#headerContent").is(":hidden")){
+		$("#headerContent").slideToggle(300);
+	}
+
+	$("#handleTopImg").attr("src", "../lmsdata/img/classroom/handle_top_on.png");
+}
+
+function initAadminClassRoomClose(){
+	$("#headerContent").css("display", "none");
+	$("#handleTopImg").attr("src", "../lmsdata/img/classroom/handle_top_off.png");
+}
+
+function classroomCloseCallback(ProcessResultDTO){
+	
+	initClassRoomClose();
+}
+function classroomOpenCallback(ProcessResultDTO){
+	initClassRoomOpen();
+}
+
+function initClassRoomClose(){
+	$("#handleTopImg").attr("src", "../lmsdata/img/classroom/handle_top_off.png");
+}
+
+
+function initClassRoomOpen(){
+	
+	$("#handleTopImg").attr("src", "../lmsdata/img/classroom/handle_top_on.png");
+}
+
+function viewCourse(courseIdNownerName){
+
+	var courseId = courseIdNownerName.split(",")[0];
+	
+// 	var courseOwnerName = courseIdNownerName.split(",")[1].trim();
+	// ie 9.0 이하에서는 trim() 함수가 적용되지 않는다.
+	// common_util.js에 프로토타입으로 정의한 함수를 사용
+	var courseOwnerName = trim(courseIdNownerName.split(",")[1]);
+	var openType        = trim(courseIdNownerName.split(",")[2]);
+	if(courseId!="" && courseOwnerName != ""){
+		if(openType!=="open"&&openType!=="mooc"){
+			location.href="/Course.do?"+
+					 "cmd=viewStudyHome"+
+					 "&courseDTO.courseId="+courseId+
+					 "&boardInfoDTO.boardInfoGubun=study_home&boardGubun=study_course&gubun=study_course";
+		}else{
+			location.href="/Lesson.do?"+
+					 "cmd=viewLessonContentsList"+
+					 "&courseDTO.courseId="+courseId+
+					 "&pageGubun=study_home"+
+					 "&type=U"+
+					 "&boardInfoDTO.boardInfoGubun=openkyoan&gubun=study_course&pageGubun=study_home";
+		}
+		
+	}else{
+		if(courseId =="") {
+			alert("강의실을 선택하여 주세요");
+		} else {
+			alert("해당 과목의 책임교수가 지정되지 않았습니다.");
+		}
+		return;
+	}
+	
+}
+
+function viewCoursePlan(courseId,openType){
+	
+	if(openType!="open"){
+		location.href="/Course.do?"+
+				 "cmd=viewCoursePlanChapterListNew"+
+				 "&courseDTO.courseId="+courseId+
+				 "&pageGubun=study_home"+
+				 "&boardInfoDTO.boardInfoGubun=course_plan&gubun=study_course";		
+	}else{
+		location.href="/Course.do?"+
+				 "cmd=viewCoursePlanChapterListNew"+
+				 "&courseDTO.courseId="+courseId+
+				 "&pageGubun=study_home"+
+				 "&boardInfoDTO.boardInfoGubun=open_course_plan&gubun=study_course";		
+	}
+	
+	
+}
+
+
+function viewCoursePlanHaksa(courseYy,courseTerm,courseCode,coursePt,gyosuCd){
+	
+	if( courseTerm==='1' ){
+		courseTerm = 'Z0101';
+	}else if( courseTerm==='2' ){ 
+		courseTerm = 'Z0102';
+	}else if( courseTerm==='S' ){ 
+		courseTerm = 'Z0103';
+	}else if ( courseTerm==='W' ){
+		courseTerm = 'Z0104';
+	}
+	
+	if( courseYy <= 2015 ) {
+		var url = "http://ssg.kosin.ac.kr/service/handbook/view.asp?Yy="+courseYy+"&Haggi="+courseTerm+"&GwamogCd="+courseCode+"&Bunban="+coursePt+"&Sabeon="+gyosuCd;	
+	} else {
+		var url = "http://ssg.kosin.ac.kr/service/handbook/view2016.asp?Yy="+courseYy+"&Haggi="+courseTerm+"&GwamogCd="+courseCode+"&Bunban="+coursePt+"&Sabeon="+gyosuCd;
+	}
+
+	window.open(url, "previewWindow", "top=50,left=50,toolbar=no,location=no,directories=no,menubar=no,resizable=yes,scrollbars=yes,status=no,width=800,height=600");
+	return;
+}
+
+
+
+function viewAdminLearnerList(courseId){
+	location.href="/Learner.do?"+
+			 "cmd=viewAdminLearnerList"+
+			 "&courseDTO.courseId="+courseId+
+			 "&boardInfoDTO.boardInfoGubun=student_manage&boardGubun=study_course";
+}
+
+function viewCourseSetup(courseId){
+/* 	location.href="/Course.do?"+
+			 "cmd=viewStudyHomeSetUp"+
+			 "&courseDTO.courseId="+courseId+
+			 "&boardInfoDTO.boardInfoGubun=studysetup&boardGubun=study_course";
+ */	
+	location.href="/Main.do?cmd=moveCourseMenu&mainDTO.parentMenuId=menu_00094&mainDTO.menuId=menu_00096&courseDTO.courseId="+courseId;
+	
+	
+}
+
+function viewAssociateList(courseId){
+	
+	var url = "/Course.do?cmd=viewAssociateList&courseDTO.courseId="+courseId;
+	var popTitle= "공동교수정보";
+	var addContent  = "<div style='-webkit-overflow-scrolling: touch;' ><iframe id='viewAttendUserForm' name='viewAttendUserForm' width='100%' height='100%' "
+		+ "frameborder='0' scrolling='yes' src='"+url+"' title='"+popTitle+"'/></div>";
+	popupFormDialog = $(addContent);
+	
+	popupFormDialog.dialog({
+		title:"공동교수정보",
+		resizable: false,
+		autoOpen: true,
+		width:'400',
+		height:'300',
+		modal: true,
+		appendTo:"body",
+		open: function(event, ui){
+			$(this).find("iframe").focus();
+		},
+		close: function() {
+			$(this).remove();
+		}
+	});
+	
+}
+function sendMessage(userId){
+	
+	var url = "/Message.do?cmd=sendMessageForm&gubun=popup&messageSendDTO.receiverId="+userId
+	+"&messageSendDTO.courseId="+"";
+
+	var popTitle="쪽지 보내기";
+	var addContent  = "<div style='-webkit-overflow-scrolling: touch;' ><iframe id='titleMessateUserForm' name='viewAttendUserForm' width='100%' height='100%' "
+	+ "frameborder='0' scrolling='yes' src='"+url+"' title='"+popTitle+"'/></div>";
+	
+	popupFormDialog = $(addContent); 
+	popupFormDialog.dialog({
+	title:"쪽지 보내기",
+	resizable: false,
+	autoOpen: true,
+	width:'750',
+	height:'720',
+	modal: true,
+	appendTo:"body",
+	open: function(event, ui){
+		$(this).find("iframe").focus();
+	},
+	close: function() {
+		$(this).remove();
+	}
+	});
+}
+
+function courseTitleNoImage(){
+	$("#login_image").attr("src", "../lmsdata/img/common/no_professor.gif");
+}
+
+function sendMessageToProf(userId,courseName){
+	var popTitle= "쪽지 보내기";
+	var url = "/Message.do?cmd=sendMessageForm&gubun=popup&messageSendDTO.receiverId="+userId
+			+ "&messageSendDTO.courseName="+getUrlEncode(courseName);
+	var addContent  = "<div style='-webkit-overflow-scrolling: touch;' ><iframe id='sendMessageFrame' name='learnerMessForm' width='100%' height='100%' "
+		+ "frameborder='0' scrolling='yes' src='"+url+"' title='"+popTitle+"'/></div>";
+
+		popupFormDialog = $(addContent); 
+		popupFormDialog.dialog({
+		title:"쪽지 보내기",
+		resizable: false,
+		autoOpen: true,
+		width:'750',
+		height:'720',
+		modal: true,
+		appendTo:"body",
+		open: function(event, ui){
+			$(this).find("iframe").focus();
+		},
+		close: function() {
+			$(this).remove();
+		}
+	});
+}
+
+function viewWebexMsgForm(courseId){
+	var url = "/Message.do?cmd=viewWebexMsgForm&messageSendDTO.courseId="+courseId;
+
+	var popTitle="Webex 메시지 발송";
+	
+	var addContent  = "<div style='-webkit-overflow-scrolling: touch; '><iframe id='viewWebexMsgForm' name='viewWebexMsgForm' width='100%' height='100%' "
+		+ "frameborder='0' scrolling='yes' src='"+url+"' title='"+popTitle+"'/></div>";
+		popupFormDialog = $(addContent);
+	
+		popupFormDialog.dialog({
+		title:"Webex 메시지 발송",
+		resizable: false,
+		autoOpen: true,
+		width:'800',
+		height:'650',
+		modal: true,
+		appendTo:"body",
+		open: function(event, ui){
+			$(this).find("iframe").focus();
+		},
+		close: function() {
+			$(this).remove();
+		}
+	});
+	
+}
+
+</script>
+
+
+
+
+
+
+
+
+	
+	
+
+					
+
+<!-- mainContent 영역 부분 -->
+
+
+
+<div id="headerContent">
+	<h1 class="f40">
+		<a href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewStudyHome&amp;boardInfoDTO.boardInfoGubun=study_home&amp;courseDTO.courseId=2026211605005">
+			과목가
+				_05
+			
+			
+			
+			<span class="f22 fontEB ml10"></span>
+		</a>
+	</h1>
+	<div class="classSection">
+		<!-- 과목정보소개 부분 -->
+		
+		<ul class="post">
+			<li>
+				<table class="headerListClass" border="1" cellspacing="0" summary="과목 정보 입니다.">
+					<caption>이수과목과 학점</caption>
+					
+					<thead>
+						<tr class="odd-row">
+							<th abbr="이수구분" scope="col" class="first">이수구분</th>
+							<th abbr="학점" scope="col">학 점</th>
+							<th class="bgLast last" abbr="공동교수정보">공동교수정보</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr class="odd-row">
+							<td class="clip first" style="max-width:100px">전공선택</td>
+							<td>3 학점</td>
+							<td class="bgLast last"><span><a href="javascript:viewAssociateList('2026211605005');">조회하기</a></span></td>
+						</tr>
+						
+						
+					</tbody>
+				</table>
+			</li>
+		</ul>
+		<!-- //과목정보소개 부분 -->
+		<!-- 과목교수소개 부분 -->
+		<ul class="postCover">
+			<li class="tphoto">
+				
+				
+					
+				
+				
+				
+						<img src="./국립군산대학교 eClassdd_files/no_professor.gif" alt="사진" style="width:56px ; height:56px" border="0">
+				
+				
+			</li>                                
+			<li class="tinfoList">
+				<table class="headerListPro" border="1" cellspacing="0" summary="당당교수 정보 입니다.">
+					<caption>담당교수 정보</caption>
+					<colgroup>
+					
+						<col width="120px">
+						<col width="120px">
+						<col>
+					
+					</colgroup>
+					<thead>
+						<tr class="odd-row">
+							<th abbr="대표교수" scope="col" class="first"><i class="icon-user-black"></i>대표교수</th>
+
+							<th class="bgLast last" abbr="이메일" scope="col"><i class="icon-mail-black"></i>이메일</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr class="odd-row">
+							<td class="first">이교수  </td>
+							<td class="bgLast last">removed-email</td>
+						</tr>
+					</tbody>
+				</table>
+			</li>
+		</ul>
+		<!-- //과목교수소개 부분 -->
+	</div>
+</div>
+<!-- //mainContent 영역 부분 -->
+<!-- 강의상단메뉴 부분 -->
+<div id="conArea">
+	<div class="class_sbox">
+			<fieldset>
+				<legend>내강의실로 이동</legend>
+				
+				
+				 
+				 
+			</fieldset>
+	</div>
+	<ul class="proFunction">
+		
+			
+				
+		<li>
+		<a class="btn" href="javascript:viewCoursePlan('2026211605005','normal')">
+			<i class="icon-monitor-color"></i>강의 계획서</a></li>
+		
+		
+		
+		<li>
+			<a class="btn" href="javascript:sendMessageToProf('101576','과목가');">
+			<i class="icon-message-color"></i>쪽지보내기
+			</a>
+		</li>
+		
+		
+		
+		
+	</ul>
+	<div class="handleTop cp">
+		 <img id="handleTopImg" src="./국립군산대학교 eClassdd_files/handle_top_on.png" alt="사진" border="0"> 
+	</div>
+</div>
+<!-- //강의상단메뉴 부분 -->
+
+<script type="text/javascript"> 
+
+function courseTitleNoImage(){
+	$("#courseTitleImage").attr("src", "../lmsdata/img/common/no_professor.gif");
+}
+
+function chLearnerView(courseId){
+	if(confirm("학습자로 로그인합니다.\n 로그아웃 시 본인의 계정으로 다시 로그인 됩니다.")){
+		document.location.href = "/Learner.do?cmd=loginCourseLearner&courseDTO.courseId="+courseId;
+	}
+}
+
+
+$(document).ready(function(){
+	init(); 
+}); 
+
+</script> 
+
+		<!-- 본문 menu 부분 -->
+		
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- leftAside 영역 부분 -->
+
+
+
+
+<script type="text/javascript">
+
+function moveContentsList(courseId,formName,boardInfoGubun,infoId,cmdName,actionName,userType,parentMenuId,menuId){
+	var url ="";	
+	var infoIdString = "";
+	if(actionName=="Etest"  ){
+		url = "/Etest.do?";
+		infoIdString = "&etestInfoDTO.etestInfoId=" + infoId;
+		
+	}else 	if(actionName=="Forum"  ){
+		url = "/Forum.do?";
+		infoIdString = "&forumInfoDTO.forumInfoId=" + infoId;
+		
+	}else 	if(actionName=="Report"  ){
+		url = "/Report.do?";
+		infoIdString = "&reportInfoDTO.reportInfoId=" + infoId;
+		
+	}else 	if(actionName=="Lesson"  ){
+		url = "/Lesson.do?";
+		
+	}else 	if(actionName=="Research"  ){
+		url = "/Research.do?";
+		infoIdString = "&researchInfoDTO.researchInfoId=" + infoId;
+	}else 	if(actionName=="Teamact"  ){
+		url = "/Teamact.do?";
+		infoIdString = "&teamactInfoDTO.teamactId=" + infoId;
+	}
+	
+	url+= "cmd="+cmdName+
+		   "&courseDTO.courseId="+courseId+
+		   "&boardInfoDTO.boardInfoGubun="+boardInfoGubun+
+		   "&boardGubun=study_course"+
+		   "&gubun=todayList"+
+		   "&pageGubun=study_home"+
+		   infoIdString +
+		   "&mainDTO.parentMenuId="+parentMenuId+
+		   "&mainDTO.menuId="+menuId;
+	location.href= url;
+
+}
+
+function moveProfContentsList(courseId,formName,boardInfoGubun,infoId,cmdName,actionName,userType,lessonElementId,parentMenuId){
+
+	var url ="";	
+	var infoIdString = "";
+	if(actionName=="Etest"  ){
+		url = "/Etest.do?";
+		infoIdString = "&etestInfoDTO.etestInfoId=" + infoId;
+		
+	}else 	if(actionName=="Forum"  ){
+		url = "/Forum.do?";
+		infoIdString = "&forumInfoDTO.forumInfoId=" + infoId;
+		
+	}else 	if(actionName=="Report"  ){
+		url = "/Report.do?";
+		infoIdString = "&reportInfoDTO.reportInfoId=" + infoId;
+		
+	}else 	if(actionName=="Lesson"  ){
+		url = "/Lesson.do?";
+		infoIdString = "&lessonContentsDTO.lessonContentsId=" + infoId + "&type=U";
+		
+		
+	}else 	if(actionName=="Research"  ){
+		url = "/Research.do?";
+		infoIdString = "&researchInfoDTO.researchInfoId=" + infoId;
+	}
+	
+	url+= "cmd="+cmdName+
+		   "&courseDTO.courseId="+courseId+
+		   "&boardInfoDTO.boardInfoGubun="+boardInfoGubun+
+		   "&boardGubun=study_course"+
+		   "&gubun=todayList"+
+		   infoIdString +
+		   "&mainDTO.parentMenuId="+parentMenuId;
+	location.href= url;
+
+}
+
+
+function viewLessonContentsStudy(courseId,lessonElementId,lessonContentsId, courseName){
+	var url = "/Attend.do?cmd=viewAttendProfForm&courseDTO.courseId="+courseId+"&attendStatusDTO.lessonContentsId="+lessonContentsId+"&attendStatusDTO.elementType=online&attendStatusDTO.lessonElementId="+lessonElementId;
+	
+	var popTitle="수강생 별 출결 현황";
+	var addContent  = "<div style='-webkit-overflow-scrolling: touch;' ><iframe id='viewLessonUserForm' name='viewAttendUserForm' width='100%' height='100%' "
+		+ "frameborder='0' scrolling='yes' src='"+url+"' title='"+popTitle+"'/></div>";
+		
+	
+	popupFormDialog = $(addContent);
+	
+	popupFormDialog.dialog({
+		title: courseName + " - 수강생 별 출결 현황",
+		resizable: false,
+		autoOpen: true,
+		width:'800',
+		height:'600',
+		modal: true,
+		appendTo:"body",
+		open: function(event, ui){
+			$(this).find("iframe").focus();
+		},
+		close: function() {
+			$(this).remove();
+		}
+	});
+	
+}
+ 
+//할일목록 읽어오기 호출
+function viewTodayList(){
+	var url = getUrlEncode(document.URL);
+	document.location.href = "Main.do?cmd=movePageForToday&url="+url;
+}
+
+
+</script>
+
+<input type="hidden" name="cmd">
+<style>
+@media ( max-width: 1218px ) {
+        #jb-container {
+          display: none;
+        }
+      }
+</style>
+
+<div id="aside">
+	  <ul id="leftMenu" class="lnb"> 
+<li id="0" style="width: 25%;"> 
+<h3> <i class="icon-list-white"></i>학습 목차</h3> 
+<ul class="menuSub mp1"> 
+<li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00091&amp;mainDTO.menuId=menu_00092&amp;courseDTO.courseId=2026211605005">학습 목차</a></li> 
+<li class="last"><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00091&amp;mainDTO.menuId=menu_00099&amp;courseDTO.courseId=2026211605005">강의 목록</a></li> 
+</ul> 
+<div class="menuSubHover"> 
+<ul><li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00091&amp;mainDTO.menuId=menu_00092&amp;courseDTO.courseId=2026211605005">학습 목차</a></li> 
+<li class="last"><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00091&amp;mainDTO.menuId=menu_00099&amp;courseDTO.courseId=2026211605005">강의 목록</a></li> 
+</ul> 
+</div> 
+</li> 
+<li id="1" style="width: 25%;"> 
+<h3> <i class="icon-nbook-white"></i>학습 정보</h3> 
+<ul class="menuSub mp2"> 
+<li><a href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&amp;boardInfoDTO.boardInfoGubun=notice&amp;boardInfoDTO.boardInfoId=2026211605005-N&amp;boardInfoDTO.boardClass=notice&amp;boardInfoDTO.boardType=course&amp;courseDTO.courseId=2026211605005&amp;mainDTO.parentMenuId=menu_00048&amp;mainDTO.menuId=menu_00236">공지사항</a></li> 
+<li><a href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&amp;boardInfoDTO.boardInfoGubun=qna&amp;boardInfoDTO.boardInfoId=2026211605005-Q&amp;boardInfoDTO.boardClass=qna&amp;boardInfoDTO.boardType=course&amp;courseDTO.courseId=2026211605005&amp;mainDTO.parentMenuId=menu_00048&amp;mainDTO.menuId=menu_00236">질의응답</a></li> 
+<li class="last"><a href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&amp;boardInfoDTO.boardInfoGubun=pds&amp;boardInfoDTO.boardInfoId=2026211605005-P&amp;boardInfoDTO.boardClass=pds&amp;boardInfoDTO.boardType=course&amp;courseDTO.courseId=2026211605005&amp;mainDTO.parentMenuId=menu_00048&amp;mainDTO.menuId=menu_00236">강의자료실</a></li> 
+</ul> 
+<div class="menuSubHover"> 
+<ul><li><a href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&amp;boardInfoDTO.boardInfoGubun=notice&amp;boardInfoDTO.boardInfoId=2026211605005-N&amp;boardInfoDTO.boardClass=notice&amp;boardInfoDTO.boardType=course&amp;courseDTO.courseId=2026211605005&amp;mainDTO.parentMenuId=menu_00048&amp;mainDTO.menuId=menu_00236">공지사항</a></li> 
+<li><a href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&amp;boardInfoDTO.boardInfoGubun=qna&amp;boardInfoDTO.boardInfoId=2026211605005-Q&amp;boardInfoDTO.boardClass=qna&amp;boardInfoDTO.boardType=course&amp;courseDTO.courseId=2026211605005&amp;mainDTO.parentMenuId=menu_00048&amp;mainDTO.menuId=menu_00236">질의응답</a></li> 
+<li class="last"><a href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&amp;boardInfoDTO.boardInfoGubun=pds&amp;boardInfoDTO.boardInfoId=2026211605005-P&amp;boardInfoDTO.boardClass=pds&amp;boardInfoDTO.boardType=course&amp;courseDTO.courseId=2026211605005&amp;mainDTO.parentMenuId=menu_00048&amp;mainDTO.menuId=menu_00236">강의자료실</a></li> 
+</ul> 
+</div> 
+</li> 
+<li id="3" style="width: 25%;"> 
+<h3> <i class="icon-listleve-white"></i>학습 활동</h3> 
+<ul class="menuSub mp4"> 
+<li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00104&amp;mainDTO.menuId=menu_00082&amp;courseDTO.courseId=2026211605005">출석</a></li> 
+<li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00104&amp;mainDTO.menuId=menu_00063&amp;courseDTO.courseId=2026211605005">과제</a></li> 
+<li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00104&amp;mainDTO.menuId=menu_00065&amp;courseDTO.courseId=2026211605005">토론</a></li> 
+<li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00104&amp;mainDTO.menuId=menu_00067&amp;courseDTO.courseId=2026211605005">시험</a></li> 
+<li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00104&amp;mainDTO.menuId=menu_00069&amp;courseDTO.courseId=2026211605005">설문</a></li> 
+<li class="last"><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00104&amp;mainDTO.menuId=menu_00071&amp;courseDTO.courseId=2026211605005">팀활동</a></li> 
+</ul> 
+<div class="menuSubHover"> 
+<ul><li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00104&amp;mainDTO.menuId=menu_00082&amp;courseDTO.courseId=2026211605005">출석</a></li> 
+<li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00104&amp;mainDTO.menuId=menu_00063&amp;courseDTO.courseId=2026211605005">과제</a></li> 
+<li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00104&amp;mainDTO.menuId=menu_00065&amp;courseDTO.courseId=2026211605005">토론</a></li> 
+<li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00104&amp;mainDTO.menuId=menu_00067&amp;courseDTO.courseId=2026211605005">시험</a></li> 
+<li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00104&amp;mainDTO.menuId=menu_00069&amp;courseDTO.courseId=2026211605005">설문</a></li> 
+<li class="last"><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00104&amp;mainDTO.menuId=menu_00071&amp;courseDTO.courseId=2026211605005">팀활동</a></li> 
+</ul> 
+</div> 
+</li> 
+<li id="7" style="width: 25%;"> 
+<h3> <i class="icon-book-white"></i>학습 현황</h3> 
+<ul class="menuSub mp8"> 
+<li class="last"><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00101&amp;mainDTO.menuId=menu_00100&amp;courseDTO.courseId=2026211605005">학습 현황</a></li> 
+</ul> 
+<div class="menuSubHover"> 
+<ul><li class="last"><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00101&amp;mainDTO.menuId=menu_00100&amp;courseDTO.courseId=2026211605005">학습 현황</a></li> 
+</ul> 
+</div> 
+</li> 
+<li id="8" style="width: 25%;"> 
+<h3> <i class="icon-info-white"></i>과목 정보</h3> 
+<ul class="menuSub mp9"> 
+<li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00047&amp;mainDTO.menuId=menu_00052&amp;courseDTO.courseId=2026211605005">수업 계획서</a></li> 
+<li class="last"><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00047&amp;mainDTO.menuId=menu_00053&amp;courseDTO.courseId=2026211605005">과목 정보</a></li> 
+</ul> 
+<div class="menuSubHover"> 
+<ul><li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00047&amp;mainDTO.menuId=menu_00052&amp;courseDTO.courseId=2026211605005">수업 계획서</a></li> 
+<li class="last"><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00047&amp;mainDTO.menuId=menu_00053&amp;courseDTO.courseId=2026211605005">과목 정보</a></li> 
+</ul> 
+</div> 
+</li> 
+<li id="10" style="width: 25%;"> 
+<h3> <i class="icon-list-white"></i>성적</h3> 
+<ul class="menuSub mp11"> 
+<li class="last"><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00105&amp;mainDTO.menuId=menu_00106&amp;courseDTO.courseId=2026211605005">성적보기</a></li> 
+</ul> 
+<div class="menuSubHover"> 
+<ul><li class="last"><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveCourseMenu&amp;mainDTO.parentMenuId=menu_00105&amp;mainDTO.menuId=menu_00106&amp;courseDTO.courseId=2026211605005">성적보기</a></li> 
+</ul> 
+</div> 
+</li> 
+</ul> 
+ <div id="todayList">
+<h2 class="f16" style="color:#666;">내 할 일 보기  <span class="num bcRed">2</span> </h2> 
+<div class="bx-wrapper" style="max-width: 100%; margin: 0px auto;"><div class="bx-viewport" style="width: 100%; overflow: hidden; position: relative; height: 140px;"><ul class="bxslider" style="width: auto; position: relative; transition-duration: 0s; transform: translate3d(0px, 0px, 0px);">
+<li style="float: none; list-style: none; position: relative; width: 855px;"> 						
+ 	    <a href="javascript:moveContentsList('2026210217623','document.courseForm','report','REPT_261112083714ae885fe0','viewReportInfoPageList','Report','learner','menu_00104' ,'menu_00063' );  ">     
+	</a><ul class="listNum"><a href="javascript:moveContentsList('2026210217623','document.courseForm','report','REPT_261112083714ae885fe0','viewReportInfoPageList','Report','learner','menu_00104' ,'menu_00063' );  "> 	
+<li class="dateBar bcRed"></li>	 				
+ 	    <li><span class="fcBlue">과제</span></li>  
+ 	    <li style="width:54px"><span class="btn mini fontHelvetica fwb"> TODAY</span></li>            	
+ 	    </a><li style="width:174px"><a href="javascript:moveContentsList('2026210217623','document.courseForm','report','REPT_261112083714ae885fe0','viewReportInfoPageList','Report','learner','menu_00104' ,'menu_00063' );  "></a><h3><a href="javascript:moveContentsList('2026210217623','document.courseForm','report','REPT_261112083714ae885fe0','viewReportInfoPageList','Report','learner','menu_00104' ,'menu_00063' );  "></a><a href="javascript:moveContentsList('2026210217623','document.courseForm','report','REPT_261112083714ae885fe0','viewReportInfoPageList','Report','learner','menu_00104');  " rel="tooltip" title=" 11/12(목) Group Note #6: Group Leader가 제출 ">     
+11/12(목) Group Note #6: Group Leader가 제출</a></h3></li>   			    
+ 	    <li style="width:154px;font-size:13px"><h3 rel="tooltip" title=" 11/12(목) Group Note #6: Group Leader가 제출 "> 
+과목사</h3></li>   			    
+ 	    <li style="width:154px; font-size:11px">과목사_23</li>          	
+	</ul> 					
+ 	     
+</li> 						
+<li style="float: none; list-style: none; position: relative; width: 855px;"> 						
+ 	    <a href="javascript:moveContentsList('2026210217623','document.courseForm','report','REPT_261112101825ae88614d','viewReportInfoPageList','Report','learner','menu_00104' ,'menu_00063' );  ">     
+	</a><ul class="listNum"><a href="javascript:moveContentsList('2026210217623','document.courseForm','report','REPT_261112101825ae88614d','viewReportInfoPageList','Report','learner','menu_00104' ,'menu_00063' );  "> 	
+<li class="dateBar bcRed"></li>	 				
+ 	    <li><span class="fcBlue">과제</span></li>  
+ 	    <li style="width:54px"><span class="btn mini fontHelvetica fwb"> TODAY</span></li>            	
+ 	    </a><li style="width:174px"><a href="javascript:moveContentsList('2026210217623','document.courseForm','report','REPT_261112101825ae88614d','viewReportInfoPageList','Report','learner','menu_00104' ,'menu_00063' );  "></a><h3><a href="javascript:moveContentsList('2026210217623','document.courseForm','report','REPT_261112101825ae88614d','viewReportInfoPageList','Report','learner','menu_00104' ,'menu_00063' );  "></a><a href="javascript:moveContentsList('2026210217623','document.courseForm','report','REPT_261112101825ae88614d','viewReportInfoPageList','Report','learner','menu_00104');  " rel="tooltip" title=" 11/12(목) 수업 중 개별 과제: Helping My Community 녹음 파일 제출 ">     
+11/12(목) 수업 중 개별 과제: Helping My Community 녹음 파일 제출</a></h3></li>   			    
+ 	    <li style="width:154px;font-size:13px"><h3 rel="tooltip" title=" 11/12(목) 수업 중 개별 과제: Helping My Community 녹음 파일 제출 "> 
+과목사</h3></li>   			    
+ 	    <li style="width:154px; font-size:11px">과목사_23</li>          	
+	</ul> 					
+ 	     
+</li> 						
+ 		</ul></div><div class="bx-controls bx-has-controls-direction"><div class="bx-controls-direction"><a class="bx-prev disabled" href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&amp;mainDTO.parentMenuId=menu_00048&amp;mainDTO.menuId=menu_00236&amp;courseDTO.courseId=2026211605005&amp;courseDTO.shareCourseId=&amp;boardInfoDTO.boardInfoId=2026211605005-N&amp;boardInfoDTO.boardClass=notice">Prev</a><a class="bx-next disabled" href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&amp;mainDTO.parentMenuId=menu_00048&amp;mainDTO.menuId=menu_00236&amp;courseDTO.courseId=2026211605005&amp;courseDTO.shareCourseId=&amp;boardInfoDTO.boardInfoId=2026211605005-N&amp;boardInfoDTO.boardClass=notice">Next</a></div></div></div>                          		  			    			
+<script type="text/javascript">									
+ $(document).ready(function () {									
+ 	var slider = $('.bxslider').bxSlider({								
+ 	mode: 'vertical',										
+ 	minSlides: 5,											
+ 	pager: false,											
+ 	infiniteLoop: false,									
+ 	hideControlOnEnd: true									
+ });														
+ });									
+</script>	
+</div>															
+
+</div>
+
+		<!-- //leftAside 영역 부분 -->
+
+		<!-- 본문 content 부분 -->
+		<div id="bodyContent">
+			
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+	var commonResultMessage = "null";
+	if(commonResultMessage=="" || commonResultMessage=="null") {
+		commonResultMessage = "null";
+	}
+	var localeKey = "ko";
+</script>
+
+
+
+<script type="text/javascript">
+var popupFormDialog = null; //압축 진행중 Dialog
+var popupFormDialogCompressComplete = null; //압축 완료 Dialog
+
+	//초기 실행
+	function initPage(){
+		displayMessage();	
+	}
+	
+	// 게시글 등록
+	function addBoardContents(){
+		var f = document.courseForm;
+		f.submit();
+	}
+	
+	// 상세보기 페이지 이동
+	function moveBoardView(boardContentsId, boardNo){
+		var f = document.courseForm;
+		f["boardContentsDTO.boardContentsId"].value = boardContentsId;
+		f["boardContentsDTO.boardNo"].value = boardNo;
+		f["cmd"].value = "viewBoardContents";
+		f["gubun"].value = "V";
+		f.submit();
+	}
+	
+	// 게시글 삭제
+	function deleteBoardContents(){
+		var f = document.courseForm;
+		
+		if(confirm("체크된 게시판을 모두 삭제하시겠습니까?\n주의: 게시글을 삭제하면 포함된 답변, 코멘트 모두 삭제됩니다.")){
+			f["cmd"].value = "deleteBoardContents";
+			f.submit();
+		}
+	}
+	
+	// 검색
+	function searchSubmit(){
+		
+		var f = document.courseForm;
+		f["cmd"].value = "viewBoardContentsList";
+		f.submit();
+	}
+	
+	
+	// 게시판의 리스트형 , 펼침형
+	function moveUnFoldList(){
+		
+		var f = document.courseForm;
+		f["cmd"].value  = "viewBoardContentsList";
+		f["type"].value = "U";
+		f.submit();
+	}
+	// 게시판의 리스트형 , 펼침형
+	function moveFoldList(){
+		var f = document.courseForm;
+		f["cmd"].value  = "viewBoardContentsList";
+		f.submit();
+	}
+	
+	//학습목차 이동
+	function viewStudyHome(){
+		var f = document.courseForm;
+		f["cmd"].value  = "viewStudyHome";
+		f["boardInfoDTO.boardInfoGubun"].value = "";
+		f.submit();
+	}
+	
+	function clearPds(){
+		var f = document.courseForm;
+		var boardInfoId = f["boardInfoDTO.boardInfoId"].value;
+		if(confirm("자료실의 모든 게시물이 삭제됩니다.\n초기화 하시겠습니까?")){
+			CourseWork.clearBoardContents(boardInfoId, clearPdsCallback);
+			displayWorkProgress();
+		}
+	}
+	
+	function clearPdsCallback(ProcessResultDTO) {
+		var f = document.courseForm;
+		var courseId = f["courseDTO.courseId"].value;
+		var boardInfoId = f["boardInfoDTO.boardInfoId"].value;
+		var returnMessage	= ProcessResultDTO.returnMessage;
+		alert(returnMessage);
+		closeWorkProgress();
+		searchSubmit();
+	}
+	
+	function addBoardContentsForm(){
+		var f = document.courseForm;
+		f["cmd"].value   = "addBoardContentsForm";
+		f["gubun"].value = "A";
+		f.submit();
+	}
+
+	/********** toggle-Switch 함수 스크립트 **********/
+
+	$(document).ready(function() {
+		var f = document.courseForm;
+		// Iterate over checkboxes
+		$("input[type=checkbox].switch").each(function() {
+		// Insert mark-up for switch
+		$(this).before(
+		'<span class="switch">' +
+		'<span class="mask" /><span class="background" />' +
+		'</span>'
+		);	
+		// Hide checkbox
+		$(this).hide();
+		// Set inital state
+		if (!$(this)[0].checked) {
+		$(this).prev().find(".background").css({left: "-27px"});
+		}
+		
+		}); // End each()// Toggle switch when clicked
+		$("span.switch").click(function() {
+		// If on, slide switch off
+		if ($(this).next()[0].checked) { 
+			
+			$(this).find(".background").animate({left: "-27px"}, 200);
+			f["type"].value = "";
+			moveFoldList();
+		
+		} else { 
+			//moveUnFoldList();
+				
+			$(this).find(".background").animate({left: "0px"}, 200);
+			f["type"].value = "U";
+			moveUnFoldList();
+		}
+		
+		// Toggle state of checkbox
+		$(this).next()[0].checked = !$(this).next()[0].checked;
+		
+		});
+		
+		displayMessage();	
+	}); // End ready()
+	
+</script>
+
+
+<script type="text/javascript">
+//<![CDATA[
+$(document).ready(function() {
+	
+	var f = document.courseForm;
+	
+	var searchKey = f["searchKey"].value;
+	var term = f["searchTxt"].value;
+
+	if(term != null && term != "") {
+		$('.boardTitleNcontent').each(function() {
+			var classs = $(this).attr("class");
+			if(classs.indexOf(searchKey) > -1) {
+				var src_str = $(this).html();
+		    	
+				term = term.replace(/(\s+)/,"(<[^>]+>)*$1(<[^>]+>)*");
+				var pattern = new RegExp("("+term+")", "gi");
+		
+				src_str = src_str.replace(pattern, "<mark>$1</mark>");
+				src_str = src_str.replace(/(<mark>[^<>]*)((<[^>]+>)+)([^<>]*<\/mark>)/,"$1</mark>$2<mark>$4");
+				
+				$(this).html(src_str);
+			}
+	    });
+	}
+});
+//]]>
+
+var btnClickStop = false;
+var btnCompressFormClose = "N";
+//압축 후 zip파일로 다운로드 (일괄다운로드)
+function compressFile() {
+	//$("#downloadButton").click();
+	if(btnClickStop == true){
+		alert("기존 압축과정이 아직 완료되지 않았습니다.\n잠시 후 다시 시도하여 주십시오. ");
+		//btnClickStop = true;
+		return;
+	} else {
+		var fileCount = 0;
+		var fileListSizeArr = document.getElementsByName("fileListSize");
+		
+		for(var i = 0; i < fileListSizeArr.length; i++) {
+			fileCount += parseInt(fileListSizeArr[i].value);
+		}
+		
+		if(fileCount <= 0 ){
+			alert("첨부된 파일이 없습니다.");
+			return;
+		}
+		
+		showCompressForm('','','');		
+		btnCompressFormClose = "N";
+		btnClickStop = true;
+		var f = document.courseForm;
+		var boardInfoDTO 	= new Object();
+		
+		boardInfoDTO.boardInfoId      = f["boardInfoDTO.boardInfoId"].value;
+		
+		CourseWork.compressDownloadAttachFile(boardInfoDTO, compressDownloadCallback);
+	}
+	
+}
+
+//압축 후 zip파일로 다운로드 Callback
+function compressDownloadCallback(ProcessResultDTO) {
+	var reportInfoDTO = ProcessResultDTO.returnDto;
+	// 오류
+	if (ProcessResultDTO.returnResult == -1) {
+		commonResultMessage = "파일 압축하기 중에 오류가 발생하였습니다.";
+		displayMessage();
+		return;
+	}
+	var filePath = reportInfoDTO.filePath;
+	var fileName = reportInfoDTO.fileName;
+
+	filePath = getUrlEncode(filePath);
+	fileName = getUrlEncode(fileName);
+	//closeButton.click();
+	
+	if(btnCompressFormClose == "N"){
+		showCompressComplete(fileName, fileName, filePath);
+	}	
+/*	
+	if(confirm("압축이 완료되었습니다. 다운로드 받으시겠습니까?")){
+		fileDownload(fileName, fileName, filePath);
+	}
+*/	
+	btnClickStop = false;
+	$("#compressBtn").removeAttr("disabled");
+}
+
+//압축 진행창
+function showCompressForm(fileName, fileName, filePath){
+	var f = document.courseForm;		
+	var url = "/Report.do?cmd=showCompressForm&compressFileName="+fileName+"&compressMaskFileName="+fileName+"&compressFilePath="+filePath+"&compressStatus=compressing";
+	   		   
+	 var addContent  = "<div style='-webkit-overflow-scrolling: touch;' ><iframe id='addCoursePopForm' name='showCompressForm' width='100%' height='100%' "
+			+ "frameborder='0' scrolling='no' src='"+url+"'/></div>";
+		popupFormDialog = $(addContent);
+		
+		popupFormDialog.dialog({
+			title: "일괄 다운로드",
+			resizable: false,
+			autoOpen: true,
+			width:'400',
+			height:'180',
+			modal: true,
+			appendTo:"body",
+			open: function(event, ui){
+				$(this).find("iframe").focus();
+			},
+			close: function() {
+				$(this).remove();
+			}
+		});
+}	
+
+//압축 완료창
+function showCompressComplete(fileName, fileName, filePath){
+	var f = document.courseForm;		
+	var url = "/Report.do?cmd=showCompressForm&compressFileName="+fileName+"&compressMaskFileName="+fileName+"&compressFilePath="+filePath+"&compressStatus=complete";
+	   		   
+	 var addContent  = "<div style='-webkit-overflow-scrolling: touch;' ><iframe id='addCoursePopForm' name='showCompressForm' width='100%' height='100%' "
+			+ "frameborder='0' scrolling='no' src='"+url+"'/></div>";
+		popupFormDialogCompressComplete = $(addContent);
+	
+		popupFormDialogCompressComplete.dialog({
+		title: "일괄 다운로드",
+		resizable: false,
+		autoOpen: true,
+		width:'400',
+		height:'180',
+		modal: true,
+		appendTo:"body",
+		open: function(event, ui){
+			$(this).find("iframe").focus();
+		},
+		close: function() {
+			$(this).remove();
+		}
+	});
+}	
+</script>
+
+	<form name="courseForm" method="post" action="https://eclass.kunsan.ac.kr/Course.do">
+	<input type="hidden" name="boardInfoDTO.boardInfoId" value="2026211605005-N">
+	<input type="hidden" name="boardInfoDTO.boardClass" value="notice">
+	<input type="hidden" name="boardContentsDTO.boardContentsId" value="">
+	<input type="hidden" name="boardContentsDTO.boardNo" value="0">
+	<input type="hidden" name="systemCodeDTO.systemCode" value="">
+	<input type="hidden" name="courseDTO.courseId" value="2026211605005">
+	<input type="hidden" name="boardInfoDTO.boardInfoGubun" value="">
+	
+	
+	<input type="hidden" name="mainDTO.parentMenuId" value="menu_00048">
+	<input type="hidden" name="mainDTO.menuId" value="menu_00236">
+	<input type="hidden" name="cmd" value="addBoardContentsForm">
+	<input type="hidden" name="gubun" value="A">
+<!-- 	<input type="hidden" name="type" /> -->
+	<input type="hidden" name="type" value="L">
+	
+	
+	
+	
+	
+	
+	<input type="hidden" name="curPage" value="1">
+	
+	
+	
+	
+	
+	
+	          
+	
+	
+	
+	 
+		<!-- 본문 content 부분 -->
+		<!-- div id="bodyContent"> -->
+		<div id="">
+			<div class="contentTitle">
+					<h2 class="f28">학습 정보</h2>
+						<ul class="location">
+						<li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=viewHome&amp;userDTO.localeKey=ko"><i class="icon-home-color m0">홈으로</i></a></li>
+						<li><a href="javascript:viewStudyHome();">강의실</a></li>
+						<li><i class="icon-arrow-small-black m0"></i></li>
+						<li><a href="javascript:viewStudyHome();">과목가</a></li>
+						<li><i class="icon-arrow-small-black m0"></i></li>
+						<li>학습 정보</li>
+						<li><i class="icon-arrow-small-black m0"></i></li>
+						<li>공지사항</li>
+				</ul>
+			</div>
+
+			<div class="boardTab">
+					<ul>
+						
+							
+								
+								
+									
+								
+								
+									<li class="select">
+								
+								
+								<h3>
+									<a href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&amp;mainDTO.parentMenuId=menu_00048&amp;mainDTO.menuId=menu_00236&amp;courseDTO.courseId=2026211605005&amp;courseDTO.shareCourseId=&amp;boardInfoDTO.boardInfoId=2026211605005-N&amp;boardInfoDTO.boardClass=notice">
+										공지사항
+									</a>
+								</h3>
+								</li>
+								
+							
+								
+								
+									
+								
+								
+								<li>
+								
+								
+								<h3>
+									<a href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&amp;mainDTO.parentMenuId=menu_00048&amp;mainDTO.menuId=menu_00236&amp;courseDTO.courseId=2026211605005&amp;courseDTO.shareCourseId=&amp;boardInfoDTO.boardInfoId=2026211605005-Q&amp;boardInfoDTO.boardClass=qna">
+										질의응답
+									</a>
+								</h3>
+								</li>
+								
+							
+								
+								
+									
+								
+								
+								<li>
+								
+								
+								<h3>
+									<a href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&amp;mainDTO.parentMenuId=menu_00048&amp;mainDTO.menuId=menu_00236&amp;courseDTO.courseId=2026211605005&amp;courseDTO.shareCourseId=&amp;boardInfoDTO.boardInfoId=2026211605005-P&amp;boardInfoDTO.boardClass=pds">
+										강의자료실
+									</a>
+								</h3>
+								</li>
+								
+							
+						
+				
+					</ul>
+			</div>
+
+			<div class="boardOption">
+				<ul>
+					<li><span class="switch"><span class="mask"></span><span class="background" style="left: -27px;"></span></span><input type="checkbox" class="switch" title="선택시 리스트형, 펼침형 목록 변환" style="display: none;"></li>
+					<li><select name="searchKey" class="default" title="선택해주세요" style="display: none;">
+<option value="TITLE">제목</option>
+<option value="BOARD_CONTENTS">내용</option>
+<option value="REG_NAME">작성자 명</option>
+</select><div class="chosen-container chosen-container-single chosen-container-single-nosearch" style="width: 69px;" title="선택해주세요"><a class="chosen-single" tabindex="-1"><span>제목</span><div><b></b></div></a><div class="chosen-drop"><div class="chosen-search"><input type="text" autocomplete="off" readonly=""></div><ul class="chosen-results"></ul></div></div>
+
+</li>
+					<li id="searchbox" class="mr0">
+						<input type="text" name="searchTxt" id="search" maxlength="100" value="" title="검색">
+						<input type="image" name="" src="./국립군산대학교 eClassdd_files/search_btn.png" onclick="javascript:searchSubmit();" alt="search">
+					</li>
+				</ul>
+				<ul class="fr">
+					<li class="mr5">
+						
+						
+					
+					
+						<a class="btn small" href="javascript:viewStudyHome();">
+						<i class="icon-openbook-color"></i>
+						학습목차 </a>
+					</li>
+					
+						<li>
+						</li>
+					
+					
+						<input type="hidden" name="listScale" value="20">
+					
+				</ul>
+				
+			</div>
+			<div id="listBox">
+			
+				<table class="boardListBasic" summary="게시판 리스트입니다.">
+					<caption>게시판 리스트</caption>
+					<thead>
+						<tr class="odd-row">
+							<th class="num first">번 호</th>
+							<th>제 목</th>
+							<th>파 일</th>
+							<th>작성자</th>
+							<th>작성일</th>
+							<th class="last">조회수</th>
+						</tr>
+					</thead>
+					<tbody>
+					
+					
+						
+						
+						
+						
+						
+						
+						
+						
+						
+						
+						
+						
+						
+						
+							
+							
+						
+						
+						
+							
+							<tr class="odd-row">
+								<td class="first">
+									
+									
+									
+									
+										
+										
+											1
+										
+									
+									
+									
+									
+									
+									
+									
+								</td>
+								
+								
+								<td class="textLeft" style="max-width:400px;">
+									<div style="margin-left: 0px;" align="absmiddle" alt="">
+										 
+									</div>
+									<div style="margin-left: 0px;" align="absmiddle" alt="">
+											
+												
+												
+												<a class="clip boardTitleNcontent TITLE_ORIGIN" href="javascript:moveBoardView('BOAD_26100721264928bf38c1', '2');">
+												
+												<font color=""></font>중간고사
+												
+											</a>
+										
+									</div>
+								</td>
+								<td>&nbsp;</td>
+								<td class="boardTitleNcontent REG_NAME">이교수</td>
+								<td>2026-10-07</td>
+								<td class="last">233</td>
+							</tr>
+						
+					
+				</tbody>
+				</table>
+				<input type="hidden" name="fileListSize" value="0">
+				
+				
+				
+				<!-- //본문 content 부분 -->
+				
+				
+				<div class="paginator fullsize" id="paginator3"><table width="100%"><tbody><tr class="paginator_tr odd-row"><td width="100%" class="first last"><span><strong>1</strong></span></td></tr><tr><td colspan="1" class="first last"><div class="scroll_bar"><div class="scroll_trough"></div><div class="scroll_thumb" style="width: 8px; left: 0px;"><div class="scroll_knob"></div></div><div class="current_page_mark" style="width: 100%; left: 0px;"></div></div></td></tr></tbody></table></div>										
+<div class="paginator_pages">1 pages</div>						
+<script type="text/javascript">														
+ pag3 = new Paginator('paginator3', 1, 10, 1, '/Course.do?cmd=viewBoardContentsList&boardInfoDTO.boardInfoId=2026211605005-N&courseDTO.courseId=2026211605005&searchKey=&searchTxt=&listScale=20&mainDTO.parentMenuId=menu_00048&mainDTO.menuId=menu_00236&type=L&curPage=');	
+</script>																			
+
+
+			</div>
+		</div>
+		
+	</form>
+
+		</div>
+	</div>
+	<!-- 본문 종료 -->
+
+	<!-- 하단 bottom 부분 -->
+	
+
+
+
+
+
+
+
+
+
+ 
+<!-- footer 영역 부분 -->
+<div id="footer">
+	<ul class="footerField">
+	<li class="logo">
+		<img src="./국립군산대학교 eClassdd_files/logo_bottom.png" alt="군산대학교 e-class">
+	</li>
+	<li class="copyright">
+		<address style="margin-top: 0; !important">
+					<div><address>(우)54150, 전라북도 군산시 대학로 558(미룡동) / TEL.063) 469-4113~4</address><div>
+					<div>Copyright(c) 2020 Kunsan National University. All rights reserved.<div>
+		</div></div></div></div></address>
+	</li>
+	</ul>
+</div>
+<!-- //footer 영역 부분 -->
+
+
+	
+
+</div>
+
+</body></html>

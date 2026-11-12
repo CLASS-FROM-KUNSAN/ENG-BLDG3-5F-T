@@ -230,8 +230,6 @@ def cmd_eclass_sync(args) -> int:
             menus=cfg.section("eclass.menus"),
             risky=cfg.section("eclass.risky"),
             menu_id_overrides=cfg.section("eclass.menu_ids"),
-            max_file_mb=int(cfg.get("eclass.upload.max_file_mb", 0)),
-            allow_extensions=cfg.get("eclass.upload.allow_extensions", []),
         )
         stats = crawler.run(
             list(cfg.get("eclass.courses", [])),
@@ -251,7 +249,7 @@ def cmd_eclass_sync(args) -> int:
 
 
 def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: bool) -> None:
-    from .release import iter_files, tag_for, upload_many
+    from .release import iter_files, tag_for, upload_filter, upload_many
 
     excluded = {str(m) for m in cfg.get("eclass.upload.exclude_menus", [])}
     from .eclass.urls import MENU_LABELS
@@ -269,6 +267,16 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
         return
 
     files = [p for p in iter_files(root) if not (set(p.parts) & excluded_labels)]
+    files, dropped = upload_filter(
+        files,
+        allow_extensions=cfg.get("eclass.upload.allow_extensions", []),
+        max_file_mb=int(cfg.get("eclass.upload.max_file_mb", 0)),
+    )
+    for path, why in dropped:
+        # 조용히 빼면 사용자는 올라간 줄 압니다. 파일은 로컬에 남습니다.
+        log.info("업로드 제외: %s (%s)", path.name, why)
+    if dropped:
+        log.info("업로드에서 뺀 파일 %d개 — 로컬에는 그대로 있습니다.", len(dropped))
     if not files:
         log.info("새로 올릴 파일이 없습니다.")
         return

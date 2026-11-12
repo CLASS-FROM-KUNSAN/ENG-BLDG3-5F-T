@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import html
 import re
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +26,7 @@ from typing import Any
 from ..logging_setup import get as get_logger
 from ..paths import Layout, safe_name, unique_path
 from ..state import Store, sha256_file, sha256_text
+from . import filedown
 from .browser import EclassBrowser
 from .urls import MENU_LABELS, MENU_LINK_TEXTS, RISKY_MENUS, Site
 
@@ -63,11 +63,32 @@ FILE_ICON = (
     'img[alt*="첨부"], img[src*="file"], img[src*="disk"]'
 )
 
-# 상세 화면의 첨부 링크 후보
+# 첨부 링크 후보. 맨 앞이 이 사이트에서 실제로 쓰는 형태입니다 —
+#   <a class="btn" onclick="fileDown('…','…','…');">교안</a>
+# 나머지 다섯은 다른 화면을 대비한 폴백입니다. 2026-11 덤프의 강의
+# 목록 페이지에서 확인한 결과 폴백은 전부 0개를 잡았고, 첫 줄만
+# 14개(교안 PDF 전부)를 잡았습니다. 'fileDown' 에는 'ownload' 가
+# 들어 있지 않아서 a[onclick*='ownload'] 로는 영영 못 찾습니다.
 ATTACHMENT = (
+    # 게시글 상세: <span onclick="fileDownload('이름','저장명','디렉터리')">
+    # 강의 목록  : <a class="btn" onclick="fileDown('이름','이름','경로')">
+    # 둘은 함수도 인자 뜻도 다릅니다. 태그도 다릅니다 — 상세 쪽은
+    # <a> 가 아니라 <span> 이라서 'a[...]' 로 시작하는 선택자로는
+    # 영원히 못 찾습니다.
+    # 'fileDownload' 는 'fileDown' 을 포함하므로 이 한 줄이 둘 다 잡습니다.
+    # 둘을 따로 적고 순서를 두면, 한 화면에 섞여 있을 때 먼저 걸린 쪽만
+    # 받고 나머지를 조용히 흘립니다(_attachment_locators 는 처음 걸린
+    # 선택자 하나만 돌려줍니다). 어느 함수인지는 filedown.parse 가 가립니다.
+    "[onclick*='fileDown']",
     "a[onclick*='ownload']", "a[href*='ownload']",
     "ul.fileList a", "div.fileBox a", "td.file a", "a.fileDown",
 )
+
+# 강의 목록(/Lesson.do viewLessonContentsList) 구조.
+#   <div id="listBox"><div class="listContent">
+#     <dl class="element"><dt><h4>1. 1주차 … </h4></dt>
+#       <dd><div class="cont"><table class="boardListBasic">…</table></div></dd>
+LESSON_WEEK = "#listBox dl.element"
 
 
 @dataclass
@@ -113,8 +134,6 @@ class Crawler:
         menus: dict[str, bool],
         risky: dict[str, Any] | None = None,
         menu_id_overrides: dict[str, str] | None = None,
-        max_file_mb: int = 0,
-        allow_extensions: Iterable[str] = (),
     ) -> None:
         self.br = browser
         self.site = site
@@ -124,8 +143,6 @@ class Crawler:
         self.menus = dict(menus)
         self.risky = dict(risky or {})
         self.menu_id_overrides = dict(menu_id_overrides or {})
-        self.max_file_bytes = int(max_file_mb) * 1024 * 1024 if max_file_mb else 0
-        self.allow_extensions = {e.lower().lstrip(".") for e in allow_extensions}
         self.stats = Stats()
 
     # -- 메뉴 선택 ---------------------------------------------------
@@ -415,13 +432,69 @@ class Crawler:
         log.info("저장: %s / 학습목차 (%d주차)", course.name, len(weeks))
         return out
 
-    def _allowed_file(self, path: Path) -> bool:
-        if self.allow_extensions and path.suffix.lower().lstrip(".") not in self.allow_extensions:
-            log.info("확장자 제외: %s", path.name)
-            return False
-        if self.max_file_bytes and path.stat().st_size > self.max_file_bytes:
-            log.info("용량 초과로 업로드 대상에서 제외: %s", path.name)
-        return True
+    # -- 강의 목록(교안) ---------------------------------------------
+    # 이 화면이 사용자가 제일 원하는 것 — 주차별 교안 PDF 가 여기 있습니다.
+    # 예전에는 save_page_text 로 보내서 표의 '글자' 만 저장하고 PDF 는
+    # 한 장도 받지 않았습니다. 화면에는 파일 이름이 보이니까 저장된 줄
+    # 알기 쉬운데, 실제로는 목록만 있었습니다.
+    def read_lesson_weeks(self) -> list[dict[str, Any]]:
+        try:
+            return self.br.page.evaluate(
+                """(sel) => Array.from(document.querySelectorAll(sel)).map(dl => {
+                     const h = dl.querySelector('dt h4') || dl.querySelector('dt');
+                     const rows = Array.from(dl.querySelectorAll('table tbody tr'))
+                       .map(tr => Array.from(tr.querySelectorAll('td'))
+                              .map(td => (td.innerText||'').replace(/\\s+/g,' ').trim()))
+                       .filter(cells => cells.length);
+                     return {
+                       title: (h ? h.innerText : '').replace(/\\s+/g,' ').trim(),
+                       rows,
+                     };
+                   })""",
+                LESSON_WEEK,
+            )
+        except Exception as exc:
+            log.warning("강의 목록 읽기 실패: %s", exc)
+            return []
+
+    def crawl_lecture_list(self, course: Course) -> None:
+        weeks = self.read_lesson_weeks()
+        out_dir = self._dir(course, "lecture_list")
+
+        if weeks:
+            lines = [f"# {course.name} - 강의목록", ""]
+            for week in weeks:
+                lines += [f"## {week['title'] or '(제목 없음)'}", ""]
+                for cells in week["rows"]:
+                    lines.append("- " + " | ".join(c for c in cells if c))
+                lines.append("")
+            body = "\n".join(lines).strip()
+            digest = sha256_text(body)
+            state_key = f"page:{course.course_id}:lecture_list"
+            if self.store.data["downloaded"].get(state_key, {}).get("sha256") == digest:
+                self.stats.skipped += 1
+            else:
+                md = out_dir / safe_name("강의목록.md")
+                md.write_text(body + "\n", encoding="utf-8")
+                self.store.mark_downloaded(state_key, path=str(md), digest=digest)
+                self.stats.posts += 1
+        else:
+            # 구조가 바뀌었을 수 있습니다. 표라도 글자로 남겨 둡니다.
+            log.info("%s / 강의목록: 주차 블록을 찾지 못했습니다.", course.name)
+            self.save_page_text(course, "lecture_list")
+
+        files = self._download_attachments(out_dir)
+        log.info("%s / 강의목록: 주차 %d개, 교안 %d개",
+                 course.name, len(weeks), len(files))
+        if weeks and not files:
+            # 받을 게 정말 없을 수도 있지만, 선택자가 어긋나도 똑같이
+            # 조용합니다. 둘을 구분할 수 없으니 기록은 남깁니다.
+            log.warning(
+                "%s / 강의목록: 주차는 %d개인데 받은 교안이 0개입니다. "
+                "교수가 안 올렸거나, 첨부 링크 모양이 바뀐 것입니다.",
+                course.name, len(weeks),
+            )
+        self.store.save()
 
     # -- 게시판 ------------------------------------------------------
     def read_board_rows(self) -> list[dict[str, Any]]:
@@ -665,6 +738,52 @@ class Crawler:
                     continue
         return None
 
+    # 본문이 아니라 오류 페이지를 받아 놓고 성공으로 치지 않도록.
+    _HTMLISH = ("text/html", "application/xhtml")
+
+    def _fetch_filedown(self, args: tuple[str, str, str], dest_dir: Path) -> Path | None:
+        """fileDown(...) 링크를 클릭 대신 주소로 직접 받습니다.
+
+        클릭하면 숨은 iframe 이 그 주소로 이동합니다. 서버가
+        Content-Disposition 을 안 보내면 브라우저는 다운로드가 아니라
+        '표시' 를 하고, 다운로드 이벤트는 오지 않습니다. 그러면 클릭은
+        성공했는데 받은 파일은 없습니다. 주소를 직접 받으면 그 틈이
+        없고, 받기 전에 파일 이름도 알 수 있습니다.
+        """
+        page = self.br.page
+        target = filedown.url(page.url, args)
+        name = safe_name(filedown.filename(args), max_len=120) or "첨부"
+        try:
+            resp = page.request.get(target, timeout=self.br.timeout_ms)
+        except Exception as exc:
+            log.warning("첨부 요청 실패(%s): %s", name, exc)
+            return None
+        if not resp.ok:
+            log.warning("첨부 응답 %s (%s)", resp.status, name)
+            return None
+
+        ctype = (resp.headers.get("content-type") or "").lower()
+        body = resp.body()
+        if not body:
+            log.warning("첨부가 0바이트입니다: %s", name)
+            return None
+        # 세션이 끊기면 서버가 파일 대신 로그인 화면(HTML)을 줍니다.
+        # 그걸 .pdf 로 저장하면 사용자는 깨진 파일 14개를 받습니다.
+        if any(h in ctype for h in self._HTMLISH) and not name.lower().endswith(
+            (".htm", ".html")
+        ):
+            log.error(
+                "첨부 대신 HTML 이 왔습니다(%s, content-type=%s). "
+                "세션이 끊겼거나 권한이 없는 파일입니다.", name, ctype,
+            )
+            self.stats.errors.append(f"첨부를 받지 못했습니다(HTML 응답): {name}")
+            return None
+
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        out = unique_path(dest_dir / name)
+        out.write_bytes(body)
+        return out
+
     def _download_attachments(self, dest_dir: Path) -> list[Path]:
         """상세 화면의 첨부를 전부 받습니다."""
         saved: list[Path] = []
@@ -681,11 +800,24 @@ class Crawler:
                 text = ""
             if text in SKIP_LINK_TEXTS:
                 continue
-            with self.br.capture_download(dest_dir) as got:
-                try:
-                    item.click()
-                except Exception as exc:
-                    log.debug("첨부 클릭 실패(%s): %s", text or f"#{i}", exc)
+
+            got: list[Path] = []
+            try:
+                args = filedown.parse(item.get_attribute("onclick") or "")
+            except Exception:
+                args = None
+            if args:
+                one = self._fetch_filedown(args, dest_dir)
+                if one is not None:
+                    got = [one]
+            else:
+                with self.br.capture_download(dest_dir) as captured:
+                    try:
+                        item.click()
+                    except Exception as exc:
+                        log.debug("첨부 클릭 실패(%s): %s", text or f"#{i}", exc)
+                got = list(captured)
+
             for path in got:
                 digest = sha256_file(path)
                 if self.store.is_downloaded(f"file:{digest}"):
@@ -693,7 +825,6 @@ class Crawler:
                     self.stats.skipped += 1
                     continue
                 self.store.mark_downloaded(f"file:{digest}", path=str(path), digest=digest)
-                self._allowed_file(path)
                 saved.append(path)
                 self.stats.files += 1
         return saved
@@ -718,6 +849,8 @@ class Crawler:
                     self.crawl_board(course, key)
                 elif key == "curriculum":
                     self.save_curriculum(course)
+                elif key == "lecture_list":
+                    self.crawl_lecture_list(course)
                 else:
                     self.save_page_text(course, key)
             except Exception as exc:

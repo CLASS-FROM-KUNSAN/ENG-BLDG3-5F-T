@@ -17,7 +17,7 @@ import mimetypes
 import re
 import time
 import unicodedata
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -546,6 +546,43 @@ def upload_many(
             on_done(path, result)
         results.append(result)
     return results
+
+
+def upload_filter(
+    files: Iterable[Path],
+    *,
+    allow_extensions: Iterable[str] = (),
+    max_file_mb: int = 0,
+) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """업로드할 것과 뺄 것을 가릅니다. (올릴 목록, [(파일, 이유)])
+
+    설정의 eclass.upload.allow_extensions / max_file_mb 가 여기서
+    처음으로 실제 효과를 냅니다. 전에는 수집기가 두 값을 받아 로그만
+    찍고 결과를 버려서, 화이트리스트를 적어도 전부 올라갔고 용량
+    제한도 지켜지지 않았습니다.
+
+    뺀 파일은 지우지 않습니다. 로컬에는 남고 릴리스에만 안 올라갑니다.
+    """
+    allow = {str(e).lower().lstrip(".") for e in allow_extensions if str(e).strip()}
+    limit = int(max_file_mb) * 1024 * 1024 if max_file_mb else 0
+
+    keep: list[Path] = []
+    dropped: list[tuple[Path, str]] = []
+    for path in files:
+        ext = path.suffix.lower().lstrip(".")
+        if allow and ext not in allow:
+            dropped.append((path, f"확장자 '{ext or '없음'}' 가 허용 목록에 없음"))
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            dropped.append((path, f"크기를 읽지 못함: {exc}"))
+            continue
+        if limit and size > limit:
+            dropped.append((path, f"{size / 1024 / 1024:.1f}MB > 제한 {max_file_mb}MB"))
+            continue
+        keep.append(path)
+    return keep, dropped
 
 
 def iter_files(root: Path, exclude_dirs: set[str] | None = None) -> Iterator[Path]:
