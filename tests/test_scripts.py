@@ -115,3 +115,22 @@ def test_every_bat_sets_up_the_common_environment(path: Path):
         pytest.skip("공통 파일 자신")
     text = path.read_text(encoding="utf-8")
     assert "_common.bat" in text, f"{path.name}: _common.bat 을 부르지 않습니다"
+
+
+# --- 문서 링크 -----------------------------------------------------
+# 마크다운 링크는 어떤 테스트도 안 잡는 부류입니다. 파일 이름을 바꾸거나
+# 문서를 옮기면 README 의 링크가 조용히 죽습니다.
+def test_every_markdown_link_to_a_repo_file_resolves():
+    import re
+
+    root = Path(__file__).resolve().parents[1]
+    bad = []
+    for md in sorted(root.glob("*.md")) + sorted((root / "docs").glob("*.md")):
+        text = md.read_text(encoding="utf-8")
+        for target in re.findall(r"\]\((?!https?:|#)([^)#\s]+)", text):
+            if (md.parent / target).resolve().exists():
+                continue
+            if (root / target).exists():
+                continue
+            bad.append(f"{md.relative_to(root)} -> {target}")
+    assert not bad, "깨진 문서 링크:\n  " + "\n  ".join(bad)

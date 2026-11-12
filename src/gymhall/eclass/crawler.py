@@ -250,9 +250,14 @@ class Attachments:
 
     saved: list[Path] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
-    # 내용이 같아 건너뛴 것. saved 에 안 들어가므로, 이게 없으면
-    # 두 번째 실행에서 '하나도 못 받았다' 와 구별이 안 됩니다.
-    already: int = 0
+    # 내용이 같은 파일을 이미 받아 둬서 건너뛴 수. saved 에는 안
+    # 들어갑니다. 이걸 안 세면 두 번째 실행부터 '교안 0개' 와
+    # '이미 다 받음' 이 똑같이 0 으로 보입니다.
+    #
+    # stats.skipped 는 실행 전체 누적(다른 메뉴 포함)이고, 이쪽은
+    # 이 페이지·이 호출 한정입니다. 판정은 반드시 지역 카운터로
+    # 하세요 — stats.skipped 로 판정하면 다른 메뉴의 수가 섞입니다.
+    known: int = 0
     # 화면에 있던 누를 만한 것의 수. 0 이면 '첨부가 애초에 없는 화면'
     # 이고, 0 이 아닌데 아무것도 못 받았으면 그때가 진짜 문제입니다.
     candidates: int = 0
@@ -262,14 +267,9 @@ class Attachments:
         return not self.failed
 
     @property
-    def nothing_to_get(self) -> bool:
-        """이 화면에는 받을 것이 애초에 없었습니다."""
-        return self.candidates == 0
-
-    @property
     def got_nothing_new(self) -> bool:
         """후보는 있었는데 새로 받은 것도, 이미 받은 것도 없습니다."""
-        return bool(self.candidates) and not self.saved and not self.already
+        return bool(self.candidates) and not self.saved and not self.known
 
     def __len__(self) -> int:         # 기존 len(files) 호출부 호환
         return len(self.saved)
@@ -749,38 +749,56 @@ class Crawler:
             self.save_page_text(course, "lecture_list")
 
         files = self._download_attachments(out_dir)
-        log.info("%s / 강의목록: 주차 %d개, 교안 %d개%s",
-                 course.name, len(weeks), len(files),
-                 f" (이미 받은 것 {files.already}개)" if files.already else "")
+        # 강의 항목 수. **첨부 선택자와 다른 경로**로 읽습니다.
+        # 이게 핵심입니다 — 후보 수(files.candidates)만 보면
+        # _attachment_locators 가 통째로 고장나도 "받을 게 없는
+        # 과목" 으로 조용히 분류됩니다. 항목이 있는데 후보가 0 이면
+        # 그때가 선택자 고장입니다.
+        items = sum(len(w.get("rows") or []) for w in weeks)
+
+        # 로그는 '이미 받음' 이 먼저 보여야 합니다. "교안 0개" 가
+        # 앞에 오면 두 번째 실행마다 사용자가 선택자 고장으로
+        # 오해합니다.
+        if not files.saved and files.known:
+            log.info("%s / 강의목록: 주차 %d개, 항목 %d개, 교안 %d개를 "
+                     "이미 받아 뒀습니다(이번에 새로 받은 것 없음).",
+                     course.name, len(weeks), items, files.known)
+        else:
+            log.info("%s / 강의목록: 주차 %d개, 항목 %d개, 교안 %d개"
+                     "(새로 %d, 이미 %d)",
+                     course.name, len(weeks), items,
+                     len(files) + files.known, len(files), files.known)
+
         if files.failed:
             msg = (f"{course.name}/강의목록: 교안 {len(files.failed)}개를 "
                    f"받지 못했습니다 ({', '.join(files.failed[:3])})")
             log.error("%s", msg)
             self.stats.errors.append(msg)
 
-        # '교안 0개' 는 세 가지가 섞여 있습니다. 2026-11-13 수집에서
-        # 7과목이 이 경고를 냈는데, 확인해 보니 **전부 정상**이었습니다
-        # (교안을 쓰지 않는 과목). 정상이 매번 경고로 뜨면 진짜 고장이
-        # 그 사이에 묻힙니다.
-        #
-        # 게다가 이미 받은 파일은 내용 해시가 같아 saved 에서 빠집니다.
-        # 그래서 **두 번째 sync 부터는 멀쩡히 받아 둔 과목도** "교안
-        # 0개" 로 찍혔습니다. 제가 넣은 경고가 그대로 거짓이었습니다.
-        if not weeks or files.saved or files.failed:
+        # '교안 0개' 는 여러 경우가 섞여 있습니다. 2026-11-13 수집에서
+        # 7과목이 이 경고를 냈는데 **전부 정상**이었습니다. 정상이 매번
+        # 경고로 뜨면 진짜 고장이 그 사이에 묻힙니다.
+        got_any = bool(files.saved) or bool(files.known) or bool(files.failed)
+        if not weeks or got_any:
             pass
-        elif files.nothing_to_get:
-            # 화면에 누를 것이 아예 없습니다. 교안을 안 쓰는 과목입니다.
-            log.info("%s / 강의목록: 교안이 올라온 주차가 없습니다(정상).",
-                     course.name)
-        elif files.already:
-            log.info("%s / 강의목록: 교안 %d개는 이미 받아 뒀습니다.",
-                     course.name, files.already)
+        elif items == 0:
+            # 주차 틀만 있고 강의 항목이 한 줄도 없습니다. 교수가
+            # 강의목록을 안 쓰는 과목입니다(9과목 중 7과목).
+            log.info("%s / 강의목록: 주차 %d개에 강의 항목이 하나도 "
+                     "없습니다. 받을 교안이 없습니다(정상).",
+                     course.name, len(weeks))
         else:
-            # 후보는 있는데 하나도 못 받았습니다. 이때가 진짜 문제입니다.
+            # 항목은 있는데 하나도 못 받았습니다. 교안 없는 강의일
+            # 수도 있고 선택자가 어긋난 것일 수도 있습니다.
+            #
+            # "교안" 이라는 글자로는 가르지 않습니다 — 그 표시가 바뀌면
+            # 진짜 고장이 조용해집니다. 대신 화면에 무엇이 있었는지를
+            # 남겨 다음 실행 로그가 답을 주게 합니다.
             log.warning(
-                "%s / 강의목록: 누를 것이 %d개 있는데 받은 교안이 0개입니다. "
-                "첨부 링크 모양이 바뀌었을 수 있습니다.",
-                course.name, files.candidates,
+                "%s / 강의목록: 강의 항목 %d개가 있는데 교안을 하나도 "
+                "찾지 못했습니다(화면의 첨부 후보 %d개). 교안 없는 "
+                "강의이거나, 첨부 링크 모양이 바뀐 것입니다.",
+                course.name, items, files.candidates,
             )
             # 읽는 법:
             #   fileDown=0, onclick=0   페이지가 안 열렸거나 다른 화면
@@ -1174,7 +1192,7 @@ class Crawler:
         # saved 에서 빠지므로, 미완료로 남아 재시도되는 글은 매번
         # "링크를 찾지 못했습니다" 가 되어 **영원히** 완료되지 않습니다.
         # (같은 파일이 강의목록에도 걸려 있으면 첫 실행에도 납니다.)
-        got_something = att.saved or att.already
+        got_something = att.saved or att.known
         if expected_file and not got_something and not missing:
             # 원인을 두 갈래로 갈라 적습니다. 섞어 놓으면 다음 사람이
             # 선택자만 들여다보다 하루를 씁니다.
@@ -1494,7 +1512,7 @@ class Crawler:
                 if self.store.is_downloaded(f"file:{digest}"):
                     path.unlink(missing_ok=True)
                     self.stats.skipped += 1
-                    out.already += 1
+                    out.known += 1
                     continue
                 self.store.mark_downloaded(f"file:{digest}", path=str(path), digest=digest)
                 saved.append(path)

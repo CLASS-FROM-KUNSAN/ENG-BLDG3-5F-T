@@ -607,47 +607,78 @@ def test_a_successful_download_reports_no_failure(lesson, tmp_path):
 #
 # "교수가 안 올렸다" 와 "선택자가 어긋났다" 는 겉모습이 똑같습니다.
 # 덤프가 없으면 영영 구분할 수 없습니다.
-def test_a_course_without_handouts_is_not_a_warning(lesson, monkeypatch, caplog):
-    """교안을 안 쓰는 과목이 정상입니다.
+def _warnings(caplog):
+    return [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
 
-    2026-11-13 수집에서 이 경고가 7과목에 떴는데 확인해 보니
-    **전부 정상**이었습니다. 정상이 매번 경고로 뜨면 진짜 고장이
-    그 사이에 묻힙니다.
+
+def test_weeks_without_any_item_are_not_a_warning(lesson, monkeypatch, caplog):
+    """교수가 강의목록을 안 쓰는 과목. 받을 게 없는 것이 정상입니다.
+
+    2026-11-13 실기 경고 7건이 **전부** 이 경우였습니다. 정상이 매번
+    경고로 뜨면 진짜 고장이 그 사이에 묻힙니다.
     """
-    monkeypatch.setattr(lesson, "_download_attachments",
-                        lambda d: C.Attachments(candidates=0))
+    weeks = [{"title": f"{i}. {i}주차", "rows": []} for i in range(1, 17)]
+    monkeypatch.setattr(lesson, "read_lesson_weeks", lambda: weeks)
+    monkeypatch.setattr(lesson, "_download_attachments", lambda _d: C.Attachments())
     with caplog.at_level("INFO", logger="gymhall"):
         lesson.crawl_lecture_list(C.Course("x", "영어2_23", "이교수"))
-    assert "교안이 올라온 주차가 없습니다" in caplog.text, caplog.text
-    assert "이 화면에 있는 것들" not in caplog.text, "정상인데 덤프를 찍었습니다"
-    assert not any(r.levelname == "WARNING" for r in caplog.records), caplog.text
+    assert _warnings(caplog) == [], _warnings(caplog)
+    assert any("강의 항목이 하나도" in r.getMessage() for r in caplog.records)
 
 
-def test_already_downloaded_is_not_a_warning(lesson, monkeypatch, caplog):
-    """두 번째 sync 입니다. 내용 해시가 같아 saved 에서 빠집니다.
-
-    이걸 구분 안 하면 **멀쩡히 받아 둔 과목이 매 실행 경고**를 냅니다.
-    """
-    monkeypatch.setattr(lesson, "_download_attachments",
-                        lambda d: C.Attachments(candidates=14, already=14))
+def test_a_second_run_does_not_cry_zero_handouts(lesson, caplog):
+    """CI 는 상태 파일을 이어 가므로 사실상 매 실행이 '두 번째' 입니다."""
+    SERVER_MODE["mode"] = "pdf"
+    course = C.Course("2026211605005", "기초웹프로그래밍_05", "이교수")
+    lesson.crawl_lecture_list(course)
+    caplog.clear()
     with caplog.at_level("INFO", logger="gymhall"):
-        lesson.crawl_lecture_list(C.Course("x", "기초웹프로그래밍_05", "이교수"))
-    assert "이미 받아 뒀습니다" in caplog.text, caplog.text
-    assert "이 화면에 있는 것들" not in caplog.text
-    assert not any(r.levelname == "WARNING" for r in caplog.records), caplog.text
+        lesson.crawl_lecture_list(course)
+    assert _warnings(caplog) == [], _warnings(caplog)
+    assert any("이미 받아 뒀습니다" in r.getMessage() for r in caplog.records), \
+        "이미 받은 교안을 세지 않았습니다"
 
 
-def test_candidates_but_nothing_got_is_the_real_problem(lesson, monkeypatch, caplog):
-    """누를 것은 있는데 하나도 못 받았습니다. 이때만 경고 + 덤프."""
-    monkeypatch.setattr(lesson, "_download_attachments",
-                        lambda d: C.Attachments(candidates=14))
-    with caplog.at_level("WARNING", logger="gymhall"):
-        lesson.crawl_lecture_list(C.Course("x", "생명과학의이해_01", "이교수"))
-    assert "누를 것이 14개" in caplog.text, caplog.text
-    assert "이 화면에 있는 것들" in caplog.text, (
-        "진짜 문제인데 단서를 안 남겼습니다 — 다음 실행에서도 원인을 못 가립니다"
+def test_the_second_run_log_does_not_lead_with_zero(lesson, caplog):
+    """'교안 0개' 가 앞에 오면 매번 선택자 고장으로 오해합니다."""
+    SERVER_MODE["mode"] = "pdf"
+    course = C.Course("2026211605005", "기초웹프로그래밍_05", "이교수")
+    lesson.crawl_lecture_list(course)
+    caplog.clear()
+    with caplog.at_level("INFO", logger="gymhall"):
+        lesson.crawl_lecture_list(course)
+    line = next(r.getMessage() for r in caplog.records if "강의목록" in r.getMessage())
+    assert "교안 0개" not in line, f"0 이 앞에 왔습니다: {line}"
+    assert "14개를 이미 받아" in line, line
+
+
+def test_items_without_any_handout_still_warn_with_what_was_on_screen(
+        lesson, monkeypatch, caplog):
+    """항목은 있는데 첨부를 못 찾으면 경고 — 선택자 고장과 같은 모양입니다."""
+    monkeypatch.setattr(lesson, "_download_attachments", lambda _d: C.Attachments())
+    with caplog.at_level("INFO", logger="gymhall"):
+        lesson.crawl_lecture_list(C.Course("2026211605005", "과목가", "이교수"))
+    w = _warnings(caplog)
+    assert any("강의 항목 15개" in m and "교안을 하나도" in m for m in w), w
+    assert any("이 화면에 있는 것들" in m for m in w), w
+    assert any("[프레임" in m for m in w), w
+
+
+def test_a_broken_attachment_selector_still_warns(lesson, monkeypatch, caplog):
+    """후보 수만 보면 선택자가 통째로 고장나도 '받을 게 없는 과목' 이 됩니다.
+
+    항목 수는 read_lesson_weeks 가 읽고 후보 수는 _attachment_locators
+    가 읽습니다. **경로가 다르기 때문에** 하나가 고장나도 다른 하나가
+    알려 줍니다. 이 테스트가 그 안전망입니다.
+    """
+    monkeypatch.setattr(lesson, "_attachment_locators", lambda: None)
+    with caplog.at_level("INFO", logger="gymhall"):
+        lesson.crawl_lecture_list(C.Course("2026211605005", "과목가", "이교수"))
+    w = _warnings(caplog)
+    assert any("교안을 하나도" in m for m in w), (
+        "첨부 선택자가 통째로 고장났는데 조용히 '정상' 으로 분류했습니다"
     )
-    assert "[프레임" in caplog.text
+    assert any("첨부 후보 0개" in m for m in w), w
 
 
 def test_handouts_found_means_no_diagnostic_noise(lesson, caplog):
@@ -672,21 +703,16 @@ def test_failed_handouts_are_reported_as_errors(lesson, monkeypatch):
 
 # --- 집계가 실제로 채워지는가 (연결부) ---------------------------------
 def test_already_downloaded_files_are_counted(lesson, tmp_path):
-    """두 번 받으면 두 번째는 already 로 세야 합니다.
-
-    가짜 Attachments 로는 안 잡힙니다. 진짜 _download_attachments 를
-    두 번 돌립니다.
-    """
+    """가짜 Attachments 로는 안 잡힙니다. 진짜로 두 번 돌립니다."""
     SERVER_MODE["mode"] = "pdf"
     first = lesson._download_attachments(tmp_path / "a")
-    assert len(first.saved) == 14 and first.already == 0
+    assert len(first.saved) == 14 and first.known == 0
     assert first.candidates == 14
 
     second = lesson._download_attachments(tmp_path / "b")
     assert second.saved == [], "같은 파일을 또 받았습니다"
-    assert second.already == 14, second
+    assert second.known == 14, second
     assert second.candidates == 14, "후보 수는 그대로여야 합니다"
-    assert not second.nothing_to_get and not second.got_nothing_new
 
 
 def test_a_page_without_attachments_reports_zero_candidates(browser, server, tmp_path):
@@ -700,7 +726,6 @@ def test_a_page_without_attachments_reports_zero_candidates(browser, server, tmp
         c = C.Crawler(_Shim(pg), Site(), Layout(tmp_path),
                       Store.open(tmp_path / "s.json"), term="2026-2", menus={})
         got = c._download_attachments(tmp_path / "att")
-        assert got.candidates == 0 and got.nothing_to_get
-        assert not got.got_nothing_new, "후보가 0이면 '못 받았다' 가 아닙니다"
+        assert got.candidates == 0 and got.known == 0
     finally:
         pg.close()

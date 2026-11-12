@@ -462,7 +462,7 @@ def test_an_already_downloaded_attachment_completes_the_post(tmp_path):
     c = _c(tmp_path)
     md = tmp_path / "a.md"
     md.write_text("x", encoding="utf-8")
-    att = Attachments(saved=[], failed=[], already=1, candidates=1)
+    att = Attachments(saved=[], failed=[], known=1, candidates=1)
     c._finish_post("KEY-ALREADY", md, att, expected_file=True,
                    what="공지", extra={})
     assert c.store.is_downloaded("KEY-ALREADY"), (
