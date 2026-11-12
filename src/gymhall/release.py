@@ -268,6 +268,45 @@ class ReleaseUploader:
         raise ReleaseError(f"재시도 {self.retry_count}회 모두 실패: {last_exc}")
 
     # -- 릴리스 -------------------------------------------------------
+    @property
+    def slug(self) -> str:
+        return f"{self.owner}/{self.repo}"
+
+    def check_access(self) -> None:
+        """올리기 전에 레포에 닿는지 봅니다.
+
+        레포가 없을 때와 권한이 없을 때를 구분해서 알려 줍니다.
+        구분하지 않으면 사용자는 'POST ... -> 404' 만 보고 무엇을
+        고쳐야 할지 모릅니다. 새 학기에 과목 레포를 안 만들었을 때
+        반드시 걸리는 길입니다.
+        """
+        if self.dry_run:
+            return
+
+        url = f"{API}/repos/{self.owner}/{self.repo}"
+        try:
+            resp = self.session.get(url, timeout=30)
+        except Exception as exc:
+            raise ReleaseError(f"{self.slug}: GitHub 에 닿지 못했습니다 - {exc}") from exc
+        if resp.status_code == 200:
+            if not resp.json().get("permissions", {}).get("push", True):
+                raise ReleaseError(
+                    f"{self.slug}: 읽기만 됩니다. 토큰에 이 레포 쓰기 권한이 없습니다."
+                )
+            return
+        if resp.status_code == 404:
+            raise ReleaseError(
+                f"{self.slug}: 레포가 없거나 토큰이 볼 수 없습니다.\n"
+                "  - 레포를 아직 안 만들었다면 먼저 만드세요(과목 하나당 레포 하나).\n"
+                "  - 조직 레포라면 토큰이 그 조직에 허용돼 있어야 합니다."
+            )
+        if resp.status_code in (401, 403):
+            raise ReleaseError(
+                f"{self.slug}: 토큰이 거절됐습니다({resp.status_code}). "
+                "만료됐거나 권한 범위가 모자랍니다."
+            )
+        raise ReleaseError(f"{self.slug}: 확인 실패 {resp.status_code}")
+
     def get_or_create_release(self, tag: str, *, name: str | None = None,
                               body: str | None = None) -> dict[str, Any]:
         if tag in self._release_cache:
@@ -564,7 +603,8 @@ def upload_many(
         taken[target] = path
 
         digest = sha256_file(path)
-        if store is not None and store.is_uploaded(digest):
+        repo_slug = getattr(uploader, "slug", "")
+        if store is not None and store.is_uploaded(digest, repo_slug):
             log.info("건너뜀(이미 업로드됨): %s", rel or path.name)
             continue
         try:
@@ -574,7 +614,7 @@ def upload_many(
             continue
         if store is not None:
             store.mark_uploaded(
-                digest, tag=tag,
+                digest, tag=tag, repo=repo_slug,
                 asset_name=result["assets"][0].get("name", "") if result["assets"] else "",
                 size=path.stat().st_size,
             )
