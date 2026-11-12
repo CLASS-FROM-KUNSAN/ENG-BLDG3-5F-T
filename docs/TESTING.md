@@ -425,7 +425,8 @@ preview 전용인 데다 `subprocess(text=True)` 는 안 봅니다.
 
 | 코드 | 왜 못 잡나 | 어떻게 확인하나 |
 |---|---|---|
-| `monitors._win_monitors` 의 `SetProcessDPIAware()` | 고DPI Windows 에서만 좌표가 달라집니다. 호출을 지워도 어떤 유닛 테스트도 안 빨개집니다. | 배율 200% PC 에서 `devices` 출력이 실제 해상도(예: 2880×1800)와 같은지. 2026-11-13 수동 확인 완료. Windows CI 를 넣으면 자동화 가능합니다. |
+| `monitors._win_monitors` 의 `SetProcessDPIAware()` | 고DPI Windows 에서만 좌표가 달라집니다. 호출을 지워도 어떤 유닛 테스트도 안 빨개집니다. CI 러너는 배율 100% 라 Windows CI 로도 못 잡습니다 — DPI-aware 여부가 결과에 영향이 없어 둘 다 통과합니다. | 배율 200% PC 에서 `devices` 출력이 실제 해상도(예: 2880×1800)와 같은지. **2026-11-13 수동 확인 완료.** |
+| `video.win_input_args` 의 ddagrab `output_idx` | `primary_first()` 는 "주 모니터 먼저" 로 번호를 다시 매기고, ddagrab 의 `output_idx` 는 그래픽 드라이버가 정한 D3D11 출력 순서입니다. 둘이 같다는 근거가 없습니다. **모니터가 하나면 둘 다 0 이라 차이가 안 납니다** — 1대 PC 에서는 원리적으로 검증 불가. 지금 테스트는 "번호 − 1" 이라는 가정을 그대로 확인할 뿐입니다. | **모니터 2대 PC 에서 `backend = "ddagrab"`, `monitor = 2` 로 실측.** 그때까지 `ddagrab` + `monitor > 0` + 화면 2대 이상이면 런타임에 경고를 찍습니다. 기본값 `gdigrab` 은 좌표로 잘라내므로 이 문제가 없습니다. |
 
 `_win_monitors` 의 나머지(EnumDisplayMonitors 호출, MONITORINFO 해석)도
 같은 부류지만, 정렬·번호 매기기는 `primary_first()` 로 빼서 어느

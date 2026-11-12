@@ -342,3 +342,31 @@ def test_watch_mode_gets_no_pre_roll_either():
     from gymhall import cli
 
     assert "video_not_before" not in inspect.getsource(cli.cmd_record_watch)
+
+
+# --- ddagrab 화면 번호는 믿을 수 없습니다 -----------------------------
+# primary_first() 는 "주 모니터 먼저" 로 번호를 다시 매기고, ddagrab 의
+# output_idx 는 그래픽 드라이버가 정한 D3D11 출력 순서입니다. 둘이
+# 같다는 근거가 없습니다. 모니터가 하나면 둘 다 0 이라 차이가 안 나서
+# 1대 PC 에서는 원리적으로 검증할 수 없습니다.
+#
+# 그래서 "맞는지" 가 아니라 "사용자에게 알리는지" 를 검사합니다.
+def test_ddagrab_warns_when_a_monitor_number_may_not_match(caplog):
+    with caplog.at_level("WARNING", logger="gymhall"):
+        cmd([mon(1, primary=True), mon(2, x=1920)], backend="ddagrab", monitor=2)
+    assert "드라이버가 정한 순서" in caplog.text, caplog.text
+    assert "gdigrab" in caplog.text, "대안을 안 알려 줍니다"
+
+
+def test_a_single_monitor_needs_no_such_warning(caplog):
+    """화면이 하나면 번호가 0 하나뿐이라 틀릴 수가 없습니다."""
+    with caplog.at_level("WARNING", logger="gymhall"):
+        cmd([mon(1, primary=True)], backend="ddagrab", monitor=1)
+    assert "드라이버가 정한 순서" not in caplog.text
+
+
+def test_gdigrab_never_warns_about_driver_order(caplog):
+    """gdigrab 은 좌표로 잘라내므로 이 문제가 없습니다."""
+    with caplog.at_level("WARNING", logger="gymhall"):
+        cmd([mon(1, primary=True), mon(2, x=1920)], backend="gdigrab", monitor=2)
+    assert "드라이버가 정한 순서" not in caplog.text
