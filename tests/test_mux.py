@@ -22,7 +22,12 @@ def _probe(path, entries):
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", entries,
          "-of", "csv=p=0", str(path)],
-        capture_output=True, text=True, check=True,
+        # encoding 을 안 적으면 Windows 가 로캘(한글 PC 는 cp949)로
+        # 디코드합니다. ffprobe 출력에 cp949 로 못 읽는 바이트가 섞이면
+        # UnicodeDecodeError 로 테스트가 죽습니다 — 제품 버그가 아니라
+        # 테스트 버그이고, 리눅스 CI 에서는 영영 안 보입니다.
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=True,
     ).stdout
     return [line for line in out.strip().splitlines() if line]
 

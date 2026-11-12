@@ -194,3 +194,110 @@ def test_actions_error_is_quiet_outside_actions(monkeypatch, capsys):
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     cli._actions_error("제목", "내용")
     assert capsys.readouterr().out == ""
+
+
+# --- U3: 이름 충돌도 실패입니다 ----------------------------------------
+# 2026-11-12 에 16개 중 14개가 사라진 원인이 에셋 이름 충돌이었습니다.
+#
+# 주의: _upload_eclass 안에서는 **자연적으로 충돌이 안 납니다.** 에셋
+# 이름이 최상위 폴더 이름(= zip 이름)에서 나오는데, 같은 실행에서 두
+# 폴더가 같은 이름일 수 없기 때문입니다. 그래서 blocked 합계의
+# collision 항은 지금 도달 불가 방어입니다.
+#
+# 도달 불가라고 빼면 안 됩니다 — upload_many 는 cmd_upload(임의
+# 폴더 업로드)도 씁니다. 거기서는 서로 다른 하위 폴더의 같은 이름
+# 파일이 실제로 겹칩니다. 그리고 zip 묶는 방식이 바뀌면 여기서도
+# 납니다. 그때 조용히 0 으로 끝나면 안 됩니다.
+#
+# 그래서 '자연 발생' 대신 tally 를 직접 채워 **판정**을 검사합니다.
+def test_a_name_collision_alone_makes_the_run_fail(harness, capsys, monkeypatch):
+    from gymhall import release as real_release
+
+    run, _ = harness
+
+    def _collide(uploader, files, tag, **kw):
+        tally = kw.get("tally")
+        if tally is not None:
+            tally["collision"] = tally.get("collision", 0) + 1
+        return []
+
+    monkeypatch.setattr(real_release, "upload_many", _collide)
+    assert run() == 1, "이름이 겹쳐 하나도 안 올라갔는데 성공으로 끝났습니다"
+    out = capsys.readouterr().out
+    assert "::error" in out and "이름충돌 1" in out, out
+
+
+def test_collisions_are_not_confused_with_duplicates(harness, capsys, monkeypatch):
+    """'이미 올라가 있어서 건너뜀' 은 실패가 아닙니다."""
+    from gymhall import release as real_release
+
+    run, _ = harness
+
+    def _all_dupes(uploader, files, tag, **kw):
+        tally = kw.get("tally")
+        if tally is not None:
+            tally["skipped"] = tally.get("skipped", 0) + len(files)
+        return []
+
+    monkeypatch.setattr(real_release, "upload_many", _all_dupes)
+    assert run() == 0, "전부 중복인데 실패로 끝났습니다"
+    assert "::error" not in capsys.readouterr().out
+
+
+# --- cmd_upload 도 같은 자리입니다 -------------------------------------
+# 변이 세트가 eclass 경로만 봐서 이쪽은 안 걸렸습니다. 전부 실패해도
+# "완료 0건" 을 찍고 종료 코드 0 이었습니다.
+@pytest.fixture
+def upload_cmd(tmp_path, monkeypatch):
+    from gymhall import cli
+    from gymhall.paths import Layout
+
+    src = tmp_path / "자료"
+    src.mkdir()
+    (src / "a.pdf").write_bytes(b"%PDF a")
+    (src / "b.pdf").write_bytes(b"%PDF b")
+
+    class Cfg:
+        machine_label = "pc"
+        data_dir = tmp_path
+
+        def get(self, key, default=None):
+            return default
+
+        def section(self, _k):
+            return {}
+
+    state = {"fail": False}
+
+    class FakeUploader:
+        slug = "owner/repo"
+
+        def upload(self, path, tag, *, prefix="", rel_path=None):
+            if state["fail"]:
+                raise R.ReleaseError("403")
+            return {"assets": [{"name": Path(path).name}]}
+
+    monkeypatch.setattr(cli, "_load", lambda _a: (Cfg(), Layout(tmp_path)))
+    monkeypatch.setattr(cli, "_uploader", lambda *a, **k: FakeUploader())
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    class _Args:
+        path = str(src)
+        tag = "t"
+        dry_run = False
+        course = ""
+
+    return (lambda: cli.cmd_upload(_Args())), state
+
+
+def test_manual_upload_fails_loudly_when_nothing_uploads(upload_cmd, capsys):
+    run, state = upload_cmd
+    state["fail"] = True
+    assert run() == 1, "전부 실패했는데 0 을 돌려줬습니다"
+    assert "::error" in capsys.readouterr().out
+
+
+def test_manual_upload_returns_zero_on_success(upload_cmd, capsys):
+    run, _ = upload_cmd
+    assert run() == 0
+    assert "::error" not in capsys.readouterr().out

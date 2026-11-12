@@ -12,7 +12,10 @@
 
 from __future__ import annotations
 
+import os
 import time
+
+import pytest
 
 from gymhall.recorder import monitors as M
 from gymhall.recorder.video import VideoRecorder
@@ -98,9 +101,50 @@ def test_pick_is_one_based():
     assert M.pick([], 1) is None
 
 
+@pytest.mark.skipif(os.name == "nt",
+                    reason="Windows 에서는 실제 화면 목록이 나오는 게 정상입니다")
 def test_enumerate_is_empty_off_windows():
     """리눅스 CI 에서 ctypes 를 부르면 안 됩니다."""
     assert M.enumerate_monitors() == []
+
+
+# --- 주 모니터를 1번으로 (V8) -----------------------------------------
+# 이 정렬은 _win_monitors 안에 있을 때 리눅스 CI 에서 한 줄도 안
+# 돌았습니다. 순수 함수로 빼서 어느 OS 에서나 시험합니다.
+def test_primary_comes_first():
+    """사람은 주 모니터를 1번이라고 셉니다."""
+    got = M.primary_first([mon(9, x=1920), mon(9, x=0, primary=True)])
+    assert [m.index for m in got] == [1, 2]
+    assert got[0].primary and got[0].x == 0
+    assert got[1].x == 1920
+
+
+def test_indexes_are_renumbered_from_one():
+    """들어온 index 를 믿으면 안 됩니다. 다시 매깁니다."""
+    got = M.primary_first([mon(7, x=0, primary=True), mon(3, x=100), mon(5, x=200)])
+    assert [m.index for m in got] == [1, 2, 3]
+
+
+def test_already_sorted_stays_put():
+    got = M.primary_first([mon(1, x=0, primary=True), mon(2, x=1920)])
+    assert [(m.index, m.x) for m in got] == [(1, 0), (2, 1920)]
+
+
+def test_no_primary_falls_back_to_position():
+    """어느 것도 주 모니터가 아니면 왼쪽부터입니다."""
+    got = M.primary_first([mon(1, x=1920), mon(2, x=-1920), mon(3, x=0)])
+    assert [m.x for m in got] == [-1920, 0, 1920]
+
+
+def test_an_empty_list_stays_empty():
+    assert M.primary_first([]) == []
+
+
+def test_a_monitor_left_of_primary_is_still_number_two():
+    """왼쪽에 있어도 주 모니터가 1번입니다. 좌표순이 아닙니다."""
+    got = M.primary_first([mon(1, x=-1920), mon(2, x=0, primary=True)])
+    assert got[0].primary and got[0].x == 0
+    assert got[1].x == -1920
 
 
 # --- 화면 시작 시각 ---------------------------------------------------
