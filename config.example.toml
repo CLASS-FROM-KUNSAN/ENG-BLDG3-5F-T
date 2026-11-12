@@ -311,6 +311,16 @@ track_layout = "separate"
 # 무음 감지. 이 시간(초) 이상 양쪽 다 무음이면 경고 로그를 남깁니다.
 # (장치를 잘못 골랐을 때 3시간 뒤에야 알게 되는 사고 방지)
 silence_warn_sec = 60
+# 켜져 있는 트랙이 **전부 동시에** 무음일 때만 장치 문제로 봅니다.
+# (마이크만 조용한 것은 흔합니다 — 판서, 시험 시간)
+#   silence_stop_sec  : 여기까지 가면 녹화를 멈춥니다
+#   silence_abort_sec : 여기까지 가면 세션을 '깨짐' 으로 보고 업로드도 안 합니다
+# 둘 다 예약(record schedule)·감지(record watch) 녹화에만 적용됩니다.
+# 수동(record start)은 경고만 합니다.
+silence_stop_sec  = 900
+silence_abort_sec = 3600
+# '완전 무음' 기준. 낮출수록 엄격합니다.
+silence_peak = 1e-5
 
 # ---------------------------------------------------------------------
 # [recording.triggers] 언제 녹화를 시작할지

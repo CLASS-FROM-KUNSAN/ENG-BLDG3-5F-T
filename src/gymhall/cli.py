@@ -429,6 +429,12 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
         except Exception:
             log.exception("전사 대기열 등록 실패")
 
+        if getattr(segment, "broken", False):
+            # 장치 무음으로 중단된 세그먼트입니다. 로컬에는 두고 올리지만
+            # 않습니다 — 소리 없는 영상이 백업된 것처럼 보이면 안 됩니다.
+            log.warning("장치 무음으로 중단된 세그먼트는 올리지 않습니다: %s",
+                        segment.path.name)
+            return
         if uploader is None or not segment.path.exists() or segment.path.is_dir():
             return
         try:
@@ -456,7 +462,8 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
 
 def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
                    upload: bool, dry_run: bool, stop_when=None,
-                   language: str | None = None, course=None):
+                   language: str | None = None, course=None,
+                   stop_on_silence: bool = False):
     from .recorder import lock as rec_lock
 
     # 한 PC 에서 녹화는 한 번에 하나만. RecordSchedule 과 RecordWatch 는
@@ -475,7 +482,7 @@ def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
         return _run_recording_locked(
             cfg, layout, label, minutes=minutes, upload=upload,
             dry_run=dry_run, stop_when=stop_when, language=language,
-            course=course,
+            course=course, stop_on_silence=stop_on_silence,
         )
     finally:
         guard.__exit__(None, None, None)
@@ -483,7 +490,8 @@ def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
 
 def _run_recording_locked(cfg, layout: Layout, label: str, *, minutes: float | None,
                           upload: bool, dry_run: bool, stop_when=None,
-                          language: str | None = None, course=None):
+                          language: str | None = None, course=None,
+                          stop_on_silence: bool = False):
     from .recorder.session import RecordingSession
     from .transcribe import realtime
 
@@ -495,6 +503,7 @@ def _run_recording_locked(cfg, layout: Layout, label: str, *, minutes: float | N
     session = RecordingSession(
         cfg, layout, label,
         course=course,
+        stop_on_silence=stop_on_silence,
         realtime_queue=rt.audio_queue if rt else None,
         on_segment_done=_post_segment_factory(cfg, layout, store, label,
                                               upload=upload, dry_run=dry_run,
@@ -580,7 +589,8 @@ def cmd_record_schedule(args) -> int:
         )
         _run_recording(cfg, layout, nxt.slot.name, minutes=minutes,
                        upload=not args.no_upload, dry_run=args.dry_run,
-                       language=nxt.slot.language, course=course)
+                       language=nxt.slot.language, course=course,
+                       stop_on_silence=True)
         if args.once:
             return 0
 
@@ -608,6 +618,7 @@ def cmd_record_watch(args) -> int:
             upload=not args.no_upload, dry_run=args.dry_run,
             stop_when=watcher.wait_until_gone,
             language=args.language, course=course,
+            stop_on_silence=True,
         )
         if args.once:
             raise KeyboardInterrupt

@@ -136,6 +136,14 @@ DEFAULTS: dict[str, Any] = {
             "mic_gain_db": 0.0,
             "track_layout": "separate",
             "silence_warn_sec": 60,
+            # 모든 트랙이 동시에 이만큼 무음이면 멈춥니다(예약·감지 녹화만).
+            # 수동 녹화는 경고만 합니다 — 사용자가 직접 시작한 것을
+            # 코드가 멈추면 안 됩니다.
+            "silence_stop_sec": 900,
+            "silence_abort_sec": 3600,
+            # '완전 무음' 기준. 기본 1e-4 는 너무 관대해서 아주 작은
+            # 잡음에도 '소리가 있다' 가 됩니다.
+            "silence_peak": 1e-5,
         },
         "triggers": {
             "manual": True,

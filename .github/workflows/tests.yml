@@ -48,6 +48,11 @@ jobs:
           python -m pip install 'tomli; python_version < "3.11"'
 
       - name: 테스트
+        # 바이트코드를 남기지 않습니다. mtime 이 초 단위라, 편집이 같은
+        # 초에 몰리면 묵은 .pyc 가 그대로 쓰여 테스트가 거짓으로
+        # 통과합니다(2026-11-12 에 실제로 당했습니다).
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: python -m pytest -q
 
       - name: 설정 예시 파일 검증
@@ -129,5 +134,9 @@ jobs:
           # requirements.txt 에는 psutil 이 있으니 실사용에서는 그쪽을 씁니다.
           python -m pip install --quiet pytest numpy requests
           set PYTHONPATH=src
+          REM 바이트코드를 남기지 않습니다. mtime 이 초 단위라, 편집이
+          REM 같은 초에 몰리면 묵은 .pyc 가 그대로 쓰입니다. 그러면
+          REM 테스트가(변이 테스트까지) 거짓으로 통과합니다.
+          set PYTHONDONTWRITEBYTECODE=1
           python -m gymhall --help
           python -m pytest -q
