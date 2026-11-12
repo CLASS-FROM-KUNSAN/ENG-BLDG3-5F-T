@@ -305,7 +305,7 @@ def run_queue(cfg, layout: Layout, *, limit: int = 0,
 
 
 def enqueue_segment(cfg, layout: Layout, segment, label: str,
-                    language: str | None = None) -> None:
+                    language: str | None = None, course=None) -> None:
     """녹화 세그먼트의 오디오를 대기열에 넣거나 바로 전사합니다."""
     if not cfg.get("transcribe.enabled", True) or not cfg.get("transcribe.batch.enabled", True):
         return
@@ -317,7 +317,7 @@ def enqueue_segment(cfg, layout: Layout, segment, label: str,
         log.debug("전사할 오디오 트랙이 없습니다(원하는 트랙: %s).", want)
         return
 
-    out_dir = layout.transcript_dir(segment.started_at, label)
+    out_dir = layout.transcript_dir(segment.started_at, course, label)
     queue = Queue(layout.state / QUEUE_FILE)
     for name, path in targets:
         queue.add(Path(path), label=label, out_dir=out_dir, track=name,

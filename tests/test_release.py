@@ -753,9 +753,11 @@ def test_access_check_distinguishes_missing_repo_from_no_permission():
     with pytest.raises(ReleaseError, match="토큰이 거절"):
         rejected.check_access()
 
+    # permissions.push 가 false 여도 막지 않습니다. Actions 의
+    # GITHUB_TOKEN 은 올릴 수 있는데도 false 로 오는 경우가 있고,
+    # 그걸로 막았더니 업로드가 통째로 멈췄습니다.
     readonly = _up(lambda c: _Resp(200, {"permissions": {"push": False}}))
-    with pytest.raises(ReleaseError, match="읽기만"):
-        readonly.check_access()
+    readonly.check_access()
 
     ok = _up(lambda c: _Resp(200, {"permissions": {"push": True}}))
     ok.check_access()
@@ -843,11 +845,54 @@ def test_no_permission_to_create_is_explained():
         up.ensure_repo(create_missing=True)
 
 
-def test_a_permission_error_is_never_turned_into_a_create():
-    """읽기만 되는 레포를 '없는 레포' 로 오해해 만들려 들면 안 됩니다."""
-    from gymhall.release import ReleaseError
+def test_a_readable_repo_is_never_recreated():
+    """레포가 보이면 만들려 들면 안 됩니다(권한 칸이 뭐라 하든)."""
+    up = _up(lambda c: _Resp(200, {"permissions": {"push": False}}))
+    up.ensure_repo(create_missing=True)
+    assert all(m != "POST" for m, *_ in up.session.calls)
+
+
+def test_a_false_push_permission_does_not_block_the_upload(caplog):
+    """2026-11-12: 이 칸 하나로 46개 올리던 업로드가 통째로 막혔습니다."""
+    import logging
 
     up = _up(lambda c: _Resp(200, {"permissions": {"push": False}}))
-    with pytest.raises(ReleaseError, match="읽기만"):
+    with caplog.at_level(logging.WARNING):
+        up.check_access()
+    assert "그래도 올려" in caplog.text
+
+
+def test_a_concurrent_creation_by_another_pc_is_not_an_error():
+    """같은 과목이 두 강의실에 배포되면 두 PC 가 같은 레포를 만들려 듭니다.
+
+    늦은 쪽은 422 'already exists' 를 받는데, 그때 쓸 수 있으면
+    그대로 쓰면 됩니다. 오류로 올리면 그 PC 만 영영 못 올립니다.
+    """
+    state = {"n": 0}
+
+    def script(call):
+        if call[0] == "GET" and call[1].endswith("/users/org"):
+            return _Resp(200, {"type": "User"})
+        if call[0] == "GET":
+            state["n"] += 1
+            # 첫 확인은 없음, 생성 실패 뒤 재확인은 있음(남이 만듦)
+            return _Resp(404) if state["n"] == 1 else _Resp(200, {"permissions": {"push": True}})
+        return _Resp(422, {"message": "name already exists on this account"})
+
+    up = _up(script)
+    up.ensure_repo(create_missing=True)      # 예외가 나면 안 됩니다
+
+
+def test_a_422_we_cannot_recover_from_is_still_an_error():
+    from gymhall.release import ReleaseError
+
+    def script(call):
+        if call[0] == "GET" and call[1].endswith("/users/org"):
+            return _Resp(200, {"type": "User"})
+        if call[0] == "GET":
+            return _Resp(404)                # 재확인해도 안 보임
+        return _Resp(422, {"message": "name already exists on this account"})
+
+    up = _up(script)
+    with pytest.raises(ReleaseError, match="보이지 않습니다"):
         up.ensure_repo(create_missing=True)
-    assert all(m != "POST" for m, *_ in up.session.calls)

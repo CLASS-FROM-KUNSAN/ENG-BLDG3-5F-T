@@ -99,11 +99,25 @@ class Layout:
     def menu_dir(self, term: str, course: str, menu: str) -> Path:
         return self.course_dir(term, course) / safe_name(menu)
 
-    def session_dir(self, started: datetime, label: str) -> Path:
-        return self.recordings / f"{started:%Y-%m-%d}" / safe_name(label)
+    def _dated(self, root: Path, started: datetime, course, label: str) -> Path:
+        """<뿌리>/<날짜>[/<과목>]/<이름>.
 
-    def transcript_dir(self, started: datetime, label: str) -> Path:
-        return self.transcripts / f"{started:%Y-%m-%d}" / safe_name(label)
+        **course 가 None 이면 과목 칸이 아예 없습니다.** '_미지정' 같은
+        폴더를 만들면 이미 있던 녹화 폴더와 경로가 어긋나고, 옛 세션을
+        다시 올리거나 찾을 때 길이 끊깁니다. 과목을 아는 녹화만
+        한 칸 깊어집니다.
+        """
+        base = root / f"{started:%Y-%m-%d}"
+        name = getattr(course, "name", "") if course is not None else ""
+        if name:
+            base = base / safe_name(name)
+        return base / safe_name(label)
+
+    def session_dir(self, started: datetime, course=None, label: str = "") -> Path:
+        return self._dated(self.recordings, started, course, label)
+
+    def transcript_dir(self, started: datetime, course=None, label: str = "") -> Path:
+        return self._dated(self.transcripts, started, course, label)
 
     def ensure(self) -> None:
         for p in (self.eclass, self.recordings, self.transcripts, self.logs, self.state, self.tmp):
