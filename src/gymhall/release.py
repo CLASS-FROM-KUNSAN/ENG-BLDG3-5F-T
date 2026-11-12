@@ -359,10 +359,17 @@ class ReleaseUploader:
             except ValueError:
                 message = resp.text[:200]
             if "already exists" in message.lower():
-                raise ReleaseError(
-                    f"{self.slug}: 같은 이름의 레포가 이미 있는데 이 토큰으로는 "
-                    "보이지 않습니다. 비공개 레포라면 토큰 권한을 확인하세요."
-                )
+                # 다른 PC 가 방금 만들었을 수 있습니다(같은 과목이 두
+                # 강의실에 배포된 경우). 다시 보고 쓸 수 있으면 그대로 씁니다.
+                try:
+                    self.check_access()
+                except ReleaseError:
+                    raise ReleaseError(
+                        f"{self.slug}: 같은 이름의 레포가 이미 있는데 이 토큰으로는 "
+                        "보이지 않습니다. 비공개 레포라면 토큰 권한을 확인하세요."
+                    ) from None
+                log.info("레포가 이미 있습니다(다른 PC 가 만든 듯): %s", self.slug)
+                return {"full_name": self.slug, "permissions": {"push": True}}
             raise ReleaseError(f"{self.slug}: 레포 생성 거부(422) - {message}")
         if resp.status_code in (401, 403):
             raise ReleaseError(

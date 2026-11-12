@@ -37,29 +37,73 @@ class LockInfo:
     pid: int
     label: str
     started_at: float
+    # PID 는 재사용됩니다. 'PID 가 살아 있다' 가 '그 녹화가 살아 있다' 는
+    # 아닙니다. 프로세스 시작 시각을 같이 적어 두고 대조합니다.
+    create_time: float = 0.0
 
     @property
     def age_sec(self) -> float:
         return max(0.0, time.time() - self.started_at)
 
 
-def _alive(pid: int) -> bool:
+def _create_time(pid: int) -> float:
+    """프로세스 시작 시각. 모르면 0.
+
+    psutil 이 있으면 그걸 씁니다(윈도우 포함). 없으면 리눅스
+    /proc/<pid>/stat 의 22번째 값(부팅 이후 틱)으로 대신합니다 — 절대
+    시각이 아니어도 '같은 PID 의 다른 프로세스' 를 가르는 데는 충분합니다.
+    둘 다 없으면 0, 즉 PID 재사용 검사를 포기합니다.
+    """
     if pid <= 0:
-        return False
+        return 0.0
     try:
         import psutil  # type: ignore
 
-        return psutil.pid_exists(pid)
+        return float(psutil.Process(pid).create_time())
     except Exception:
         pass
-    if os.name == "nt":                      # psutil 이 없을 때의 대비책
-        return True                          # 모르면 '살아 있다' 로 봅니다
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+        # comm 에 공백이 들어갈 수 있어 마지막 ')' 뒤부터 셉니다.
+        fields = stat[stat.rindex(")") + 2:].split()
+        return float(fields[19])            # starttime = 22번째 필드
+    except Exception:
+        return 0.0
+
+
+def _pid_exists(pid: int) -> bool:
+    try:
+        import psutil  # type: ignore
+
+        return bool(psutil.pid_exists(pid))
+    except Exception:
+        pass
+    if os.name == "nt":
+        return True              # 확인할 방법이 없으면 '살아 있다' 로 봅니다
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
+    return True
+
+
+def _alive(pid: int, create_time: float = 0.0) -> bool:
+    """그 PID 가, 그리고 **그때 그 프로세스가** 살아 있는지.
+
+    시작 시각 비교는 psutil 이 있든 없든 똑같이 합니다. 예전에는 이
+    비교가 psutil 가지 안에만 있어서, psutil 이 없는 환경에서는 PID
+    재사용 검사가 통째로 꺼졌습니다.
+    """
+    if pid <= 0:
+        return False
+    if not _pid_exists(pid):
+        return False
+    if create_time:
+        now = _create_time(pid)
+        if now and abs(now - create_time) > 1.0:
+            return False         # PID 만 재사용된 남의 프로세스
     return True
 
 
@@ -70,7 +114,8 @@ def read(path: Path) -> LockInfo | None:
         return None
     try:
         return LockInfo(int(data.get("pid", 0)), str(data.get("label", "")),
-                        float(data.get("started_at", 0.0)))
+                        float(data.get("started_at", 0.0)),
+                        float(data.get("create_time", 0.0)))
     except (TypeError, ValueError):
         return None
 
@@ -78,11 +123,33 @@ def read(path: Path) -> LockInfo | None:
 def _stale(info: LockInfo | None) -> bool:
     if info is None:
         return True
-    if info.pid == os.getpid():
-        return True                          # 내가 남긴 것
+    # 자기 PID 라고 무조건 빼앗으면 안 됩니다. 같은 프로세스가 녹화를
+    # 두 번 시작하는 것도 막아야 할 일입니다. 예전 실행이 같은 PID 로
+    # 남긴 잠금은 create_time 이 달라서 아래에서 걸러집니다.
     if info.age_sec > STALE_SEC:
         return True
-    return not _alive(info.pid)
+    return not _alive(info.pid, info.create_time)
+
+
+def _try_create(path: Path, label: str) -> bool:
+    """**원자적으로** 만듭니다. 이미 있으면 False.
+
+    exists() 로 보고 write_text() 하면 두 프로세스가 둘 다 '없다' 를
+    보고 둘 다 씁니다. O_CREAT|O_EXCL 는 커널이 하나만 통과시킵니다.
+    """
+    payload = {
+        "pid": os.getpid(),
+        "label": label,
+        "started_at": time.time(),
+        "create_time": _create_time(os.getpid()),
+    }
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=False))
+    return True
 
 
 @contextmanager
@@ -90,18 +157,25 @@ def hold(path: Path, label: str):
     """녹화 잠금을 잡습니다. 이미 살아 있는 녹화가 있으면 RecordingBusy."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    current = read(path)
-    if not _stale(current):
-        raise RecordingBusy(
-            f"이미 녹화 중입니다(PID {current.pid}, '{current.label}', "
-            f"{current.age_sec / 60:.0f}분째). 두 녹화가 같은 오디오 장치를 "
-            "열면 양쪽 다 무음이 됩니다."
-        )
-    if current is not None:
-        log.info("남아 있던 잠금을 빼앗습니다(PID %d, '%s').", current.pid, current.label)
 
-    payload = {"pid": os.getpid(), "label": label, "started_at": time.time()}
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    # 한 번은 그냥, 한 번은 죽은 잠금을 치운 뒤. 두 번이면 충분합니다 —
+    # 치운 직후 남이 먼저 잡았다면 그쪽이 진짜 녹화 중입니다.
+    for attempt in (1, 2):
+        if _try_create(path, label):
+            break
+        current = read(path)
+        if current is not None and not _stale(current):
+            raise RecordingBusy(
+                f"이미 녹화 중입니다(PID {current.pid}, '{current.label}', "
+                f"{current.age_sec / 60:.0f}분째). 두 녹화가 같은 오디오 장치를 "
+                "열면 양쪽 다 무음이 됩니다."
+            )
+        if attempt == 2:
+            raise RecordingBusy("녹화 잠금을 잡지 못했습니다(경쟁).")
+        if current is not None:
+            log.info("남아 있던 잠금을 치웁니다(PID %d, '%s').",
+                     current.pid, current.label)
+        path.unlink(missing_ok=True)
     try:
         yield
     finally:

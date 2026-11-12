@@ -851,3 +851,39 @@ def test_a_permission_error_is_never_turned_into_a_create():
     with pytest.raises(ReleaseError, match="읽기만"):
         up.ensure_repo(create_missing=True)
     assert all(m != "POST" for m, *_ in up.session.calls)
+
+
+def test_a_concurrent_creation_by_another_pc_is_not_an_error():
+    """같은 과목이 두 강의실에 배포되면 두 PC 가 같은 레포를 만들려 듭니다.
+
+    늦은 쪽은 422 'already exists' 를 받는데, 그때 쓸 수 있으면
+    그대로 쓰면 됩니다. 오류로 올리면 그 PC 만 영영 못 올립니다.
+    """
+    state = {"n": 0}
+
+    def script(call):
+        if call[0] == "GET" and call[1].endswith("/users/org"):
+            return _Resp(200, {"type": "User"})
+        if call[0] == "GET":
+            state["n"] += 1
+            # 첫 확인은 없음, 생성 실패 뒤 재확인은 있음(남이 만듦)
+            return _Resp(404) if state["n"] == 1 else _Resp(200, {"permissions": {"push": True}})
+        return _Resp(422, {"message": "name already exists on this account"})
+
+    up = _up(script)
+    up.ensure_repo(create_missing=True)      # 예외가 나면 안 됩니다
+
+
+def test_a_422_we_cannot_recover_from_is_still_an_error():
+    from gymhall.release import ReleaseError
+
+    def script(call):
+        if call[0] == "GET" and call[1].endswith("/users/org"):
+            return _Resp(200, {"type": "User"})
+        if call[0] == "GET":
+            return _Resp(404)                # 재확인해도 안 보임
+        return _Resp(422, {"message": "name already exists on this account"})
+
+    up = _up(script)
+    with pytest.raises(ReleaseError, match="보이지 않습니다"):
+        up.ensure_repo(create_missing=True)
