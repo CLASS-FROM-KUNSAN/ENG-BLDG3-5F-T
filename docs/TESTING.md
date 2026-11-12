@@ -506,11 +506,28 @@ OS 에서나 시험합니다. 남은 것은 **WinAPI 를 부르는 줄 자체**�
 둘 다 실제로 당했습니다. 두 번째가 더 고약합니다 — 테스트는 빨개지는데
 소스를 보면 고친 내용이 사라져 있어서, 고친 적이 없는 것처럼 보입니다.
 
-별도 worktree 를 쓰거나, 끝날 때까지 기다리세요.
+**별도 worktree 에서만 돌리세요.** 기다리는 것으로는 부족합니다 —
+사람은 기다리는 동안 다른 것을 합니다.
 
 ```bash
-git worktree add /tmp/mut HEAD
+git commit -am "wip"          # 변이는 HEAD 기준입니다
+git worktree add /tmp/mut HEAD --detach
+cd /tmp/mut && python mutate.py .
+cd - && git worktree remove /tmp/mut --force
 ```
+
+러너 첫 줄에 작업 트리를 못 건드리게 막는 줄을 넣으세요. 없으면
+다음에 또 in-place 로 돌립니다.
+
+```python
+import os, pathlib, sys
+if pathlib.Path.cwd() == pathlib.Path(os.environ.get("GYMHALL_MAIN", "")):
+    sys.exit("작업 트리에서 돌리지 마세요. git worktree 를 쓰세요.")
+```
+
+worktree 는 **커밋된 내용**만 가져갑니다. 고친 것을 커밋하지 않고
+worktree 를 만들면 옛 코드를 시험하게 되고, 변이가 전부 "패턴 못
+찾음" 으로 나옵니다(그 모양을 보면 커밋을 빠뜨린 것입니다).
 
 ### 복원이 .pyc 때문에 안 먹는 경우
 
