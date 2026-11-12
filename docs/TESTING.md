@@ -181,6 +181,17 @@ TypeError: 'Event' object is not callable
 폼 POST 는 1ms 안에 끝나서, 기다리든 말든 로컬에서는 둘 다 초록입니다.
 실제 서버에서만 틈이 벌어집니다.
 
+**테스트를 제안할 때 머릿속으로 변이를 한 번 돌리세요.**
+"이 테스트가 그 코드를 삭제했을 때 실패하는가?" 를 먼저 자문합니다.
+실패하지 않으면 그건 테스트가 아니라 **위장**입니다.
+
+실제로 V9(`SetProcessDPIAware`)의 Windows 통합 테스트 제안이 이
+함정이었습니다. 테스트 프로세스에서 `SetProcessDpiAwareness(2)` 를
+부른 뒤 `GetSystemMetrics` 와 `devices` 출력을 비교하자는 것이었는데,
+그러면 양쪽 다 DPI-aware 라 그 호출을 지워도 같은 값이 나옵니다.
+CI 러너는 배율 100% 라 더더욱 차이가 없습니다. 넣었으면 "방어선이
+생겼다" 는 착각만 남았을 것입니다.
+
 이런 것은 **동작 대신 수단을 고정합니다.** 소스에 `expect_navigation`
 이 있는지 직접 검사하는 테스트가
 `tests/test_eclass_detail_entry.py::test_enter_detail_actually_waits_for_navigation`

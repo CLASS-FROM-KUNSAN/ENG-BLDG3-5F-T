@@ -356,6 +356,8 @@ def test_ddagrab_warns_when_a_monitor_number_may_not_match(caplog):
         cmd([mon(1, primary=True), mon(2, x=1920)], backend="ddagrab", monitor=2)
     assert "드라이버가 정한 순서" in caplog.text, caplog.text
     assert "gdigrab" in caplog.text, "대안을 안 알려 줍니다"
+    # 쓴 값을 적어야 2대 PC 에서 역으로 짝을 알아낼 수 있습니다.
+    assert "monitor=2" in caplog.text and "output_idx=1" in caplog.text, caplog.text
 
 
 def test_a_single_monitor_needs_no_such_warning(caplog):

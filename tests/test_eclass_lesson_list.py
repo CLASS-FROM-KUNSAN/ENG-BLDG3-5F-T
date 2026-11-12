@@ -597,3 +597,45 @@ def test_a_successful_download_reports_no_failure(lesson, tmp_path):
     att = lesson._download_attachments(tmp_path / "att")
     assert len(att.saved) == 14
     assert att.failed == [] and att.ok is True
+
+
+# --- 교안 0개일 때 단서를 남기는가 -------------------------------------
+# 2026-11-13 수집에서 6과목이 "주차 16개인데 교안 0개" 로 끝났는데
+# 로그에 단서가 한 줄도 없었습니다. 진단 덤프가 _finish_post(게시판
+# 경로)에만 걸려 있었기 때문입니다. 강의목록은 상세 진입이 없는 단일
+# 페이지라 그 경로를 안 탑니다.
+#
+# "교수가 안 올렸다" 와 "선택자가 어긋났다" 는 겉모습이 똑같습니다.
+# 덤프가 없으면 영영 구분할 수 없습니다.
+def test_zero_handouts_leaves_a_diagnostic(lesson, tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(lesson, "_download_attachments",
+                        lambda d: C.Attachments())
+    course = C.Course("2026211605005", "생명과학의이해_01", "이교수")
+    with caplog.at_level("WARNING", logger="gymhall"):
+        lesson.crawl_lecture_list(course)
+    assert "교안이 0개" in caplog.text, caplog.text
+    assert "이 화면에 있는 것들" in caplog.text, (
+        "교안 0개인데 화면에 뭐가 있는지 안 남겼습니다 — "
+        "다음 실행에서도 원인을 못 가립니다"
+    )
+    assert "[프레임" in caplog.text, "프레임 구성이 빠졌습니다"
+
+
+def test_handouts_found_means_no_diagnostic_noise(lesson, tmp_path, caplog):
+    """받았으면 덤프를 찍지 않습니다. 매 과목 쏟아지면 안 봅니다."""
+    SERVER_MODE["mode"] = "pdf"
+    course = C.Course("2026211605005", "기초웹프로그래밍_05", "이교수")
+    with caplog.at_level("WARNING", logger="gymhall"):
+        lesson.crawl_lecture_list(course)
+    assert "이 화면에 있는 것들" not in caplog.text
+
+
+def test_failed_handouts_are_reported_as_errors(lesson, tmp_path, monkeypatch):
+    """받다가 실패한 것은 '안 올렸다' 와 다릅니다. stats.errors 로 올립니다."""
+    att = C.Attachments(failed=["1장.pdf", "2장.pdf"])
+    monkeypatch.setattr(lesson, "_download_attachments", lambda d: att)
+    before = len(lesson.stats.errors)
+    lesson.crawl_lecture_list(C.Course("x", "과목가", "이교수"))
+    assert len(lesson.stats.errors) > before
+    assert any("강의목록" in e and "2개" in e for e in lesson.stats.errors), \
+        lesson.stats.errors

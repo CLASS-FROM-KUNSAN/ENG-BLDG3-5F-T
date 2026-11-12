@@ -95,12 +95,18 @@ class VideoRecorder:
                 # 없습니다.
                 src += f":output_idx={target.index - 1}"
                 if len(monitors) > 1:
+                    # 쓴 값을 그대로 적습니다. 그래야 2대 PC 에서
+                    # monitor=1,2 를 차례로 시험해 "어느 idx 가 어느
+                    # 화면인지" 를 사용자가 역으로 알아낼 수 있습니다.
+                    # "지원 안 함" 이 아니라 "스스로 알아낼 수 있음" 이
+                    # 됩니다.
                     log.warning(
-                        "ddagrab 의 화면 번호는 그래픽 드라이버가 정한 순서라 "
-                        "여기 번호(%d)와 다를 수 있습니다. 엉뚱한 화면이 "
-                        "찍히면 backend = \"gdigrab\" 으로 바꾸세요 — "
-                        "그쪽은 좌표로 잘라내므로 정확합니다.",
-                        self.monitor,
+                        "ddagrab + monitor=%d: output_idx=%d 로 녹화합니다. "
+                        "출력 번호는 그래픽 드라이버가 정한 순서라 다른 "
+                        "화면일 수 있습니다. 의심되면 backend = \"gdigrab\" "
+                        "(기본값)을 쓰세요 — 그쪽은 좌표로 잘라내므로 "
+                        "정확합니다.",
+                        self.monitor, target.index - 1,
                     )
             else:
                 # monitor=0 의 뜻이 두 백엔드에서 다릅니다.

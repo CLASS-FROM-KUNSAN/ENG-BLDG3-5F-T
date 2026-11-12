@@ -652,12 +652,19 @@ def cmd_record_schedule(args) -> int:
             course_id=str(getattr(nxt.slot, "course_id", "") or ""),
             label=nxt.slot.name, when=nxt.start,
         )
-        _run_recording(cfg, layout, nxt.slot.name, minutes=minutes,
-                       upload=not args.no_upload, dry_run=args.dry_run,
-                       language=nxt.slot.language, course=course,
-                       stop_on_silence=True, video_not_before=video_at)
+        # 상시 실행이라 종료 코드가 신호가 아닙니다. 로그가 유일한
+        # 신호입니다 — 이게 없으면 다음 날 아침 로그를 봐도 그 수업이
+        # 유실된 줄 모릅니다. '녹화 시작' 은 찍히고 '녹화 종료' 는
+        # 안 찍히는 모양이라 눈에 안 띕니다.
+        result = _run_recording(cfg, layout, nxt.slot.name, minutes=minutes,
+                                upload=not args.no_upload, dry_run=args.dry_run,
+                                language=nxt.slot.language, course=course,
+                                stop_on_silence=True, video_not_before=video_at)
+        if result is None:
+            log.error("[%s] 녹화를 시작하지 못했습니다(다른 녹화가 돌고 있습니다). "
+                      "이 수업은 녹화되지 않았습니다.", nxt.slot.name)
         if args.once:
-            return 0
+            return 0 if result is not None else 1
 
 
 def cmd_record_watch(args) -> int:
@@ -671,6 +678,11 @@ def cmd_record_watch(args) -> int:
         stop_grace_sec=float(cfg.get("recording.triggers.watch_stop_grace_sec", 60)),
     )
 
+    # --once 는 한 번 감지하고 끝납니다. 그 한 번이 실패했으면
+    # 종료 코드로 알려야 합니다 — 지금은 KeyboardInterrupt 로 빠져나가
+    # '사용자 중단' 과 '녹화 실패' 가 같은 코드였습니다.
+    failures: list[str] = []
+
     def on_start(hit: str) -> None:
         label = args.label or f"감지_{Path(hit).stem}_{datetime.now():%H%M}"
         # 감지 트리거는 과목을 모릅니다. 시간표로 되짚고, 그래도 모르면
@@ -678,13 +690,17 @@ def cmd_record_watch(args) -> int:
         # 폴백은 두지 않습니다(운영체제 녹화가 자료구조 레포로 갑니다).
         course = _resolve_course(cfg, course_id=getattr(args, "course", "") or "",
                                  label=label, when=datetime.now())
-        _run_recording(
+        result = _run_recording(
             cfg, layout, label, minutes=None,
             upload=not args.no_upload, dry_run=args.dry_run,
             stop_when=watcher.wait_until_gone,
             language=args.language, course=course,
             stop_on_silence=True,
         )
+        if result is None:
+            log.error("'%s' 를 감지했지만 녹화를 시작하지 못했습니다"
+                      "(다른 녹화가 돌고 있습니다).", hit)
+            failures.append(hit)
         if args.once:
             raise KeyboardInterrupt
 
@@ -692,6 +708,10 @@ def cmd_record_watch(args) -> int:
         watcher.watch(on_start)
     except KeyboardInterrupt:
         log.info("감시를 종료합니다.")
+    if failures:
+        log.error("감지했지만 녹화하지 못한 것 %d건: %s",
+                  len(failures), ", ".join(failures))
+        return 1
     return 0
 
 

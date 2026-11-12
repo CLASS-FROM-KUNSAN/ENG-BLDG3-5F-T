@@ -735,6 +735,11 @@ class Crawler:
         files = self._download_attachments(out_dir)
         log.info("%s / 강의목록: 주차 %d개, 교안 %d개",
                  course.name, len(weeks), len(files))
+        if files.failed:
+            msg = (f"{course.name}/강의목록: 교안 {len(files.failed)}개를 "
+                   f"받지 못했습니다 ({', '.join(files.failed[:3])})")
+            log.error("%s", msg)
+            self.stats.errors.append(msg)
         if weeks and not files:
             # 받을 게 정말 없을 수도 있지만, 선택자가 어긋나도 똑같이
             # 조용합니다. 둘을 구분할 수 없으니 기록은 남깁니다.
@@ -743,6 +748,21 @@ class Crawler:
                 "교수가 안 올렸거나, 첨부 링크 모양이 바뀐 것입니다.",
                 course.name, len(weeks),
             )
+            # 그 둘을 다음 실행에서 갈라 주는 유일한 수단입니다.
+            #
+            # 진단 덤프가 여태 _finish_post(게시판 경로)에만 걸려
+            # 있었습니다. 강의목록은 상세 진입이 없는 단일 페이지라
+            # 그 경로를 안 탑니다. 그래서 2026-11-13 수집에서 6과목이
+            # "교안 0개" 로 끝났는데 로그에 단서가 한 줄도 없었습니다.
+            #
+            # 읽는 법:
+            #   fileDown=0, onclick=0   페이지가 안 열렸거나 다른 화면
+            #   fileDown=0, onclick>0   선택자 문제 — onclick 샘플에서
+            #                           진짜 함수 이름을 확인하세요
+            #   fileDown>0, 본문        선택자는 맞고 다운로드가 실패
+            #   fileDown>0, 프레임      프레임 순회 문제
+            log.warning("  이 화면에 있는 것들:\n      %s",
+                        self.describe_attachment_candidates())
         self.store.save()
 
     # -- 쪽지 --------------------------------------------------------
