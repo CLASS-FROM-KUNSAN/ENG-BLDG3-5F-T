@@ -288,7 +288,7 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
 # record
 # ---------------------------------------------------------------------------
 def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
-                          upload: bool, dry_run: bool):
+                          upload: bool, dry_run: bool, language: str | None = None):
     from .release import tag_for
     from .transcribe.batch import enqueue_segment
 
@@ -301,7 +301,7 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
 
     def on_done(segment) -> None:
         try:
-            enqueue_segment(cfg, layout, segment, label)
+            enqueue_segment(cfg, layout, segment, label, language=language)
         except Exception:
             log.exception("전사 대기열 등록 실패")
 
@@ -331,7 +331,8 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
 
 
 def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
-                   upload: bool, dry_run: bool, stop_when=None):
+                   upload: bool, dry_run: bool, stop_when=None,
+                   language: str | None = None):
     from .recorder.session import RecordingSession
     from .transcribe import realtime
 
@@ -344,7 +345,8 @@ def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
         cfg, layout, label,
         realtime_queue=rt.audio_queue if rt else None,
         on_segment_done=_post_segment_factory(cfg, layout, store, label,
-                                              upload=upload, dry_run=dry_run),
+                                              upload=upload, dry_run=dry_run,
+                                              language=language),
     )
 
     if stop_when is not None:
@@ -377,7 +379,8 @@ def cmd_record_start(args) -> int:
     cfg, layout = _load(args)
     label = args.label or f"수동_{datetime.now():%H%M}"
     _run_recording(cfg, layout, label, minutes=args.minutes,
-                   upload=not args.no_upload, dry_run=args.dry_run)
+                   upload=not args.no_upload, dry_run=args.dry_run,
+                   language=args.language)
     return 0
 
 
@@ -408,7 +411,8 @@ def cmd_record_schedule(args) -> int:
             return 0
         minutes = max(1.0, (nxt.end - datetime.now()).total_seconds() / 60)
         _run_recording(cfg, layout, nxt.slot.name, minutes=minutes,
-                       upload=not args.no_upload, dry_run=args.dry_run)
+                       upload=not args.no_upload, dry_run=args.dry_run,
+                       language=nxt.slot.language)
         if args.once:
             return 0
 
@@ -430,6 +434,7 @@ def cmd_record_watch(args) -> int:
             cfg, layout, label, minutes=None,
             upload=not args.no_upload, dry_run=args.dry_run,
             stop_when=watcher.wait_until_gone,
+            language=args.language,
         )
         if args.once:
             raise KeyboardInterrupt
@@ -450,7 +455,7 @@ def cmd_transcribe_queue(args) -> int:
     if args.show:
         print(queue.describe())
         return 0
-    results = run_queue(cfg, layout, limit=args.limit)
+    results = run_queue(cfg, layout, limit=args.limit, language=args.language)
     if not results:
         return 0
 
@@ -584,6 +589,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = rec.add_parser("start", help="지금 바로 녹화")
     p.add_argument("-l", "--label", help="세션 이름 (폴더명에 쓰임)")
     p.add_argument("-m", "--minutes", type=float, help="녹화 길이(분). 생략 시 config 의 최대값")
+    p.add_argument("--language", help="이 녹화의 전사 언어 (ko / en / auto / ko+en)")
     p.add_argument("--no-upload", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_record_start)
@@ -597,6 +603,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = rec.add_parser("watch", help="프로그램이 뜨면 자동 녹화")
     p.add_argument("-l", "--label")
+    p.add_argument("--language", help="전사 언어 (ko / en / auto / ko+en)")
     p.add_argument("--once", action="store_true")
     p.add_argument("--no-upload", action="store_true")
     p.add_argument("--dry-run", action="store_true")
@@ -608,6 +615,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = tr.add_parser("queue", help="대기열 전사")
     p.add_argument("--show", action="store_true", help="대기열만 보기")
     p.add_argument("--limit", type=int, default=0, help="이번에 처리할 개수")
+    p.add_argument("--language", help="대기열 전체에 적용할 언어 (ko / en / auto / ko+en)")
     p.add_argument("--no-upload", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_transcribe_queue)

@@ -52,18 +52,30 @@ HALLUCINATION_PHRASES: frozenset[str] = frozenset({
     # 영어
     "thank you for watching",
     "thanks for watching",
-    "thank you",
     "please subscribe",
     "don't forget to subscribe",
     "like and subscribe",
     "see you in the next video",
     "subtitles by the amara.org community",
     "transcription by castingwords",
-    "bye",
 })
+
+# 일부러 넣지 않은 것들
+#   "thank you", "bye", "okay", "yes" 같은 짧은 말은 환각으로도 나오지만
+#   실제 강의에서도 그대로 나옵니다. 특히 영어 강의라면 교수가 수업을
+#   마치며 "Thank you." 라고 말합니다. 그걸 지우면 전사본에서 수업의
+#   끝이 사라집니다. 짧은 말은 문구 규칙 대신 no_speech_prob 와
+#   avg_logprob 로 거릅니다(아래 참고).
 
 # 모델 스스로 '거의 무음' 이라고 본 구간. 이 값을 넘으면 텍스트를 믿지 않습니다.
 DEFAULT_NO_SPEECH_THRESHOLD = 0.85
+
+# OpenAI Whisper 자신의 기본 규칙: no_speech_prob 가 0.6 을 넘으면서
+# avg_logprob 가 -1.0 보다 낮으면 무음으로 봅니다. 0.85 하나만 보면
+# 0.6~0.85 구간에서 모델이 확신도 없이 지어낸 문장을 놓칩니다.
+# 두 신호가 함께 나쁠 때만 적용하므로 단독 임계값보다 오탐이 적습니다.
+WHISPER_NO_SPEECH_THRESHOLD = 0.6
+WHISPER_LOGPROB_THRESHOLD = -1.0
 
 # 같은 문장이 연속으로 이 횟수를 넘으면 루프로 봅니다.
 DEFAULT_MAX_REPEATS = 3
@@ -109,11 +121,13 @@ class Cleaner:
         no_speech_threshold: float = DEFAULT_NO_SPEECH_THRESHOLD,
         max_repeats: int = DEFAULT_MAX_REPEATS,
         extra_phrases: tuple[str, ...] = (),
+        use_logprob_rule: bool = True,
     ) -> None:
         self.enabled = enabled
         self.drop_phrases = drop_phrases
         self.no_speech_threshold = float(no_speech_threshold)
         self.max_repeats = max(0, int(max_repeats))
+        self.use_logprob_rule = bool(use_logprob_rule)
         self.phrases = {normalize(p) for p in HALLUCINATION_PHRASES}
         self.phrases |= {normalize(p) for p in extra_phrases if p}
         self.phrases.discard("")
@@ -121,8 +135,16 @@ class Cleaner:
         self._last: str | None = None
         self._run = 0
 
-    def should_drop(self, text: str, no_speech_prob: float | None = None) -> tuple[bool, str]:
-        """(버릴지, 이유). 이유는 로그에만 쓰입니다."""
+    def should_drop(
+        self,
+        text: str,
+        no_speech_prob: float | None = None,
+        avg_logprob: float | None = None,
+    ) -> tuple[bool, str]:
+        """(버릴지, 이유). 이유는 로그에만 쓰입니다.
+
+        엔진이 주지 않는 신호(None)는 그 규칙만 건너뜁니다.
+        """
         stripped = (text or "").strip()
         if not stripped:
             return True, "빈 구간"
@@ -148,6 +170,21 @@ class Cleaner:
             self.stats.dropped_silence += 1
             self._remember(stripped)
             return True, f"무음 추정(no_speech_prob={no_speech_prob:.2f})"
+
+        # 2-b) 무음 의심 + 확신 없음 (Whisper 자체 기본 규칙)
+        if (
+            self.use_logprob_rule
+            and no_speech_prob is not None
+            and avg_logprob is not None
+            and no_speech_prob > WHISPER_NO_SPEECH_THRESHOLD
+            and avg_logprob < WHISPER_LOGPROB_THRESHOLD
+        ):
+            self.stats.dropped_silence += 1
+            self._remember(stripped)
+            return True, (
+                f"무음 의심+저확신(no_speech_prob={no_speech_prob:.2f}, "
+                f"avg_logprob={avg_logprob:.2f})"
+            )
 
         # 3) 반복 루프
         if self.max_repeats:
@@ -189,4 +226,5 @@ def from_config(cfg) -> Cleaner:
         ),
         max_repeats=int(cfg.get("transcribe.cleanup.max_repeats", DEFAULT_MAX_REPEATS)),
         extra_phrases=tuple(cfg.get("transcribe.cleanup.extra_phrases", [])),
+        use_logprob_rule=bool(cfg.get("transcribe.cleanup.use_logprob_rule", True)),
     )

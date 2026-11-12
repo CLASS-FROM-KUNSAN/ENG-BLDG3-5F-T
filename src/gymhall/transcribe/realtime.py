@@ -23,6 +23,8 @@ from ..logging_setup import get as get_logger
 from .cleanup import Cleaner
 from .cleanup import from_config as _cleaner_from_config
 from .engine import EngineSpec
+from .language import parse as parse_language
+from .language import whisper_argument
 
 log = get_logger("transcribe.realtime")
 
@@ -58,6 +60,7 @@ class RealtimeTranscriber(threading.Thread):
         self.chunk_sec = float(chunk_sec)
         self.overlap_sec = min(float(overlap_sec), float(chunk_sec) * 0.5)
         self.language = language
+        self._lang_arg = whisper_argument(parse_language(language))
         self.print_to_console = bool(print_to_console)
         self.audio_queue: queue.Queue = queue.Queue(maxsize=int(max_queue))
         self.lines: list[str] = []
@@ -113,7 +116,7 @@ class RealtimeTranscriber(threading.Thread):
         try:
             segments, _ = model.transcribe(
                 audio16,
-                language=None if self.language in ("", "auto") else self.language,
+                language=self._lang_arg,
                 beam_size=1,              # 속도 우선
                 vad_filter=True,
                 condition_on_previous_text=False,
@@ -121,7 +124,9 @@ class RealtimeTranscriber(threading.Thread):
             kept = []
             for s in segments:
                 drop, _reason = self.cleaner.should_drop(
-                    s.text, getattr(s, "no_speech_prob", None)
+                    s.text,
+                    getattr(s, "no_speech_prob", None),
+                    getattr(s, "avg_logprob", None),
                 )
                 if not drop:
                     kept.append(s.text.strip())

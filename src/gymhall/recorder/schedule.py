@@ -31,6 +31,9 @@ class Slot:
     day: str
     start: str  # "HH:MM"
     end: str
+    # 과목마다 언어가 다릅니다. 영어 수업을 ko 로 전사하면 소리 나는 대로
+    # 한글을 뱉어 전사본이 통째로 쓸모없어집니다.
+    language: str | None = None
 
     @property
     def weekday(self) -> int:
@@ -48,7 +51,16 @@ class Slot:
         return start, end
 
     def __str__(self) -> str:
-        return f"{DAY_KR[self.weekday]} {self.start}-{self.end}  {self.name}"
+        suffix = f"  [{self.language}]" if self.language else ""
+        return f"{DAY_KR[self.weekday]} {self.start}-{self.end}  {self.name}{suffix}"
+
+
+def _as_language(value) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return "+".join(str(v) for v in value)
+    return str(value)
 
 
 def parse(entries: Iterable[dict]) -> list[Slot]:
@@ -61,6 +73,7 @@ def parse(entries: Iterable[dict]) -> list[Slot]:
                     day=str(entry["day"]).lower(),
                     start=str(entry["start"]),
                     end=str(entry["end"]),
+                    language=_as_language(entry.get("language")),
                 )
             )
         except (KeyError, ValueError) as exc:

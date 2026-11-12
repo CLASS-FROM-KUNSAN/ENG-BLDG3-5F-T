@@ -78,6 +78,15 @@ TypeError: 'Event' object is not callable
 | 감시 트리거 재시작 폭주 | ffmpeg 가 즉시 죽고 Zoom 이 켜져 있으면 **0.0초에 25회** 재시작하며 빈 폴더로 디스크를 채움 | `test_gives_up_instead_of_thrashing` |
 | `wait_until_gone` 무한 대기 | 감지 조건이 항상 참이면 영원히 멈춤 | `test_wait_until_gone_has_a_ceiling` |
 
+### 영어 강의 / 언어
+
+| 버그 | 증상 | 테스트 |
+|---|---|---|
+| `language = "ko"` 전역 고정 | 영어 수업을 한글로 받아씀("디스 이즈 어 바이너리 트리"). 그 과목 전사본이 통째로 못 쓰게 됨 | `test_language_setting_reaches_the_model` |
+| 환각 목록에 "thank you" / "bye" | 영어 수업에서 교수가 수업을 마치며 하는 실제 인사가 지워짐 | `test_short_english_utterances_are_kept` |
+| `no_speech_prob` 단독 판정 | 0.6~0.85 구간에서 모델이 확신 없이 지어낸 문장을 놓침 | `test_logprob_rule_needs_both_signals_bad` |
+| 후보 밖 언어 오판 | 한국어 강의의 영어 용어 구간이 일본어로 판정됨 | `test_wrong_language_is_corrected_to_best_candidate` |
+
 ### 기타
 
 | 버그 | 증상 | 테스트 |

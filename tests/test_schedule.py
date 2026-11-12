@@ -100,3 +100,31 @@ def test_wait_until_returns_immediately_if_past():
 def test_wait_until_respects_stop():
     future = datetime.now() + timedelta(hours=1)
     assert S.wait_until(future, stop_check=lambda: True, poll_sec=0.01) is False
+
+
+# ---------------------------------------------------------------------------
+# 과목별 언어
+# ---------------------------------------------------------------------------
+def test_timetable_language_is_parsed():
+    """영어 수업을 ko 로 전사하면 전사본이 통째로 못 쓰게 됩니다."""
+    slots = S.parse([
+        {"name": "자료구조", "day": "mon", "start": "09:00", "end": "10:50"},
+        {"name": "영어2", "day": "tue", "start": "11:00", "end": "12:50", "language": "en"},
+        {"name": "웹프로그래밍", "day": "wed", "start": "13:00", "end": "14:50",
+         "language": ["ko", "en"]},
+    ])
+    assert slots[0].language is None       # 전역 설정을 씁니다
+    assert slots[1].language == "en"
+    assert slots[2].language == "ko+en"    # 목록은 합쳐서 넘깁니다
+
+
+def test_describe_shows_language():
+    slots = S.parse([
+        {"name": "영어2", "day": "tue", "start": "11:00", "end": "12:50", "language": "en"},
+    ])
+    assert "[en]" in S.describe(slots)
+
+
+def test_language_is_optional():
+    slots = S.parse(TIMETABLE)
+    assert all(s.language is None for s in slots)
