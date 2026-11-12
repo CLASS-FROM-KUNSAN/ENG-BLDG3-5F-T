@@ -158,6 +158,7 @@ DEFAULTS: dict[str, Any] = {
             "no_speech_threshold": 0.85,
             "max_repeats": 3,
             "extra_phrases": [],
+            "use_logprob_rule": True,
         },
         "openai": {
             "model": "whisper-1",
@@ -353,6 +354,9 @@ def validate(cfg: Config) -> None:
         day = str(entry.get("day", "")).lower()
         if day not in _DAYS:
             errors.append(f"{where}.day = {entry.get('day')!r} (가능: {sorted(_DAYS)})")
+        lang = entry.get("language")
+        if lang is not None and not isinstance(lang, (str, list)):
+            errors.append(f"{where}.language 는 문자열이거나 목록이어야 합니다")
         for field_name in ("start", "end"):
             value = str(entry.get(field_name, ""))
             parts = value.split(":")

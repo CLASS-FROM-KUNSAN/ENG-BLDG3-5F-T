@@ -212,3 +212,97 @@ def test_realistic_lecture_transcript():
     assert "시청해주셔서 감사합니다" not in kept
     assert "음" not in kept
     assert kept.count("네") == 3, "반복은 앞 3개만 남아야 합니다"
+
+
+# ---------------------------------------------------------------------------
+# 영어 강의 오탐 방지
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Thank you",
+        "Thank you.",
+        "Thank you!",
+        "Bye",
+        "Bye.",
+        "Okay",
+        "Yes",
+        "See you next week",
+        "Any questions?",
+    ],
+)
+def test_short_english_utterances_are_kept(text):
+    """회귀 방지: 영어 수업에서 교수가 수업을 마치며 "Thank you." 라고
+    말합니다. 환각 목록에 짧은 말을 넣으면 전사본에서 수업의 끝이
+    사라집니다. 짧은 말은 문구 규칙 대신 확률 신호로 거릅니다.
+    """
+    drop, reason = Cleaner().should_drop(text, 0.1)
+    assert drop is False, f"{text!r} 가 {reason} 으로 삭제됐습니다"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Thank you for watching", "Thanks for watching", "Please subscribe",
+     "Like and subscribe", "See you in the next video"],
+)
+def test_long_youtube_phrases_still_dropped(text):
+    """짧은 말을 살리더라도 확실한 자막 상투어는 여전히 지웁니다."""
+    assert Cleaner().should_drop(text, 0.1)[0] is True
+
+
+def test_short_phrase_dropped_when_signals_agree():
+    """'Thank you' 도 모델이 무음+저확신이라고 하면 버립니다."""
+    cleaner = Cleaner()
+    assert cleaner.should_drop("Thank you", 0.7, -1.5)[0] is True
+    assert cleaner.should_drop("Thank you", 0.7, -0.3)[0] is False
+
+
+# ---------------------------------------------------------------------------
+# avg_logprob 결합 규칙 (Whisper 자체 기본값)
+# ---------------------------------------------------------------------------
+def test_logprob_rule_needs_both_signals_bad():
+    cleaner = Cleaner()
+    # 무음 의심은 있지만 확신도는 괜찮음 -> 유지
+    assert cleaner.should_drop("뭔가 말했습니다", 0.7, -0.5)[0] is False
+    # 확신도는 낮지만 무음 의심은 없음 -> 유지
+    assert cleaner.should_drop("뭔가 말했습니다", 0.2, -2.0)[0] is False
+    # 둘 다 나쁨 -> 제거
+    drop, reason = cleaner.should_drop("뭔가 말했습니다", 0.7, -2.0)
+    assert drop is True
+    assert "저확신" in reason
+
+
+def test_logprob_rule_can_be_disabled():
+    cleaner = Cleaner(use_logprob_rule=False)
+    assert cleaner.should_drop("뭔가 말했습니다", 0.7, -2.0)[0] is False
+
+
+def test_logprob_missing_skips_the_rule():
+    """엔진이 avg_logprob 를 주지 않으면 그 규칙만 건너뜁니다."""
+    assert Cleaner().should_drop("뭔가 말했습니다", 0.7, None)[0] is False
+
+
+def test_single_threshold_still_applies_above_085():
+    assert Cleaner().should_drop("뭔가", 0.9, None)[0] is True
+
+
+def test_english_lecture_flow():
+    """영어 수업 전사 흐름 — 실제 발화는 남고 환각만 빠져야 합니다."""
+    cleaner = Cleaner()
+    stream = [
+        ("Good morning everyone", 0.05, -0.2),
+        ("Today we will cover binary search trees", 0.06, -0.3),
+        ("Thank you for watching", 0.4, -0.8),     # 환각
+        ("Any questions?", 0.1, -0.4),
+        ("", 0.9, -1.8),                            # 무음
+        ("Okay, see you next week", 0.08, -0.3),
+        ("Thank you", 0.12, -0.35),                 # 실제 마무리 인사
+    ]
+    kept = [t for t, n, a in stream if not cleaner.should_drop(t, n, a)[0]]
+    assert kept == [
+        "Good morning everyone",
+        "Today we will cover binary search trees",
+        "Any questions?",
+        "Okay, see you next week",
+        "Thank you",
+    ], kept

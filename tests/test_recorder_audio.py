@@ -222,3 +222,98 @@ def test_full_tap_does_not_break_recording(tmp_path):
     track.join(timeout=10)
     assert track.result.error is None
     assert track.result.frames > 0
+
+
+# ---------------------------------------------------------------------------
+# GPU 판정
+# ---------------------------------------------------------------------------
+def test_cpu_request_is_honoured():
+    from gymhall.transcribe.engine import pick_device
+
+    assert pick_device("cpu") == ("cpu", "int8")
+
+
+def test_auto_falls_back_to_cpu_without_cuda(monkeypatch):
+    from gymhall.transcribe import engine
+
+    monkeypatch.setattr(engine, "probe_cuda", lambda: (False, None, "CUDA 없음"))
+    assert engine.pick_device("auto") == ("cpu", "int8")
+
+
+def test_small_vram_gpu_is_rejected(monkeypatch):
+    """회귀 방지: 존재 여부만 보고 cuda 를 고르면 2GB 내장 GPU 에서
+    large 모델 로딩 중 OOM 으로 죽습니다."""
+    from gymhall.transcribe import engine
+
+    calls = {"count": 1, "vram": 2.0}
+
+    class FakeCT2:
+        @staticmethod
+        def get_cuda_device_count():
+            return calls["count"]
+
+        @staticmethod
+        def get_supported_compute_types(device):
+            return {"float32"}
+
+    class FakeProps:
+        total_memory = int(calls["vram"] * 1024**3)
+
+    class FakeCuda:
+        @staticmethod
+        def is_available():
+            return True
+
+        @staticmethod
+        def get_device_properties(i):
+            return FakeProps()
+
+    class FakeTorch:
+        cuda = FakeCuda()
+
+    monkeypatch.setitem(__import__("sys").modules, "ctranslate2", FakeCT2)
+    monkeypatch.setitem(__import__("sys").modules, "torch", FakeTorch)
+
+    ok, vram, message = engine.probe_cuda()
+    assert ok is False
+    assert vram == pytest.approx(2.0)
+    assert "VRAM" in message
+    assert engine.pick_device("auto") == ("cpu", "int8")
+
+
+def test_compute_type_is_asked_not_hardcoded(monkeypatch):
+    """회귀 방지: float16 을 하드코딩하면 지원하지 않는 카드에서
+    모델 로딩이 실패합니다. ctranslate2 에 직접 물어봅니다."""
+    from gymhall.transcribe import engine
+
+    class FakeCT2:
+        @staticmethod
+        def get_supported_compute_types(device):
+            return {"float32", "int8"}   # float16 없음
+
+    monkeypatch.setitem(__import__("sys").modules, "ctranslate2", FakeCT2)
+    assert engine.cuda_compute_type() == "float32"
+
+
+def test_compute_type_prefers_float16_when_available(monkeypatch):
+    from gymhall.transcribe import engine
+
+    class FakeCT2:
+        @staticmethod
+        def get_supported_compute_types(device):
+            return {"float32", "float16", "int8_float16"}
+
+    monkeypatch.setitem(__import__("sys").modules, "ctranslate2", FakeCT2)
+    assert engine.cuda_compute_type() == "float16"
+
+
+def test_compute_type_survives_probe_failure(monkeypatch):
+    from gymhall.transcribe import engine
+
+    class Broken:
+        @staticmethod
+        def get_supported_compute_types(device):
+            raise RuntimeError("드라이버 오류")
+
+    monkeypatch.setitem(__import__("sys").modules, "ctranslate2", Broken)
+    assert engine.cuda_compute_type() == "float32"

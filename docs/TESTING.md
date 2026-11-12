@@ -78,6 +78,27 @@ TypeError: 'Event' object is not callable
 | 감시 트리거 재시작 폭주 | ffmpeg 가 즉시 죽고 Zoom 이 켜져 있으면 **0.0초에 25회** 재시작하며 빈 폴더로 디스크를 채움 | `test_gives_up_instead_of_thrashing` |
 | `wait_until_gone` 무한 대기 | 감지 조건이 항상 참이면 영원히 멈춤 | `test_wait_until_gone_has_a_ceiling` |
 
+### 영어 강의 / 언어
+
+| 버그 | 증상 | 테스트 |
+|---|---|---|
+| `language = "ko"` 전역 고정 | 영어 수업을 한글로 받아씀("디스 이즈 어 바이너리 트리"). 그 과목 전사본이 통째로 못 쓰게 됨 | `test_language_setting_reaches_the_model` |
+| 환각 목록에 "thank you" / "bye" | 영어 수업에서 교수가 수업을 마치며 하는 실제 인사가 지워짐 | `test_short_english_utterances_are_kept` |
+| `no_speech_prob` 단독 판정 | 0.6~0.85 구간에서 모델이 확신 없이 지어낸 문장을 놓침 | `test_logprob_rule_needs_both_signals_bad` |
+| 후보 밖 언어 오판 | 한국어 강의의 영어 용어 구간이 일본어로 판정됨 | `test_wrong_language_is_corrected_to_best_candidate` |
+
+### 참고 저장소 정독 후 찾은 것 (2차)
+
+처음에 겉핥기로 넘긴 저장소들을 파일 단위로 다시 읽어 찾았습니다.
+
+| 버그 | 증상 | 테스트 |
+|---|---|---|
+| GPU 선택이 VRAM 을 안 봄 | 2GB 내장 GPU 에서도 cuda 를 골라 모델 로딩 중 OOM | `test_small_vram_gpu_is_rejected` |
+| `float16` 하드코딩 | 지원하지 않는 카드에서 로딩 실패 | `test_compute_type_is_asked_not_hardcoded` |
+| 첨부 탐색이 프레임을 안 봄 | 본문이 iframe 안에 그려지면 첨부를 영영 못 찾음 | (프레임 순회 추가) |
+| Actions 가 시크릿 없이 실패 | 설정 전까지 하루 3회 실패 알림이 쌓임 | (게이트 단계 추가) |
+| 소요 시간이 지어낸 숫자 | "1시간에 10분" — 기기·부하에 따라 몇 배씩 다름 | `test_describe_says_whether_it_is_measured` |
+
 ### 기타
 
 | 버그 | 증상 | 테스트 |

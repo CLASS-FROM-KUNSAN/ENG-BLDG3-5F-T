@@ -8,6 +8,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from gymhall.transcribe.batch import QUEUE_FILE, Queue
 
 
@@ -237,3 +239,82 @@ def test_disabled_cleaner_keeps_hallucinations(tmp_path):
     transcribe_file(audio, tmp_path / "out", spec=EngineSpec(), model=model,
                     output_formats=("txt",), cleaner=Cleaner(enabled=False))
     assert "시청해주셔서" in (tmp_path / "out.txt").read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# 과목별 언어가 대기열을 타고 전사까지 가는지
+# ---------------------------------------------------------------------------
+def test_queue_carries_language(tmp_path):
+    q = make_queue(tmp_path)
+    q.add(tmp_path / "a.wav", label="영어2", out_dir=tmp_path, language="en")
+    q.add(tmp_path / "b.wav", label="자료구조", out_dir=tmp_path)
+    again = make_queue(tmp_path)
+    assert again.items[0]["language"] == "en"
+    assert again.items[1]["language"] is None
+
+
+def test_enqueue_segment_passes_language(tmp_path):
+    from gymhall.paths import Layout
+    from gymhall.transcribe.batch import enqueue_segment
+
+    layout = Layout(tmp_path)
+    layout.ensure()
+    seg = FakeSegment({"system": tmp_path / "s.wav"})
+    enqueue_segment(FakeConfig(), layout, seg, "영어2", language="en")
+    assert Queue(layout.state / QUEUE_FILE).items[0]["language"] == "en"
+
+
+class _InfoLang:
+    duration = 60.0
+
+    def __init__(self, language="ko", probability=0.9, all_probs=None):
+        self.language = language
+        self.language_probability = probability
+        self.all_language_probs = all_probs
+
+
+class _ModelLang:
+    """transcribe 에 넘어온 language 인자를 기록합니다."""
+
+    def __init__(self, info=None):
+        self.seen_language = "<not called>"
+        self.info = info or _InfoLang()
+
+    def transcribe(self, path, **kw):
+        self.seen_language = kw.get("language")
+        return iter([_Seg(0, 3, "hello")]), self.info
+
+
+@pytest.mark.parametrize(
+    "setting,expected",
+    [("ko", "ko"), ("en", "en"), ("auto", None), ("ko+en", None)],
+)
+def test_language_setting_reaches_the_model(tmp_path, setting, expected):
+    """영어 수업에 ko 가 넘어가면 소리 나는 대로 한글을 뱉습니다."""
+    from gymhall.transcribe.batch import transcribe_file
+    from gymhall.transcribe.engine import EngineSpec
+
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"\0" * 100)
+    model = _ModelLang()
+    transcribe_file(audio, tmp_path / f"out_{setting}", spec=EngineSpec(),
+                    model=model, language=setting, output_formats=("txt",))
+    assert model.seen_language == expected
+
+
+def test_detected_language_lands_in_meta(tmp_path):
+    import json
+
+    from gymhall.transcribe.batch import transcribe_file
+    from gymhall.transcribe.engine import EngineSpec
+
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"\0" * 100)
+    # 모델은 일본어라고 했지만 후보는 ko+en -> ko 로 교정돼야 합니다
+    info = _InfoLang("ja", 0.6, [("ja", 0.6), ("ko", 0.3), ("en", 0.1)])
+    model = _ModelLang(info)
+    transcribe_file(audio, tmp_path / "out", spec=EngineSpec(), model=model,
+                    language="ko+en", output_formats=("json",))
+    meta = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["meta"]
+    assert meta["language"] == "ko"
+    assert meta["language_candidates"] == ["ko", "en"]
