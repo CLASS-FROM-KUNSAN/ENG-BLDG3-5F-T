@@ -573,7 +573,8 @@ def cmd_upload(args) -> int:
         print(f"경로가 없습니다: {target}")
         return 1
 
-    files = [target] if target.is_file() else list(iter_files(target))
+    is_dir = target.is_dir()
+    files = [target] if not is_dir else list(iter_files(target))
     if not files:
         print("올릴 파일이 없습니다.")
         return 0
@@ -585,8 +586,12 @@ def cmd_upload(args) -> int:
     )
     store = _store(layout, "manual_upload")
     print(f"릴리스 '{tag}' 에 {len(files)}개 파일을 올립니다.")
+    # 폴더를 올릴 때 root 를 넘기지 않으면 에셋 이름이 '파일 이름' 만으로
+    # 정해져서, 하위 폴더가 다른 동명 파일(courseA/자료.md, courseB/자료.md)이
+    # 같은 이름이 됩니다. 실행 내 중복 검사에 걸려 두 번째가 통째로 빠집니다.
     results = upload_many(_uploader(cfg, dry_run=args.dry_run), files, tag,
-                          prefix=f"{cfg.machine_label}_", store=store)
+                          prefix=f"{cfg.machine_label}_", store=store,
+                          root=target if is_dir else target.parent)
     print(f"완료 {len(results)}건")
     return 0
 
