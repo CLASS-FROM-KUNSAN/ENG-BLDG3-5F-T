@@ -95,6 +95,12 @@ LOGGED_IN_SELECTORS = (
 LOGGED_OUT_SELECTOR = "#loginForm input[name='password'], input[name='password']"
 
 
+# 로그인 실패나 중복 로그인에서 뜨는 대화상자의 내용으로 원인을 구분합니다.
+DUPLICATE_LOGIN_HINTS = ("중복", "이미 로그인", "다른 곳", "동시 접속")
+WRONG_CREDENTIAL_HINTS = ("비밀번호", "일치하지", "확인하", "잘못", "아이디")
+LOCKED_HINTS = ("잠금", "잠겼", "차단", "정지", "5회", "횟수")
+
+
 class EclassBrowser:
     """with 문으로 쓰세요. 나갈 때 브라우저를 정리합니다."""
 
@@ -120,6 +126,10 @@ class EclassBrowser:
         self._browser = None
         self._context = None
         self.page = None
+        # Playwright 는 기본적으로 alert/confirm 을 조용히 닫아 버립니다.
+        # 그러면 "비밀번호가 일치하지 않습니다" 같은 실패 사유를 영영 못 봅니다.
+        # 내용을 모아 두었다가 오류 메시지에 그대로 실어 줍니다.
+        self.dialogs: list[str] = []
 
     # -- 수명주기 ----------------------------------------------------
     def __enter__(self) -> EclassBrowser:
@@ -147,7 +157,49 @@ class EclassBrowser:
         self._context = self._browser.new_context(**kwargs)
         self._context.set_default_timeout(self.timeout_ms)
         self.page = self._context.new_page()
+        self._install_dialog_handler()
         return self
+
+    def _install_dialog_handler(self) -> None:
+        """alert / confirm 을 받아 기록하고 수락합니다.
+
+        수락하는 이유: 이 LMS 는 중복 로그인 안내처럼 '확인' 을 눌러야
+        다음으로 넘어가는 대화상자를 씁니다. 무시하면 그 자리에서 멈춥니다.
+        """
+
+        def on_dialog(dialog) -> None:
+            message = (dialog.message or "").strip()
+            if message:
+                self.dialogs.append(message)
+                log.info("대화상자: %s", message)
+            try:
+                dialog.accept()
+            except Exception:
+                try:
+                    dialog.dismiss()
+                except Exception:
+                    pass
+
+        self.page.on("dialog", on_dialog)
+
+    def take_dialogs(self) -> list[str]:
+        """모인 대화상자 내용을 꺼내고 비웁니다."""
+        found, self.dialogs = list(self.dialogs), []
+        return found
+
+    def diagnose(self, messages: list[str]) -> str:
+        """대화상자 내용으로 실패 원인을 짚어 줍니다."""
+        joined = " ".join(messages)
+        if any(h in joined for h in LOCKED_HINTS):
+            return ("계정이 잠겼을 수 있습니다. 브라우저로 직접 로그인해 "
+                    "상태를 확인하세요. 자동 재시도는 하지 않습니다.")
+        if any(h in joined for h in DUPLICATE_LOGIN_HINTS):
+            return ("다른 곳에서 이미 로그인된 상태입니다. "
+                    "그 세션을 로그아웃하거나 잠시 뒤 다시 시도하세요.")
+        if any(h in joined for h in WRONG_CREDENTIAL_HINTS):
+            return ("아이디 또는 비밀번호가 맞지 않습니다. "
+                    "python -m gymhall secrets set eclass 로 다시 저장하세요.")
+        return ""
 
     def __exit__(self, *exc_info) -> None:
         self.close()
@@ -239,28 +291,63 @@ class EclassBrowser:
         id_input.fill(self.username)
         pw_input.fill(password)
 
+        self.take_dialogs()  # 이전 단계에서 남은 것 비우기
         submit, _ = self._first_visible(SUBMIT_SELECTORS)
         try:
             with self.page.expect_navigation(wait_until="domcontentloaded", timeout=self.timeout_ms):
                 if submit is not None:
                     submit.click()
                 else:
-                    # 버튼을 못 찾으면 엔터로 폼을 제출합니다.
+                    # 버튼을 못 찾으면 엔터로 제출합니다.
+                    # 폼에 onsubmit="return false" 가 걸려 있어 기본 제출은
+                    # 막혀 있지만, 비밀번호 칸의 onkeypress 가 fnLogin() 을
+                    # 직접 부르기 때문에 동작합니다.
                     pw_input.press("Enter")
         except Exception as exc:
             log.debug("로그인 후 네비게이션 대기 실패(무시하고 상태를 확인합니다): %s", exc)
 
-        # alert() 로 막히는 경우가 있어 한 번 더 확인합니다.
-        self.page.wait_for_timeout(1000)
+        # 중복 로그인 안내처럼 '확인' 을 눌러야 넘어가는 화면이 있습니다.
+        self.page.wait_for_timeout(1200)
+        self._click_confirm_if_present()
+        self.page.wait_for_timeout(500)
+
         if not self.is_logged_in():
-            raise LoginError(
-                "로그인에 실패했습니다. 아이디/비밀번호를 확인하세요.\n"
-                "비밀번호를 여러 번 틀리면 학교 계정이 잠길 수 있으니 "
+            messages = self.take_dialogs()
+            detail = self.diagnose(messages)
+            lines = ["로그인에 실패했습니다."]
+            if messages:
+                lines.append("사이트가 보여준 메시지: " + " / ".join(messages))
+            if detail:
+                lines.append(detail)
+            else:
+                lines.append("아이디와 비밀번호를 확인하세요.")
+            lines.append(
+                "비밀번호를 여러 번 틀리면 학교 계정이 잠길 수 있어 "
                 "자동 재시도는 하지 않습니다."
             )
+            raise LoginError("\n".join(lines))
 
         log.info("로그인 성공")
         self.save_state()
+
+    def _click_confirm_if_present(self) -> bool:
+        """'확인' 류 버튼이 보이면 누릅니다.
+
+        중복 로그인 안내가 모달로 뜨면 누르지 않는 한 다음으로 넘어가지
+        않습니다. 브라우저 기본 대화상자(alert/confirm)는 dialog 핸들러가
+        처리하지만, 페이지가 직접 그린 모달은 여기서 눌러야 합니다.
+        """
+        labels = ("확인", "예", "OK", "계속")
+        for label in labels:
+            try:
+                button = self.page.get_by_role("button", name=label, exact=True).first
+                if button.count() > 0 and button.is_visible():
+                    button.click(timeout=3000)
+                    log.info("'%s' 버튼을 눌렀습니다(중복 로그인 안내 등).", label)
+                    return True
+            except Exception:
+                continue
+        return False
 
     # -- 다운로드 ----------------------------------------------------
     @contextmanager

@@ -152,6 +152,13 @@ DEFAULTS: dict[str, Any] = {
             "overlap_sec": 1.5,
             "print_to_console": True,
         },
+        "cleanup": {
+            "enabled": True,
+            "drop_hallucinations": True,
+            "no_speech_threshold": 0.85,
+            "max_repeats": 3,
+            "extra_phrases": [],
+        },
         "openai": {
             "model": "whisper-1",
             "chunk_minutes": 10,

@@ -323,3 +323,85 @@ def test_attachment_flag_survives_pagination(browser, server):
         assert [r["has_file"] for r in c.read_board_rows()] == [False, True]
     finally:
         pg.close()
+
+
+# ---------------------------------------------------------------------------
+# 대화상자 처리
+# ---------------------------------------------------------------------------
+def _attach_handler(page):
+    """EclassBrowser 의 dialog 핸들러만 떼어 붙입니다."""
+    collected: list[str] = []
+
+    def on_dialog(dialog):
+        msg = (dialog.message or "").strip()
+        if msg:
+            collected.append(msg)
+        try:
+            dialog.accept()
+        except Exception:
+            dialog.dismiss()
+
+    page.on("dialog", on_dialog)
+    return collected
+
+
+def test_alert_text_is_captured_not_swallowed(browser, server):
+    """회귀 방지: Playwright 는 기본적으로 alert 를 조용히 닫습니다.
+    그러면 '비밀번호가 일치하지 않습니다' 같은 실패 사유를 영영 못 봅니다.
+    """
+    pg = browser.new_page()
+    try:
+        pg.goto(f"{server}/main_logged_out.html")
+        seen = _attach_handler(pg)
+        pg.evaluate("() => { alert('비밀번호가 일치하지 않습니다.'); }")
+        pg.wait_for_timeout(200)
+        assert seen == ["비밀번호가 일치하지 않습니다."]
+    finally:
+        pg.close()
+
+
+def test_confirm_is_accepted_so_page_proceeds(browser, server):
+    """중복 로그인 안내처럼 확인을 눌러야 넘어가는 화면이 있습니다."""
+    pg = browser.new_page()
+    try:
+        pg.goto(f"{server}/main_logged_out.html")
+        _attach_handler(pg)
+        result = pg.evaluate("() => confirm('중복 로그인입니다. 계속할까요?')")
+        assert result is True, "confirm 을 거절하면 로그인이 진행되지 않습니다"
+    finally:
+        pg.close()
+
+
+@pytest.mark.parametrize(
+    "message,expect",
+    [
+        ("이미 로그인된 사용자입니다", "다른 곳에서 이미 로그인"),
+        ("다른 곳에서 접속 중입니다", "다른 곳에서 이미 로그인"),
+        ("비밀번호가 일치하지 않습니다", "아이디 또는 비밀번호"),
+        ("아이디를 확인하세요", "아이디 또는 비밀번호"),
+        ("비밀번호 5회 오류로 계정이 잠겼습니다", "계정이 잠겼"),
+        ("알 수 없는 오류", ""),
+    ],
+)
+def test_diagnose_maps_message_to_cause(message, expect):
+    """오류 메시지가 '로그인 실패' 한 줄이면 사용자가 뭘 해야 할지 모릅니다."""
+    from gymhall.eclass.browser import EclassBrowser
+    from gymhall.eclass.urls import Site
+
+    br = EclassBrowser.__new__(EclassBrowser)  # __init__ 없이 메서드만 씁니다
+    br.site = Site()
+    result = br.diagnose([message])
+    if expect:
+        assert expect in result, f"{message!r} -> {result!r}"
+    else:
+        assert result == ""
+
+
+def test_lock_warning_takes_priority():
+    """잠김은 중복/오타보다 먼저 알려야 합니다. 더 재시도하면 악화됩니다."""
+    from gymhall.eclass.browser import EclassBrowser
+
+    br = EclassBrowser.__new__(EclassBrowser)
+    result = br.diagnose(["비밀번호 5회 오류로 계정이 잠겼습니다"])
+    assert "잠겼" in result
+    assert "재시도" in result

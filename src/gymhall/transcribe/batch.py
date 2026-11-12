@@ -19,6 +19,8 @@ from typing import Any
 from ..logging_setup import get as get_logger
 from ..paths import Layout
 from . import formats
+from .cleanup import Cleaner
+from .cleanup import from_config as cleaner_from_config
 from .engine import EngineSpec
 
 log = get_logger("transcribe.batch")
@@ -110,6 +112,7 @@ def transcribe_file(
     vad_filter: bool = True,
     model=None,
     header: str = "",
+    cleaner: Cleaner | None = None,
 ) -> Result:
     """오디오 하나를 전사해 결과 파일들을 씁니다."""
     audio = Path(audio)
@@ -130,9 +133,14 @@ def transcribe_file(
         condition_on_previous_text=True,
     )
 
+    cleaner = cleaner or Cleaner()
     segments: list[formats.Segment] = []
     last_report = time.time()
     for seg in segments_iter:
+        drop, reason = cleaner.should_drop(seg.text, getattr(seg, "no_speech_prob", None))
+        if drop:
+            log.debug("[%.0fs] 제거(%s): %s", seg.start, reason, seg.text.strip()[:50])
+            continue
         words = []
         if getattr(seg, "words", None):
             words = [{"start": w.start, "end": w.end, "word": w.word} for w in seg.words]
@@ -141,6 +149,7 @@ def transcribe_file(
         if time.time() - last_report > 30:
             log.info("  ... %.0f분 지점까지 전사", seg.end / 60)
             last_report = time.time()
+    cleaner.report(audio.name)
 
     spent = time.time() - started
     audio_seconds = float(getattr(info, "duration", 0.0) or 0.0)
@@ -154,6 +163,13 @@ def transcribe_file(
         "audio_seconds": audio_seconds,
         "transcribed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "elapsed_seconds": round(spent, 1),
+        "cleanup": {
+            "kept": cleaner.stats.kept,
+            "dropped": cleaner.stats.dropped,
+            "dropped_phrase": cleaner.stats.dropped_phrase,
+            "dropped_silence": cleaner.stats.dropped_silence,
+            "dropped_repeat": cleaner.stats.dropped_repeat,
+        },
     }
     outputs = formats.write_all(out_stem, segments, output_formats, header=header, meta=meta)
 
@@ -203,6 +219,9 @@ def run_queue(cfg, layout: Layout, *, limit: int = 0) -> list[Result]:
                     audio, stem, spec=spec, language=language,
                     output_formats=output_formats, vad_filter=vad,
                     model=model, header=header,
+                    # 파일마다 새로 만듭니다. 하나를 돌려쓰면 앞 파일의
+                    # 마지막 문장이 다음 파일의 첫 문장과 '반복' 으로 묶입니다.
+                    cleaner=cleaner_from_config(cfg),
                 )
             )
             queue.remove(item["audio"])

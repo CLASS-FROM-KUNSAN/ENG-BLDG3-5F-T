@@ -1,0 +1,129 @@
+name: eClass 자료 수집
+
+# 이 워크플로가 있으면 PC 를 켜 두지 않아도 자료가 수집됩니다.
+#
+# 작업 스케줄러 방식의 한계:
+#   노트북이 꺼져 있거나 절전이면 그 시각의 수집을 놓칩니다. StartWhenAvailable
+#   로 다음에 켤 때 밀려 실행되긴 하지만, 며칠 안 켜면 그만큼 늦습니다.
+#   들고 다니는 노트북에서는 이게 자주 일어납니다.
+#
+# GitHub Actions 는 그것과 무관하게 돕니다. 대신 두 가지를 받아들여야 합니다:
+#   1) 학번과 비밀번호를 GitHub Secrets 에 맡겨야 합니다.
+#      (저장소 관리자는 값을 볼 수 없지만, 워크플로를 수정할 수 있는 사람은
+#       실행 중에 꺼내 쓸 수 있습니다. private 저장소에서만 쓰세요.)
+#   2) 학교 서버 입장에서는 낯선 IP(GitHub 데이터센터)에서의 접속입니다.
+#      학교가 해외 IP 를 차단한다면 동작하지 않습니다.
+#
+# 쓰고 싶지 않으면 이 파일을 지우면 됩니다. 로컬 작업 스케줄러 방식은
+# 그대로 남아 있습니다.
+
+on:
+  schedule:
+    # 정각을 피합니다. 정각에는 전 세계 작업이 몰려 지연됩니다.
+    # UTC 기준입니다. 한국 시간(KST) = UTC + 9시간.
+    - cron: '23 22 * * *'   # KST 07:23
+    - cron: '23 4 * * *'    # KST 13:23
+    - cron: '23 10 * * *'   # KST 19:23
+  workflow_dispatch:        # 저장소 Actions 탭에서 수동 실행
+    inputs:
+      dry_run:
+        description: '업로드 없이 수집만 (true/false)'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write           # 릴리스에 올리기 위해 필요합니다
+
+concurrency:
+  group: eclass-sync        # 겹쳐 돌면 같은 자료를 두 번 받습니다
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: 의존성 설치
+        # 녹화/전사 패키지는 필요 없습니다. 수집에 필요한 것만 깝니다.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install playwright requests
+
+      - name: Chromium 설치
+        run: python -m playwright install --with-deps chromium
+
+      - name: 설정 파일 준비
+        # config.toml 은 .gitignore 에 있으므로(학번이 들어갑니다)
+        # 예시 파일에서 만들고 비밀값은 환경변수로 넣습니다.
+        env:
+          ECLASS_ID: ${{ secrets.ECLASS_ID }}
+        run: |
+          python - <<'PY'
+          import os, pathlib
+          text = pathlib.Path("config.example.toml").read_text(encoding="utf-8")
+          user = os.environ.get("ECLASS_ID", "")
+          if not user:
+              raise SystemExit(
+                  "ECLASS_ID 시크릿이 없습니다.\n"
+                  "저장소 Settings > Secrets and variables > Actions 에서\n"
+                  "ECLASS_ID(학번)와 ECLASS_PASSWORD(비밀번호)를 등록하세요."
+              )
+          text = text.replace('username = ""', f'username = "{user}"', 1)
+          text = text.replace('data_dir = ""', 'data_dir = "./_data"', 1)
+          text = text.replace('machine_label = ""', 'machine_label = "actions"', 1)
+          # Actions 러너는 매번 새 머신이라 녹화는 의미가 없습니다.
+          text = text.replace("[recording]\nenabled = true", "[recording]\nenabled = false", 1)
+          text = text.replace("[transcribe]\nenabled = true", "[transcribe]\nenabled = false", 1)
+          pathlib.Path("config.toml").write_text(text, encoding="utf-8")
+          print("config.toml 생성 완료")
+          PY
+
+      - name: 설정 검증
+        run: PYTHONPATH=src python -m gymhall config check
+
+      - name: 이전 수집 상태 복원
+        # 상태 파일이 없으면 매번 전부 '새 자료' 로 보고 다시 받습니다.
+        # 캐시로 이어 붙입니다. 캐시가 날아가도 해시로 중복 업로드는 막힙니다.
+        uses: actions/cache@v4
+        with:
+          path: _data/state
+          key: eclass-state-${{ github.run_id }}
+          restore-keys: |
+            eclass-state-
+
+      - name: 수집 및 업로드
+        env:
+          GYMHALL_ECLASS_PASSWORD: ${{ secrets.ECLASS_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONPATH: src
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then ARGS="--no-upload"; fi
+          python -m gymhall --log-level INFO eclass sync $ARGS
+
+      - name: 실패 시 로그 남기기
+        if: failure()
+        run: |
+          echo "=== 로그 ==="
+          find _data/logs -name '*.log' -exec tail -n 100 {} + 2>/dev/null || echo "(로그 없음)"
+
+      - name: 진단 자료 업로드
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eclass-sync-실패-${{ github.run_number }}
+          # 수집한 자료 자체는 올리지 않습니다(Artifacts 는 저장소 접근
+          # 권한만 있으면 누구나 받을 수 있고 보존 정책도 다릅니다).
+          path: |
+            _data/logs
+            _data/state
+          retention-days: 7
+          if-no-files-found: ignore
