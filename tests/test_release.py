@@ -699,3 +699,155 @@ def test_the_upload_record_remembers_which_repo(tmp_path):
     assert not store.is_uploaded("d1", "org/os")
     entry = next(iter(store.data["uploaded"].values()))
     assert entry["repo"] == "org/ds"
+
+
+# ---------------------------------------------------------------------------
+# 레포 준비 (CloneUp 의 422 처리 참고, auto_init 은 정반대)
+# ---------------------------------------------------------------------------
+class _Resp:
+    def __init__(self, status, payload=None, text=""):
+        self.status_code = status
+        self._payload = payload
+        self.text = text
+
+    @property
+    def ok(self):
+        return 200 <= self.status_code < 300
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("no json")
+        return self._payload
+
+
+class _Session:
+    def __init__(self, script):
+        self.script = script
+        self.calls = []
+
+    def get(self, url, **kw):
+        self.calls.append(("GET", url))
+        return self.script(("GET", url))
+
+    def post(self, url, **kw):
+        self.calls.append(("POST", url, kw.get("json")))
+        return self.script(("POST", url))
+
+
+def _up(script):
+    up, _ = make_uploader()
+    up._session = _Session(script)      # session 은 읽기 전용 프로퍼티입니다
+    up.owner, up.repo = "org", "ds-2026-2"
+    up.dry_run = False
+    return up
+
+
+def test_access_check_distinguishes_missing_repo_from_no_permission():
+    from gymhall.release import ReleaseError
+
+    missing = _up(lambda c: _Resp(404))
+    with pytest.raises(ReleaseError, match="레포가 없거나"):
+        missing.check_access()
+
+    rejected = _up(lambda c: _Resp(403))
+    with pytest.raises(ReleaseError, match="토큰이 거절"):
+        rejected.check_access()
+
+    readonly = _up(lambda c: _Resp(200, {"permissions": {"push": False}}))
+    with pytest.raises(ReleaseError, match="읽기만"):
+        readonly.check_access()
+
+    ok = _up(lambda c: _Resp(200, {"permissions": {"push": True}}))
+    ok.check_access()
+
+
+def test_ensure_repo_does_not_create_by_default():
+    from gymhall.release import ReleaseError
+
+    up = _up(lambda c: _Resp(404))
+    with pytest.raises(ReleaseError, match="레포가 없거나"):
+        up.ensure_repo(create_missing=False)
+    assert all(m != "POST" for m, *_ in up.session.calls), "만들지 말아야 합니다"
+
+
+def test_ensure_repo_creates_with_auto_init_when_allowed():
+    """CloneUp 은 auto_init 을 금지하지만 우리는 켭니다.
+
+    push 가 아니라 릴리스를 만들기 때문입니다. 커밋이 하나도 없으면
+    태그가 가리킬 기본 브랜치가 없습니다.
+    """
+    state = {"created": False}
+
+    def script(call):
+        method, url = call[0], call[1]
+        if method == "GET" and url.endswith("/users/org"):
+            return _Resp(200, {"type": "Organization"})
+        if method == "GET":
+            return _Resp(200, {"permissions": {"push": True}}) if state["created"] else _Resp(404)
+        state["created"] = True
+        return _Resp(201, {"full_name": "org/ds-2026-2"})
+
+    up = _up(script)
+    up.ensure_repo(create_missing=True)
+    posts = [c for c in up.session.calls if c[0] == "POST"]
+    assert len(posts) == 1
+    assert posts[0][1].endswith("/orgs/org/repos"), "조직은 /orgs/{org}/repos"
+    assert posts[0][2]["auto_init"] is True
+
+
+def test_a_personal_account_uses_user_repos():
+    state = {"created": False}
+
+    def script(call):
+        method, url = call[0], call[1]
+        if method == "GET" and url.endswith("/users/org"):
+            return _Resp(200, {"type": "User"})
+        if method == "GET":
+            return _Resp(200, {"permissions": {"push": True}}) if state["created"] else _Resp(404)
+        state["created"] = True
+        return _Resp(201, {"full_name": "org/ds-2026-2"})
+
+    up = _up(script)
+    up.ensure_repo(create_missing=True)
+    posts = [c for c in up.session.calls if c[0] == "POST"]
+    assert posts[0][1].endswith("/user/repos")
+
+
+def test_name_collision_is_explained_not_a_raw_422():
+    from gymhall.release import ReleaseError
+
+    def script(call):
+        if call[0] == "GET" and call[1].endswith("/users/org"):
+            return _Resp(200, {"type": "User"})
+        if call[0] == "GET":
+            return _Resp(404)
+        return _Resp(422, {"message": "Repository creation failed: name already exists on this account"})
+
+    up = _up(script)
+    with pytest.raises(ReleaseError, match="이미 있는데"):
+        up.ensure_repo(create_missing=True)
+
+
+def test_no_permission_to_create_is_explained():
+    from gymhall.release import ReleaseError
+
+    def script(call):
+        if call[0] == "GET" and call[1].endswith("/users/org"):
+            return _Resp(200, {"type": "Organization"})
+        if call[0] == "GET":
+            return _Resp(404)
+        return _Resp(403)
+
+    up = _up(script)
+    with pytest.raises(ReleaseError, match="만들 권한이 없습니다"):
+        up.ensure_repo(create_missing=True)
+
+
+def test_a_permission_error_is_never_turned_into_a_create():
+    """읽기만 되는 레포를 '없는 레포' 로 오해해 만들려 들면 안 됩니다."""
+    from gymhall.release import ReleaseError
+
+    up = _up(lambda c: _Resp(200, {"permissions": {"push": False}}))
+    with pytest.raises(ReleaseError, match="읽기만"):
+        up.ensure_repo(create_missing=True)
+    assert all(m != "POST" for m, *_ in up.session.calls)

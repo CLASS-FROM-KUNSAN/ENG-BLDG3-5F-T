@@ -53,6 +53,12 @@ DEFAULTS: dict[str, Any] = {
         "retry_count": 4,
         "retry_backoff": 2.0,
         "delete_local_after_upload": False,
+        # 레포는 학기마다 새로 만듭니다. 없는 레포를 코드가 직접 만들지는
+        # 기본적으로 않습니다 — 레포 생성은 토큰에 더 센 권한을 요구하고
+        # 조직 정책으로 막혀 있는 경우가 흔합니다. 켜면 CloneUp 과 같은
+        # 방식으로 만들되 auto_init 은 켭니다(릴리스 태그에 기본 브랜치 필요).
+        "create_missing_repos": False,
+        "repo_private": True,
     },
     "eclass": {
         "enabled": True,

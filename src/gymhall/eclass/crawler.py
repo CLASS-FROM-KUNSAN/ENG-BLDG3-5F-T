@@ -1041,7 +1041,7 @@ class Crawler:
             log.error("%s", msg)
             self.stats.errors.append(msg)
             return
-        self.store.data["meta"].pop(f"pending:{state_key}", None)
+        self.store.forget("meta", f"pending:{state_key}")
         self.store.mark_downloaded(state_key, path=str(md), extra=extra)
         self.store.save()
 

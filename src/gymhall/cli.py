@@ -349,7 +349,10 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
         where = course.slug if course is not None else "기본 레포"
         try:
             uploader = _uploader(cfg, dry_run=dry_run, course=course)
-            uploader.check_access()
+            uploader.ensure_repo(
+                create_missing=bool(cfg.get("github.create_missing_repos", False)),
+                private=bool(cfg.get("github.repo_private", True)),
+            )
             total = sum(len(v) for v in folders.values())
             log.info("[%s] 릴리스 '%s' 로 폴더 %d개 (파일 %d개)",
                      where, tag, len(folders), total)

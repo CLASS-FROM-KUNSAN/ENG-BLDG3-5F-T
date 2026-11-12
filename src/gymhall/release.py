@@ -307,6 +307,87 @@ class ReleaseUploader:
             )
         raise ReleaseError(f"{self.slug}: 확인 실패 {resp.status_code}")
 
+    def _owner_is_org(self) -> bool:
+        """개인 계정인지 조직인지. 레포 생성 주소가 달라집니다."""
+        try:
+            resp = self.session.get(f"{API}/users/{self.owner}", timeout=20)
+        except Exception:
+            return False
+        if resp.status_code != 200:
+            return False
+        return str(resp.json().get("type", "")).lower() == "organization"
+
+    def create_repo(self, *, private: bool = True, description: str = "") -> dict[str, Any]:
+        """과목 레포를 만듭니다. 학기마다 새 레포를 쓰는 구조를 위해서입니다.
+
+        CloneUp(app/github/api_client.py)의 422 처리를 가져왔습니다.
+        다만 **auto_init 은 정반대로 켭니다.** CloneUp 은 새 로컬
+        히스토리를 push 하므로 원격 첫 커밋이 있으면 non-fast-forward 로
+        막힙니다. 우리는 push 를 하지 않고 릴리스만 만듭니다. 커밋이
+        하나도 없는 레포는 기본 브랜치가 없어서 릴리스 태그가 가리킬
+        곳이 없습니다. 그래서 README 커밋을 만들어 둡니다.
+        (빈 레포에서 릴리스가 실제로 거부되는지는 실기로 확인하지
+         못했습니다 — 되더라도 README 하나가 손해는 아닙니다.)
+
+        조직 레포는 POST /orgs/{org}/repos 입니다. 토큰에 그 조직의
+        레포 생성 권한이 있어야 합니다. 개인 계정은 POST /user/repos.
+        """
+        if self.dry_run:
+            log.info("[dry-run] 레포 생성 생략: %s", self.slug)
+            return {"full_name": self.slug, "permissions": {"push": True}}
+
+        is_org = self._owner_is_org()
+        url = f"{API}/orgs/{self.owner}/repos" if is_org else f"{API}/user/repos"
+        payload = {
+            "name": self.repo,
+            "private": bool(private),
+            "description": description or f"{self.repo} 자동 수집본",
+            "auto_init": True,
+        }
+        log.info("레포를 만듭니다: %s (%s)", self.slug, "조직" if is_org else "개인")
+        try:
+            resp = self.session.post(url, json=payload, timeout=30)
+        except Exception as exc:
+            raise ReleaseError(f"{self.slug}: 레포 생성 요청 실패 - {exc}") from exc
+
+        if resp.status_code in (200, 201):
+            return resp.json()
+        if resp.status_code == 422:
+            message = ""
+            try:
+                message = str(resp.json().get("message", ""))
+            except ValueError:
+                message = resp.text[:200]
+            if "already exists" in message.lower():
+                raise ReleaseError(
+                    f"{self.slug}: 같은 이름의 레포가 이미 있는데 이 토큰으로는 "
+                    "보이지 않습니다. 비공개 레포라면 토큰 권한을 확인하세요."
+                )
+            raise ReleaseError(f"{self.slug}: 레포 생성 거부(422) - {message}")
+        if resp.status_code in (401, 403):
+            raise ReleaseError(
+                f"{self.slug}: 레포를 만들 권한이 없습니다({resp.status_code}). "
+                "개인 계정이면 토큰의 repo 권한을, 조직이면 그 조직의 "
+                "레포 생성 허용 여부를 확인하세요."
+            )
+        raise ReleaseError(f"{self.slug}: 레포 생성 실패 {resp.status_code}")
+
+    def ensure_repo(self, *, create_missing: bool = False, private: bool = True) -> None:
+        """올리기 전에 레포가 준비됐는지 봅니다.
+
+        create_missing 이 꺼져 있으면(기본) 없는 레포를 만들지 않고
+        무엇을 해야 하는지만 알려 줍니다. 레포 생성은 토큰에 더 센
+        권한을 요구하고, 조직 정책으로 막혀 있는 경우가 흔합니다.
+        """
+        try:
+            self.check_access()
+            return
+        except ReleaseError as exc:
+            if not create_missing or "레포가 없거나" not in str(exc):
+                raise
+        self.create_repo(private=private)
+        self.check_access()
+
     def get_or_create_release(self, tag: str, *, name: str | None = None,
                               body: str | None = None) -> dict[str, Any]:
         if tag in self._release_cache:
