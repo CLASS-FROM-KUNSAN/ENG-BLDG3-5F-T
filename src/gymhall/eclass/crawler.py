@@ -191,6 +191,29 @@ class PageReadError(RuntimeError):
     """화면을 읽지 못했습니다. 글이 0건인 것과 구분해야 합니다."""
 
 
+@dataclass
+class Attachments:
+    """첨부 수집 결과.
+
+    '받은 것' 만 돌려주면 호출부가 실패를 알 수 없습니다. 그러면
+    글은 '완료' 로 기록되고, 다음 실행은 그 글을 건너뛰어 실패한
+    첨부를 영영 다시 시도하지 않습니다.
+    """
+
+    saved: list[Path] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.failed
+
+    def __len__(self) -> int:         # 기존 len(files) 호출부 호환
+        return len(self.saved)
+
+    def __iter__(self):
+        return iter(self.saved)
+
+
 class Crawler:
     def __init__(
         self,
@@ -733,7 +756,7 @@ class Crawler:
 
         stem = f"{row['no']}_{safe_name(row['title'], max_len=70)}" if row["no"] else \
                safe_name(row["title"], max_len=70)
-        md = unique_path(out_dir / f"{safe_name(stem)}.md")
+        md = self._pending_path(state_key, out_dir, stem)
         md.write_text(
             f"# {row['title']}\n\n"
             f"- 쪽지함: {box}\n"
@@ -744,10 +767,13 @@ class Crawler:
             encoding="utf-8",
         )
         self.stats.posts += 1
-        self._download_attachments(out_dir / safe_name(stem, max_len=60))
-        self.store.mark_downloaded(state_key, path=str(md),
-                                   extra={"title": row["title"], "sender": who})
-        self.store.save()
+        att = self._download_attachments(out_dir / safe_name(stem, max_len=60))
+        self._finish_post(
+            state_key, md, att,
+            expected_file=bool(row.get("has_file")),
+            what=f"쪽지({box})/{row['title']}",
+            extra={"title": row["title"], "sender": who},
+        )
 
     # -- 게시판 ------------------------------------------------------
     def read_board_rows(self) -> list[dict[str, Any]]:
@@ -949,6 +975,40 @@ class Crawler:
         except Exception:
             pass
 
+    def _pending_path(self, state_key: str, out_dir: Path, stem: str) -> Path:
+        """미완료로 남겨 둔 글의 저장 경로. 재시도 때 그 파일에 덮어씁니다.
+
+        기억하지 않으면 unique_path 가 실행할 때마다 '제목_2.md',
+        '제목_3.md' 를 만듭니다.
+        """
+        remembered = self.store.data["meta"].get(f"pending:{state_key}")
+        if remembered:
+            path = Path(remembered)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            return path
+        return unique_path(out_dir / f"{safe_name(stem)}.md")
+
+    def _finish_post(self, state_key: str, md: Path, att: Attachments,
+                     *, expected_file: bool, what: str, extra: dict[str, Any]) -> None:
+        """첨부까지 성공했을 때만 '완료' 로 기록합니다.
+
+        첨부가 하나라도 실패했는데 글을 완료로 적으면, 다음 실행이
+        그 글을 건너뛰어 실패한 첨부를 영영 다시 받지 않습니다.
+        """
+        missing = list(att.failed)
+        if expected_file and not att.saved and not missing:
+            missing.append("목록에는 첨부 표시가 있는데 링크를 찾지 못했습니다")
+        if missing:
+            self.store.set_meta(f"pending:{state_key}", str(md))
+            self.store.save()
+            msg = f"{what}: 첨부 {len(missing)}건을 받지 못해 미완료로 둡니다 ({', '.join(missing[:3])})"
+            log.error("%s", msg)
+            self.stats.errors.append(msg)
+            return
+        self.store.data["meta"].pop(f"pending:{state_key}", None)
+        self.store.mark_downloaded(state_key, path=str(md), extra=extra)
+        self.store.save()
+
     def _open_post(self, course: Course, key: str, row: dict[str, Any],
                    out_dir: Path, state_key: str) -> None:
         """목록 행을 클릭해 상세로 들어가 본문과 첨부를 저장합니다."""
@@ -975,7 +1035,7 @@ class Crawler:
         title = safe_name(row["title"], max_len=80)
         stem = f"{row['no']}_{title}" if row["no"] else title
         post_dir = out_dir
-        md = unique_path(post_dir / f"{safe_name(stem)}.md")
+        md = self._pending_path(state_key, post_dir, stem)
         md.write_text(
             f"# {row['title']}\n\n"
             f"- 과목: {course.name}\n"
@@ -988,12 +1048,13 @@ class Crawler:
         )
         self.stats.posts += 1
 
-        files = self._download_attachments(post_dir / safe_name(stem, max_len=60))
-        self.store.mark_downloaded(
-            state_key, path=str(md),
-            extra={"title": row["title"], "attachments": [f.name for f in files]},
+        att = self._download_attachments(post_dir / safe_name(stem, max_len=60))
+        self._finish_post(
+            state_key, md, att,
+            expected_file=bool(row.get("has_file")),
+            what=f"{course.name}/{MENU_LABELS.get(key, key)}/{row['title']}",
+            extra={"title": row["title"], "attachments": [f.name for f in att.saved]},
         )
-        self.store.save()
 
     def _attachment_locators(self):
         """첨부 링크를 담은 locator 를 찾습니다. 프레임 안까지 봅니다.
@@ -1065,12 +1126,18 @@ class Crawler:
         out.write_bytes(body)
         return out
 
-    def _download_attachments(self, dest_dir: Path) -> list[Path]:
-        """상세 화면의 첨부를 전부 받습니다."""
-        saved: list[Path] = []
+    def _download_attachments(self, dest_dir: Path) -> Attachments:
+        """상세 화면의 첨부를 전부 받습니다.
+
+        받은 것과 **못 받은 것** 을 함께 돌려줍니다. 못 받은 것을
+        숨기면 호출부가 글을 '완료' 로 기록해 버리고, 다음 실행은
+        그 글을 건너뜁니다.
+        """
+        out = Attachments()
+        saved = out.saved
         links = self._attachment_locators()
         if links is None:
-            return saved
+            return out
 
         count = links.count()
         for i in range(count):
@@ -1095,18 +1162,25 @@ class Crawler:
                 continue
 
             got: list[Path] = []
+            label = text or f"#{i}"
             call = filedown.parse(onclick)
             if call:
+                label = filedown.filename(call) or label
                 one = self._fetch_filedown(call, dest_dir)
                 if one is not None:
                     got = [one]
             else:
+                # 주소를 알 수 없는 것만 누릅니다(쪽지 첨부는 DWR 로
+                # zip 을 만든 뒤에야 주소가 정해집니다). 완료 판정은
+                # '눌렸다' 가 아니라 '파일이 생겼다' 로 합니다.
                 with self.br.capture_download(dest_dir) as captured:
                     try:
                         item.click()
                     except Exception as exc:
-                        log.debug("첨부 클릭 실패(%s): %s", text or f"#{i}", exc)
+                        log.debug("첨부 클릭 실패(%s): %s", label, exc)
                 got = list(captured)
+            if not got:
+                out.failed.append(label)
 
             for path in got:
                 digest = sha256_file(path)
@@ -1117,7 +1191,7 @@ class Crawler:
                 self.store.mark_downloaded(f"file:{digest}", path=str(path), digest=digest)
                 saved.append(path)
                 self.stats.files += 1
-        return saved
+        return out
 
     # -- 메인 루프 ---------------------------------------------------
     def crawl_course(self, course: Course) -> None:

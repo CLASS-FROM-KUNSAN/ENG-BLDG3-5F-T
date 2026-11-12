@@ -274,3 +274,89 @@ def test_page_signature_tolerates_a_read_failure(tmp_path):
     """지문은 못 읽어도 예외를 올리지 않습니다(이동 실패로 처리)."""
     c = _crawler_with(_BadPage(boom=True), tmp_path)
     assert c._page_signature() == ""
+
+
+# --- 첨부 실패와 '완료' 를 섞지 않기 -----------------------------------
+# 리뷰 지적: 첨부를 못 받아도 게시글을 mark_downloaded 로 기록하면,
+# 다음 실행이 그 글을 건너뛰어 실패한 첨부를 영영 다시 받지 않습니다.
+from gymhall.eclass.crawler import Attachments  # noqa: E402
+
+
+def _c(tmp_path):
+    from gymhall.paths import Layout
+    from gymhall.state import Store
+
+    return C.Crawler(_Shim(_BadPage()), Site(), Layout(tmp_path),
+                     Store.open(tmp_path / "s.json"), term="2026-2", menus={})
+
+
+def test_a_failed_attachment_leaves_the_post_unfinished(tmp_path):
+    c = _c(tmp_path)
+    md = tmp_path / "글.md"
+    md.write_text("본문", encoding="utf-8")
+    att = Attachments(saved=[], failed=["자료.pdf"])
+    c._finish_post("KEY", md, att, expected_file=True, what="과목가/공지/글", extra={})
+    assert not c.store.is_downloaded("KEY"), "실패했는데 완료로 적었습니다"
+    assert c.store.get_meta("pending:KEY") == str(md)
+    assert c.stats.errors
+
+
+def test_a_post_with_every_attachment_saved_is_finished(tmp_path):
+    c = _c(tmp_path)
+    md = tmp_path / "글.md"
+    md.write_text("본문", encoding="utf-8")
+    att = Attachments(saved=[tmp_path / "자료.pdf"], failed=[])
+    c._finish_post("KEY", md, att, expected_file=True, what="과목가/공지/글", extra={})
+    assert c.store.is_downloaded("KEY")
+    assert not c.stats.errors
+
+
+def test_a_post_with_no_attachment_at_all_is_finished(tmp_path):
+    """첨부 표시가 없는 글은 받을 것이 없어도 완료입니다."""
+    c = _c(tmp_path)
+    md = tmp_path / "글.md"
+    md.write_text("본문", encoding="utf-8")
+    c._finish_post("KEY", md, Attachments(), expected_file=False,
+                   what="과목가/공지/글", extra={})
+    assert c.store.is_downloaded("KEY")
+    assert not c.stats.errors
+
+
+def test_a_post_marked_as_having_a_file_but_none_found_is_unfinished(tmp_path):
+    """목록에 첨부 표시가 있는데 링크를 못 찾은 경우도 실패입니다.
+
+    선택자가 어긋나면 '첨부 0개' 와 구분되지 않습니다.
+    """
+    c = _c(tmp_path)
+    md = tmp_path / "글.md"
+    md.write_text("본문", encoding="utf-8")
+    c._finish_post("KEY", md, Attachments(), expected_file=True,
+                   what="과목가/공지/글", extra={})
+    assert not c.store.is_downloaded("KEY")
+    assert c.stats.errors
+
+
+def test_retry_reuses_the_same_file_instead_of_making_a_copy(tmp_path):
+    """미완료 글을 다시 받을 때 '제목_2.md' 를 만들지 않습니다."""
+    c = _c(tmp_path)
+    out = tmp_path / "공지"
+    out.mkdir()
+    first = c._pending_path("KEY", out, "1_글")
+    first.write_text("x", encoding="utf-8")
+    c._finish_post("KEY", first, Attachments(saved=[], failed=["a.pdf"]),
+                   expected_file=True, what="w", extra={})
+    second = c._pending_path("KEY", out, "1_글")
+    assert second == first, (first, second)
+
+
+def test_finishing_clears_the_pending_marker(tmp_path):
+    c = _c(tmp_path)
+    md = tmp_path / "글.md"
+    md.write_text("x", encoding="utf-8")
+    c._finish_post("KEY", md, Attachments(saved=[], failed=["a"]),
+                   expected_file=True, what="w", extra={})
+    assert c.store.get_meta("pending:KEY")
+    c._finish_post("KEY", md, Attachments(saved=[md], failed=[]),
+                   expected_file=True, what="w", extra={})
+    assert c.store.get_meta("pending:KEY") is None
+    assert c.store.is_downloaded("KEY")
