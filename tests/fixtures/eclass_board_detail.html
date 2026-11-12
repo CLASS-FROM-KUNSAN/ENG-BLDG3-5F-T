@@ -1,0 +1,675 @@
+<!-- 출처: 2026-11-12 실제 게시글 상세 화면(SingleFile 저장).
+     손댄 곳 셋뿐입니다.
+       1) 사람 이름·과목명을 가명으로 바꿈
+       2) 4.4MB 짜리 data: URI 와 <style> 을 제거(구조와 무관)
+       3) SingleFile 이 떼어낸 첨부 span 의 inline 핸들러를 devtools
+          화면에 찍힌 문자열 그대로 되살림:
+            onclick="fileDownload('*EB*B3*B4...hwp',
+                                  'COMF_260830203552e791408.hwp',
+                                  '/business/board/2026210357604-N/');"
+          나머지 버튼(목록/학습목차)의 핸들러는 되살리지 않았습니다 —
+          추측으로 채우느니 없는 채로 두는 쪽이 낫습니다.
+     DOM 구조·클래스 이름·본문은 원본 그대로입니다. -->
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"> <html xml:lang=ko-kr lang=ko-kr xmlns=http://www.w3.org/1999/xhtml class=fa-events-icons-ready><!--
+ Page saved with SingleFile 
+ url: https://eclass.kunsan.ac.kr/Course.do 
+ saved date: Thu Nov 12 2026 13:16:31 GMT+0900 (한국 표준시)
+--><meta charset=utf-8>
+<meta http-equiv=X-UA-Compatible content="IE=edge,chrome=1">
+<title>국립군산대학교 eClass</title>
+
+
+
+
+
+
+
+
+
+
+
+<!--[if lt IE 9]>
+
+<![endif]-->
+<title class=sf-hidden></title><meta name=referrer content=no-referrer><link rel="shortcut icon" href="removed-data-uri"><link rel=canonical href=https://eclass.kunsan.ac.kr/Course.do><meta http-equiv=content-security-policy content="default-src 'none'; font-src 'self' data:; img-src 'self' data:; style-src 'unsafe-inline'; media-src 'self' data:; script-src 'unsafe-inline' data:; object-src 'self' data:; frame-src 'self' data:; form-action 'none'; base-uri 'none';"></head>
+<body>
+<script></script>
+<div id=Cover_class>
+ <div id=header>
+ 
+ 
+
+
+<script></script> 
+ <div id=header>
+<div class=topCover>
+ <p>
+ <a href="https://eclass.kunsan.ac.kr/Main.do?cmd=viewHome&amp;userDTO.localeKey=ko">
+ <img class=ml20 src="removed-data-uri" alt="군산대학교 e-class" border=0 style=max-height:42px>
+ </a>
+ </p>
+ <div class=hb></div>
+ <script></script>
+ 
+ 
+ <ul class=util>
+ <li>
+ <div class=class_sbox>
+ <fieldset>
+ <legend class=sf-hidden>내강의실로 이동</legend> 
+ 
+ <select name=courseDTO.courseId class=default title="내강의실 목록" style=display:none> 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ </select><div class="chosen-container chosen-container-single chosen-container-single-nosearch" style=width:187px title="내강의실 목록"><a class=chosen-single tabindex=-1><span> 과목바_04</span><div><b></b></div></a><div class=chosen-drop><div class=chosen-search><input type=text autocomplete=off readonly value></div><ul class=chosen-results></ul></div></div> 
+ 
+ </fieldset>
+ </div> 
+ </li>
+ <li class="hb p0"></li>
+ <li style=padding-right:0px;padding-left:0px>
+ 
+ <p> 
+ <a href="https://eclass.kunsan.ac.kr/Main.do?cmd=moveMenu&amp;mainDTO.parentMenuId=menu_00026&amp;mainDTO.menuId=menu_00030"><i class="fa fa-user"></i><span>내 강의실</span></a>
+ </p>
+ 
+ </li>
+ 
+ <li class="hb p0"></li>
+ 
+ 
+ <li>
+ 
+ <a href="https://eclass.kunsan.ac.kr/Message.do?cmd=viewMessageList&amp;messageType=RECEIVE" title="새 쪽지가  16 건 있습니다.">
+ <i class=icon-note-white></i>쪽 지<span class="num bcSkyblue blinking"> 16</span></a>
+ 
+ </li>
+ <li class="hb p0"></li>
+ <li class=w230>
+ <div class=photoInfo> 
+ 
+ 
+ <a href=javascript:void(0)>
+ <img id=login_image src="removed-data-uri" style=width:44px;height:44px alt=사진>
+ </a>
+ 
+ 
+ 
+ 
+ 
+ </div>
+ <dl>
+ <dt class=fontB>홍길동</dt>
+ <dd class=mr5>
+ <a href=javascript:void(0)>개인정보수정</a>
+ </dd>
+ <dd>
+ <a href=javascript:void(0)>로그아웃</a>
+ </dd>
+ </dl>
+ </li>
+ <li class="hb p0"></li>
+ </ul>
+</div>
+</div>
+ </div>
+ 
+ 
+ <div id=container class=clearfix>
+ 
+ 
+<script></script>
+<script></script>
+<script></script>
+<script></script>
+ 
+ 
+ 
+<div id=headerContent>
+ <h1 class=f40>
+ <a href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewStudyHome&amp;boardInfoDTO.boardInfoGubun=study_home&amp;courseDTO.courseId=2026210357604">
+ 과목바
+ _04
+ 
+ 
+ 
+ <span class="f22 fontEB ml10"></span>
+ </a>
+ </h1>
+ <div class=classSection>
+ 
+ 
+ <ul class=post>
+ <li>
+ <table class=headerListClass border=1 cellspacing=0 summary="과목 정보 입니다.">
+ <caption class=sf-hidden>이수과목과 학점</caption>
+ 
+ <thead>
+ <tr class=odd-row>
+ <th abbr=이수구분 scope=col class=first>이수구분</th>
+ <th abbr=학점 scope=col>학 점</th>
+ <th class="bgLast last" abbr=공동교수정보>공동교수정보</th>
+ </tr>
+ </thead>
+ <tbody>
+ <tr class=odd-row>
+ <td class="clip first" style=max-width:100px>기초교양</td>
+ <td>3 학점</td>
+ <td class="bgLast last"><span><a href=javascript:void(0)>조회하기</a></span></td>
+ </tr>
+ 
+ 
+ </tbody>
+ </table>
+ </li>
+ </ul>
+ 
+ 
+ <ul class=postCover>
+ <li class=tphoto>
+ 
+ 
+ 
+ 
+ 
+ 
+ <img src="removed-data-uri" alt=사진 style=width:56px;height:56px border=0>
+ 
+ 
+ </li> 
+ <li class=tinfoList>
+ <table class=headerListPro border=1 cellspacing=0 summary="당당교수 정보 입니다.">
+ <caption class=sf-hidden>담당교수 정보</caption>
+ <colgroup>
+ 
+ <col width=120px>
+ <col width=120px>
+ <col>
+ 
+ </colgroup>
+ <thead>
+ <tr class=odd-row>
+ <th abbr=대표교수 scope=col class=first><i class=icon-user-black></i>대표교수</th>
+ <th class="bgLast last" abbr=이메일 scope=col><i class=icon-mail-black></i>이메일</th>
+ </tr>
+ </thead>
+ <tbody>
+ <tr class=odd-row>
+ <td class=first>조교수 </td>
+ <td class="bgLast last">removed-email</td>
+ </tr>
+ </tbody>
+ </table>
+ </li>
+ </ul>
+ 
+ </div>
+</div>
+<div id=conArea>
+ <div class=class_sbox>
+ <fieldset>
+ <legend class=sf-hidden>내강의실로 이동</legend>
+ 
+ 
+ 
+ 
+ </fieldset>
+ </div>
+ <ul class=proFunction>
+ 
+ 
+ 
+ <li>
+ <a class=btn href=javascript:void(0)>
+ <i class=icon-monitor-color></i>강의 계획서</a></li>
+ 
+ 
+ 
+ <li>
+ <a class=btn href=javascript:void(0)>
+ <i class=icon-message-color></i>쪽지보내기
+ </a>
+ </li>
+ 
+ 
+ 
+ 
+ </ul>
+ <div class="handleTop cp">
+ <img id=handleTopImg src="removed-data-uri" alt=사진 border=0> 
+ </div>
+</div>
+<script></script> 
+ 
+ 
+<script></script>
+<script></script>
+<input type=hidden>
+
+<div id=aside>
+ <ul id=leftMenu class=lnb> 
+<li id=0 style=width:25%> 
+<h3> <i class=icon-list-white></i>학습 목차</h3> 
+<ul class="menuSub mp1 sf-hidden"> 
+ 
+ 
+</ul> 
+<div class="menuSubHover sf-hidden"> 
+ 
+</div> 
+</li> 
+<li id=1 style=width:25%> 
+<h3> <i class=icon-nbook-white></i>학습 정보</h3> 
+<ul class="menuSub mp2 sf-hidden"> 
+ 
+ 
+ 
+</ul> 
+<div class="menuSubHover sf-hidden"> 
+ 
+</div> 
+</li> 
+<li id=3 style=width:25%> 
+<h3> <i class=icon-listleve-white></i>학습 활동</h3> 
+<ul class="menuSub mp4 sf-hidden"> 
+ 
+ 
+ 
+ 
+ 
+ 
+</ul> 
+<div class="menuSubHover sf-hidden"> 
+ 
+</div> 
+</li> 
+<li id=7 style=width:25%> 
+<h3> <i class=icon-book-white></i>학습 현황</h3> 
+<ul class="menuSub mp8 sf-hidden"> 
+ 
+</ul> 
+<div class="menuSubHover sf-hidden"> 
+ 
+</div> 
+</li> 
+<li id=8 style=width:25%> 
+<h3> <i class=icon-info-white></i>과목 정보</h3> 
+<ul class="menuSub mp9 sf-hidden"> 
+ 
+ 
+</ul> 
+<div class="menuSubHover sf-hidden"> 
+ 
+</div> 
+</li> 
+<li id=10 style=width:25%> 
+<h3> <i class=icon-list-white></i>성적</h3> 
+<ul class="menuSub mp11 sf-hidden"> 
+ 
+</ul> 
+<div class="menuSubHover sf-hidden"> 
+ 
+</div> 
+</li> 
+</ul> 
+ <div id=todayList>
+<h2 class=f16 style=color:#666>내 할 일 보기 <span class="num bcRed">1</span> </h2> 
+<div class=bx-wrapper style="max-width:100%;margin:0px auto"><div class=bx-viewport style=width:100%;overflow:hidden;position:relative;height:71px><ul class=bxslider style=width:auto;position:relative;transition-duration:0s;transform:translate3d(0px,0px,0px)>
+<li style=float:none;list-style:none;position:relative;width:202px> 
+ <a href=javascript:void(0)> 
+ </a><ul class=listNum><a href=javascript:void(0)> 
+<li class="dateBar bcRed"></li> 
+ <li><span class=fcBlue>과제</span></li> 
+ <li style=width:54px><span class="btn mini fontHelvetica fwb"> TODAY</span></li> 
+ </a><li style=width:174px><a href=javascript:void(0)></a><h3><a href=javascript:void(0)></a><a href=javascript:void(0) rel=tooltip title=" 11/12(목) Group Note #6: Group Leader가 제출 "> 
+11/12(목) Group Note #6: Group Leader가 제출</a></h3></li> 
+ <li style=width:154px;font-size:13px><h3 rel=tooltip title=" 11/12(목) Group Note #6: Group Leader가 제출 "> 
+과목사</h3></li> 
+ <li style=width:154px;font-size:11px>과목사_23</li> 
+ </ul> 
+ 
+</li> 
+ </ul></div><div class="bx-controls bx-has-controls-direction"><div class=bx-controls-direction><a class="bx-prev disabled" href=https://eclass.kunsan.ac.kr/Course.do>Prev</a><a class="bx-next disabled" href=https://eclass.kunsan.ac.kr/Course.do>Next</a></div></div></div> 
+<script></script> 
+</div> 
+</div>
+ 
+ 
+ <div id=bodyContent>
+ 
+<script></script>
+<script></script>
+<script></script>
+<script></script>
+ <form name=courseForm method=post action=/Course.do>
+ <input type=hidden>
+ <input type=hidden>
+ <input type=hidden>
+ <input type=hidden>
+ <input type=hidden>
+ <input type=hidden>
+ <input type=hidden>
+ <input type=hidden>
+ <input type=hidden>
+ <input type=hidden>
+ <input type=hidden>
+ <input type=hidden>
+ <input type=hidden>
+ <input type=hidden>
+ 
+ <input type=hidden>
+ 
+ <input type=hidden>
+ <input type=hidden>
+ <input type=hidden>
+ <input type=hidden>
+ 
+ <input type=hidden>
+ <input type=hidden>
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ <div>
+ 
+ <div class=contentTitle>
+ <h2 class=f28>학습 정보</h2>
+ <ul class=location>
+ <li><a href="https://eclass.kunsan.ac.kr/Main.do?cmd=viewHome&amp;userDTO.localeKey=ko"><i class="icon-home-color m0">홈으로</i></a></li>
+ <li><a href=javascript:void(0)>강의실</a></li>
+ <li><i class="icon-arrow-small-black m0"></i></li>
+ <li><a href=javascript:void(0)>과목바</a></li>
+ <li><i class="icon-arrow-small-black m0"></i></li>
+ <li>학습 정보</li>
+ <li><i class="icon-arrow-small-black m0"></i></li>
+ <li>공지사항</li>
+ </ul>
+ </div>
+ <div class=boardTab>
+ <ul> 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ <li class=select>
+ 
+ 
+ <h3>
+ <a href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&amp;mainDTO.parentMenuId=menu_00048&amp;mainDTO.menuId=menu_00236&amp;courseDTO.courseId=2026210357604&amp;courseDTO.shareCourseId=&amp;boardInfoDTO.boardInfoId=2026210357604-N&amp;boardInfoDTO.boardClass=notice" id=boardTab>
+ 공지사항
+ </a>
+ </h3>
+ </li>
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ <li>
+ 
+ 
+ <h3>
+ <a href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&amp;mainDTO.parentMenuId=menu_00048&amp;mainDTO.menuId=menu_00236&amp;courseDTO.courseId=2026210357604&amp;courseDTO.shareCourseId=&amp;boardInfoDTO.boardInfoId=2026210357604-Q&amp;boardInfoDTO.boardClass=qna" id=boardTab>
+ 질의응답
+ </a>
+ </h3>
+ </li>
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ <li>
+ 
+ 
+ <h3>
+ <a href="https://eclass.kunsan.ac.kr/Course.do?cmd=viewBoardContentsList&amp;mainDTO.parentMenuId=menu_00048&amp;mainDTO.menuId=menu_00236&amp;courseDTO.courseId=2026210357604&amp;courseDTO.shareCourseId=&amp;boardInfoDTO.boardInfoId=2026210357604-P&amp;boardInfoDTO.boardClass=pds" id=boardTab>
+ 강의자료실
+ </a>
+ </h3>
+ </li>
+ 
+ 
+ 
+ </ul>
+ </div>
+ <div class=boardOption>
+ <ul class=fr>
+ <li class=mr5>
+ 
+ 
+ 
+ </li>
+ </ul>
+ </div>
+ 
+ 
+ <div id=listBox>
+ 
+ <div class=listContent>
+ <dl class=element>
+ <dt>
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ <h4 class="f14 fontB">
+ <i class="icon-personal-black mt-5 mr5"></i> 
+ <font color></font> 강의자료 사이트 및 보고서 양식 
+ </h4>
+ <ul class=btnBox>
+ 
+ 
+ 
+ 
+ <li>
+ 
+ </li>
+ <li>
+ 
+ 
+ </li>
+ <li> 
+ 
+ </li>
+ <li>
+ <button type=button class="btn small">
+ <i class=icon-report-small-color></i>
+ 목 록
+ </button>
+ </li>
+ 
+ <li>
+ <button type=button class="btn small">
+ <i class=icon-openbook-color>홈</i>
+ 학습목차
+ </button>
+ </li>
+ 
+ 
+ </ul>
+ </dt>
+ <dd class=info>
+ <ul class="fr mr10" style=height:auto>
+ <li><b>작성자 :</b> 조교수</li>
+ <li><b>작성일 :</b> 2026-08-30 20:36:06</li>
+ 
+ <li class=m0><b>조회수 :</b> 793</li>
+ </ul>
+ </dd>
+ 
+ 
+ <dd class=info style="border-bottom:1px solid #cdcdcd">
+ <b class="fl ml10" style=width:70px;line-height:28px>첨부파일</b>
+ <ul class="fl mr10" style="height:auto;width:calc(100% - 90px);overflow:hidden">
+ 
+ 
+ 
+ 
+ <li style=float:none;margin-right:0;word-wrap:break-word>
+ 
+ <i class=icon-data-color></i>
+ 
+ <span onclick="fileDownload('*EB*B3*B4*EA*B3*A0*EC*84*9C*EC*96*91*EC*8B*9D.hwp','COMF_260830203552e791408.hwp','/business/board/2026210357604-N/');" style="cursor:pointer;text-decoration:none" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'" title="Download: 보고서양식.hwp">보고서양식.hwp</span>
+ </li>
+ 
+ 
+ </ul>
+ </dd>
+ 
+ <dd>
+ 
+ 
+ <div class=cont><p>1. 강의자료 참고 사이트<p><br><p><span style=font-size:13.3333px><a href=http://www.leelab.co.kr/pyprog/ class=tx-link>http://www.leelab.co.kr/pyprog/</a></span><p><span style=font-size:13.3333px><br></span><p><span style=font-size:13.3333px>2. 보고서 양식은 첨부 파일에 있습니다.</span><p><span style=font-size:13.3333px><br></span></p></div>
+ 
+ </dd>
+ </dl>
+ 
+ 
+ 
+ <div class=answerArea>
+ 
+ 
+ 
+ 
+ 
+ 
+ </div> 
+ </div> 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ <div id=listBox>
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ </div><table class=boardListBasic summary="게시판 리스트입니다.">
+ <caption class=sf-hidden>게시판 리스트</caption>
+ <thead>
+ <tr class=odd-row>
+ <th class=first>제 목</th>
+ <th>작성자</th>
+ <th class=last>작성일</th>
+ </tr>
+ </thead>
+ <tbody>
+ 
+ <tr class=odd-row>
+ 
+ <td class="textLeft first">
+ <div style=margin-left:0px align=absmiddle alt>
+ <a href=#0>
+ 
+ 중간고사 안내 
+ </a>
+ </div>
+ </td>
+ <td>
+ 조교수
+ </td>
+ <td class=last>
+ 2026-10-14
+ </td>
+ </tr>
+ 
+ 
+ 
+ 
+ 
+ 
+ <tr>
+ 
+ <td class="textLeft first">
+ <div style=margin-left:0px align=absmiddle alt>
+ <a href=#0 class=fcBlack>
+ 
+ <b><i class=icon-arrow-small-black></i>강의자료 사이트 및 보고서 양식</b> 
+ </a>
+ </div>
+ </td>
+ <td>
+ <b>조교수</b>
+ </td>
+ <td class=last>
+ <b>2026-08-30</b>
+ </td>
+ </tr>
+ 
+ 
+ 
+ </tbody>
+ </table>
+ 
+ 
+ </div>
+ </div>
+ 
+ </form>
+ 
+ <iframe name=hiddenFrame width=0 height=0 frameborder=0 title=파일다운로드프레임></iframe>
+<script></script> 
+ </div>
+ </div>
+ 
+ 
+ 
+ 
+<div id=footer>
+ <ul class=footerField>
+ <li class=logo>
+ <img src="removed-data-uri" alt="군산대학교 e-class">
+ </li>
+ <li class=copyright>
+ <address style=margin-top:0;!important>
+ <div><address>(우)54150, 전라북도 군산시 대학로 558(미룡동) / TEL.063) 469-4113~4</address><div>
+ <div>Copyright(c) 2020 Kunsan National University. All rights reserved.<div>
+ </div></div></div></div></address>
+ </li>
+ </ul>
+</div>
+ 
+</div>

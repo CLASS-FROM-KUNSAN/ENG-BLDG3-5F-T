@@ -17,7 +17,7 @@ import mimetypes
 import re
 import time
 import unicodedata
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -43,15 +43,20 @@ class ReleaseError(Exception):
 _ASSET_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def asset_name(original: str, prefix: str = "") -> str:
+def asset_name(original: str, prefix: str = "", unique_key: str | None = None) -> str:
     """GitHub 가 변형하지 않는 이름으로 바꿉니다.
 
     GitHub 는 에셋 이름의 공백을 '.' 으로 바꾸고 비ASCII 문자를 버립니다.
     한글 제목은 그대로 쓸 수 없으므로 안전한 글자만 남기는데, 그러면
     "운동과건강 1주차.pptx" 가 "1.pptx" 가 되어 다른 과목 파일과 충돌합니다.
-    그래서 원래 이름에 ASCII 가 아닌 글자가 있었다면 원본 이름의 해시
-    8자리를 붙여 유일성을 보장합니다. 사람이 읽을 원래 이름은 에셋의
-    label 과 분할 manifest 에 그대로 남습니다.
+    그래서 한글이 섞여 있으면 해시 8자리를 붙입니다.
+
+    **unique_key 를 반드시 넘기세요.** 기본값(파일 이름)으로 두면 과목이
+    달라도 같은 이름은 같은 해시가 됩니다. 2026-11-12 실제 실행에서
+    9개 과목의 '강의목록.md' 가 전부 809b1351.md 가 되어 서로를
+    덮어썼습니다. 16개를 올렸는데 릴리스에는 2개만 남았고, 로그에는
+    '업로드 완료' 가 16번 찍혔습니다. unique_key 에는 학기 폴더 기준
+    상대 경로를 넣습니다.
     """
     name = unicodedata.normalize("NFC", original)
     stem, dot, ext = name.rpartition(".")
@@ -66,8 +71,9 @@ def asset_name(original: str, prefix: str = "") -> str:
 
     # 원본에 비ASCII 가 섞여 있었다면 정보가 날아간 것이므로 해시로 보강합니다.
     lost = any(ord(ch) > 127 for ch in stem)
+    key = unique_key if unique_key is not None else stem
     if lost or not safe_stem:
-        digest = hashlib.sha1(stem.encode("utf-8")).hexdigest()[:8]
+        digest = hashlib.sha1(unicodedata.normalize("NFC", key).encode("utf-8")).hexdigest()[:8]
         safe_stem = f"{safe_stem}_{digest}".strip("_") if safe_stem else digest
 
     out = f"{safe_prefix}{safe_stem}"
@@ -407,7 +413,8 @@ class ReleaseUploader:
         return result
 
     def upload(self, path: Path, tag: str, *, prefix: str = "",
-               keep_parts: bool = False, tmp_dir: Path | None = None) -> dict[str, Any]:
+               keep_parts: bool = False, tmp_dir: Path | None = None,
+               rel_path: str | None = None) -> dict[str, Any]:
         """파일 하나를 릴리스에 올립니다. 2GiB 를 넘으면 자동 분할합니다.
 
         반환: {"tag", "assets": [...], "split": bool, "sha256": str}
@@ -419,10 +426,14 @@ class ReleaseUploader:
         size = path.stat().st_size
         digest = sha256_file(path)
         release = self.get_or_create_release(tag)
-        base = asset_name(path.name, prefix=prefix)
+        # 이름이 같은 파일이 과목마다 있습니다(강의목록.md 등). 상대 경로로
+        # 구분하지 않으면 서로 덮어씁니다.
+        base = asset_name(path.name, prefix=prefix, unique_key=rel_path or path.name)
 
         if size <= self.chunk_bytes:
-            asset = self.upload_one(release, path, name=base, label=path.name)
+            # label 에는 어느 과목의 무엇인지 보이도록 상대 경로를 넣습니다.
+            # 에셋 이름은 해시라서 label 이 유일한 단서입니다.
+            asset = self.upload_one(release, path, name=base, label=rel_path or path.name)
             return {"tag": tag, "assets": [asset], "split": False, "sha256": digest}
 
         # --- 분할 ---
@@ -517,23 +528,48 @@ def upload_many(
     *,
     prefix: str = "",
     store=None,
+    root: Path | None = None,
     on_done: Callable[[Path, dict], None] | None = None,
 ) -> list[dict[str, Any]]:
-    """여러 파일을 올리되 이미 올린 것(해시 동일)은 건너뜁니다."""
+    """여러 파일을 올리되 이미 올린 것(해시 동일)은 건너뜁니다.
+
+    root 를 주면 에셋 이름을 그 기준 상대 경로로 만듭니다. 주지 않으면
+    파일 이름만 쓰므로, 과목마다 있는 같은 이름 파일이 서로 덮어씁니다.
+    """
     results = []
+    # 한 번의 실행 안에서 같은 에셋 이름이 두 번 나오면 반드시 버그입니다
+    # (두 번째가 첫 번째를 지웁니다). 조용히 넘어가면 사용자는 전부
+    # 올라간 줄 압니다 — 2026-11-12 실행에서 16개 중 14개가 이렇게
+    # 사라졌고 로그에는 '업로드 완료' 가 16번 찍혔습니다.
+    taken: dict[str, Path] = {}
     for path in files:
         path = Path(path)
         if not path.exists():
             log.warning("건너뜀(파일 없음): %s", path)
             continue
+        rel = None
+        if root is not None:
+            try:
+                rel = str(Path(path).relative_to(root))
+            except ValueError:
+                rel = path.name
+        target = asset_name(path.name, prefix=prefix, unique_key=rel or path.name)
+        if target in taken:
+            log.error(
+                "에셋 이름이 겹칩니다: %s <- %s / %s. 덮어쓰지 않고 건너뜁니다.",
+                target, taken[target], path,
+            )
+            continue
+        taken[target] = path
+
         digest = sha256_file(path)
         if store is not None and store.is_uploaded(digest):
-            log.info("건너뜀(이미 업로드됨): %s", path.name)
+            log.info("건너뜀(이미 업로드됨): %s", rel or path.name)
             continue
         try:
-            result = uploader.upload(path, tag, prefix=prefix)
+            result = uploader.upload(path, tag, prefix=prefix, rel_path=rel)
         except ReleaseError as exc:
-            log.error("업로드 실패: %s -> %s", path.name, exc)
+            log.error("업로드 실패: %s -> %s", rel or path.name, exc)
             continue
         if store is not None:
             store.mark_uploaded(
@@ -546,6 +582,43 @@ def upload_many(
             on_done(path, result)
         results.append(result)
     return results
+
+
+def upload_filter(
+    files: Iterable[Path],
+    *,
+    allow_extensions: Iterable[str] = (),
+    max_file_mb: int = 0,
+) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """업로드할 것과 뺄 것을 가릅니다. (올릴 목록, [(파일, 이유)])
+
+    설정의 eclass.upload.allow_extensions / max_file_mb 가 여기서
+    처음으로 실제 효과를 냅니다. 전에는 수집기가 두 값을 받아 로그만
+    찍고 결과를 버려서, 화이트리스트를 적어도 전부 올라갔고 용량
+    제한도 지켜지지 않았습니다.
+
+    뺀 파일은 지우지 않습니다. 로컬에는 남고 릴리스에만 안 올라갑니다.
+    """
+    allow = {str(e).lower().lstrip(".") for e in allow_extensions if str(e).strip()}
+    limit = int(max_file_mb) * 1024 * 1024 if max_file_mb else 0
+
+    keep: list[Path] = []
+    dropped: list[tuple[Path, str]] = []
+    for path in files:
+        ext = path.suffix.lower().lstrip(".")
+        if allow and ext not in allow:
+            dropped.append((path, f"확장자 '{ext or '없음'}' 가 허용 목록에 없음"))
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            dropped.append((path, f"크기를 읽지 못함: {exc}"))
+            continue
+        if limit and size > limit:
+            dropped.append((path, f"{size / 1024 / 1024:.1f}MB > 제한 {max_file_mb}MB"))
+            continue
+        keep.append(path)
+    return keep, dropped
 
 
 def iter_files(root: Path, exclude_dirs: set[str] | None = None) -> Iterator[Path]:

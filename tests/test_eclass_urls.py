@@ -84,11 +84,31 @@ def test_menu_id_override():
     assert q(url)["mainDTO.menuId"] == "menu_99999"
 
 
-@pytest.mark.parametrize("key", ["syllabus", "course_info", "grade"])
-def test_unmappable_menus_return_none(key):
-    """URL 을 만들 수 없는 메뉴는 None 을 돌려줘서, crawler 가
-    좌측 메뉴 링크를 클릭하는 경로로 넘어가게 합니다."""
-    assert SITE.menu_url(COURSE, key) is None
+@pytest.mark.parametrize(
+    "key,parent,menu",
+    [
+        ("syllabus", "menu_00047", "menu_00052"),
+        ("course_info", "menu_00047", "menu_00053"),
+        ("grade", "menu_00105", "menu_00106"),
+        ("progress", "menu_00101", "menu_00100"),
+    ],
+)
+def test_menus_once_thought_unmappable(key, parent, menu):
+    """예전에는 이 넷을 '주소를 만들 수 없는 메뉴' 로 두고 좌측 메뉴
+    링크를 텍스트로 찾아 클릭했습니다. 2026-11 덤프의 <ul id="leftMenu">
+    에 전부 들어 있어서 그럴 이유가 없어졌습니다.
+
+    실제 링크와 같은지는 tests/test_eclass_study_home.py 가 픽스처와
+    대조해서 확인합니다. 여기서는 값이 굳어 있는지만 봅니다."""
+    url = SITE.menu_url(COURSE, key)
+    assert url is not None, f"{key}: 다시 None 으로 돌아갔습니다"
+    assert q(url)["mainDTO.parentMenuId"] == parent
+    assert q(url)["mainDTO.menuId"] == menu
+
+
+def test_unknown_menu_key_still_returns_none():
+    """모르는 키는 여전히 None 이어야 클릭 경로로 넘어갑니다."""
+    assert SITE.menu_url(COURSE, "존재하지않는메뉴") is None
 
 
 def test_base_url_trailing_slash_is_handled():

@@ -111,6 +111,8 @@ exclude_courses = []
 # ---------------------------------------------------------------------
 [eclass.menus]
 # --- 학습 목차 ---
+curriculum     = true    # 학습 목차(주차별). 세 주차씩 보여 주는 화면을
+                         #   좌우로 끝까지 넘겨 전 주차를 모읍니다.
 lecture_list   = true    # 강의 목록 / 교안
 # --- 과목 정보 ---
 syllabus       = true    # 수업 계획서 (강의계획서)
@@ -123,6 +125,8 @@ materials      = true    # 강의자료실 / 학습자료실 (첨부파일)
 assignment     = true    # 과제 명세 + 첨부. 제출물은 건드리지 않습니다.
 attendance     = false   # 출석. 읽기 전용이지만 민감정보라 기본 off.
 team           = false   # 팀활동
+# --- 학습 현황 ---
+progress       = false   # 학습 현황(진도율). 민감정보라 기본 off.
 # --- 성적 ---
 grade          = false   # 성적보기. 민감정보라 기본 off.
 
@@ -151,7 +155,7 @@ discussion = false   # 토론
 [eclass.upload]
 enabled = true
 # 업로드에서 제외할 메뉴 (위 [eclass.menus] 키 이름 사용)
-exclude_menus = ["grade", "attendance"]
+exclude_menus = ["grade", "attendance", "progress"]
 # 확장자 화이트리스트. 비우면 전부 허용.
 allow_extensions = []
 # 이 용량(MB)을 넘는 첨부는 올리지 않고 로컬에만 둡니다. 0 = 제한 없음
