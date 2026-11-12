@@ -83,12 +83,22 @@ def test_a_corrupt_lock_file_is_replaced(tmp_path):
 
 
 # --- 진짜 동시 실행 ----------------------------------------------------
-def _worker(path_str, out):
+#
+# 처음에 두 프로세스를 동시에 띄우고 sleep 으로 겹치기를 바랐는데,
+# CI 에서 네 잡 모두 ['got', 'got'] 이 나왔습니다. spawn 으로 파이썬을
+# 새로 띄우는 데 걸리는 시간이 들쭉날쭉해서, 먼저 뜬 쪽이 잠금을 잡고
+# **놓고 나간 뒤** 두 번째가 떴기 때문입니다. 겹치지 않으면 둘 다
+# 성공하는 것이 맞습니다 — 코드가 아니라 테스트가 틀렸습니다.
+#
+# 이제 신호로 겹치기를 보장합니다. A 가 잠금을 잡았다고 알린 뒤에야
+# B 가 시도하고, B 가 끝날 때까지 A 는 놓지 않습니다.
+def _holder(path_str, held, release, out):
     from gymhall.recorder import lock as LL
 
     try:
-        with LL.hold(path_str, "동시"):
-            time.sleep(0.4)
+        with LL.hold(path_str, "먼저"):
+            held.set()
+            release.wait(20)
         out.put("got")
     except LL.RecordingBusy:
         out.put("busy")
@@ -96,17 +106,36 @@ def _worker(path_str, out):
         out.put(f"error:{exc}")
 
 
-def test_only_one_of_two_processes_gets_the_lock(tmp_path):
-    """exists() 로 보고 쓰면 둘 다 통과합니다. O_CREAT|O_EXCL 이어야 합니다."""
+def _challenger(path_str, held, release, out):
+    from gymhall.recorder import lock as LL
+
+    held.wait(20)                      # 상대가 확실히 들고 있을 때 시도
+    try:
+        with LL.hold(path_str, "나중"):
+            pass
+        out.put("got")
+    except LL.RecordingBusy:
+        out.put("busy")
+    except Exception as exc:  # pragma: no cover
+        out.put(f"error:{exc}")
+    finally:
+        release.set()
+
+
+def test_the_second_process_is_refused_while_the_first_holds(tmp_path):
     ctx = mp.get_context("spawn")
     path = str(tmp_path / "recording.lock")
-    out = ctx.Queue()
-    procs = [ctx.Process(target=_worker, args=(path, out)) for _ in range(2)]
+    held, release, out = ctx.Event(), ctx.Event(), ctx.Queue()
+    procs = [
+        ctx.Process(target=_holder, args=(path, held, release, out)),
+        ctx.Process(target=_challenger, args=(path, held, release, out)),
+    ]
     for p in procs:
         p.start()
     for p in procs:
-        p.join(30)
-    results = sorted(out.get() for _ in range(2))
+        p.join(60)
+    release.set()
+    results = sorted(out.get(timeout=10) for _ in range(2))
     assert results == ["busy", "got"], results
 
 

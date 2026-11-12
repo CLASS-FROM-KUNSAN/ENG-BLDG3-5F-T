@@ -124,6 +124,9 @@ jobs:
       - name: CLI 가 Windows 에서 뜨는지
         shell: cmd
         run: |
+          # psutil 을 일부러 넣지 않습니다. 없을 때 쓰는 윈도우 ctypes
+          # 폴백(recorder/lock.py)이 실제로 도는지 여기서 확인됩니다.
+          # requirements.txt 에는 psutil 이 있으니 실사용에서는 그쪽을 씁니다.
           python -m pip install --quiet pytest numpy requests
           set PYTHONPATH=src
           python -m gymhall --help

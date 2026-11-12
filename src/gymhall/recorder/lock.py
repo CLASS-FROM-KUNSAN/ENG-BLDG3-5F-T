@@ -46,6 +46,90 @@ class LockInfo:
         return max(0.0, time.time() - self.started_at)
 
 
+def _win_handle(pid: int):
+    """PROCESS_QUERY_LIMITED_INFORMATION 핸들. 없으면 None.
+
+    psutil 이 없는 윈도우에서도 '그 PID 가 살아 있는가' 를 답할 수
+    있어야 합니다. 못 답하면 죽은 녹화가 남긴 잠금 때문에 하루 동안
+    아무 녹화도 못 합니다(STALE_SEC).
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(0x1000, False, int(pid))
+        return handle or None
+    except Exception:
+        return None
+
+
+# OpenProcess 가 실패하는 이유는 둘입니다.
+#   87  ERROR_INVALID_PARAMETER : 그런 PID 가 없음      -> 죽음
+#    5  ERROR_ACCESS_DENIED     : 있는데 못 엶(다른 사용자) -> 살아 있음
+# 구분하지 않고 '죽음' 으로 보면, 다른 계정이 돌리는 살아 있는 녹화의
+# 잠금을 빼앗아 두 녹화가 같이 돕니다.
+_ERROR_INVALID_PARAMETER = 87
+
+
+def _win_alive(pid: int) -> bool | None:
+    if os.name != "nt":
+        return None
+    handle = _win_handle(pid)
+    if handle is None:
+        try:
+            import ctypes
+
+            return ctypes.get_last_error() != _ERROR_INVALID_PARAMETER
+        except Exception:
+            return True          # 모르면 살아 있다고 봅니다(안전한 쪽)
+    try:
+        import ctypes
+
+        code = ctypes.c_ulong()
+        ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        return bool(ok) and code.value == 259          # STILL_ACTIVE
+    except Exception:
+        return None
+    finally:
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.CloseHandle(handle)
+        except Exception:
+            pass
+
+
+def _win_create_time(pid: int) -> float:
+    """GetProcessTimes 의 생성 시각(FILETIME, 100ns 단위)."""
+    handle = _win_handle(pid)
+    if handle is None:
+        return 0.0
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        created = wintypes.FILETIME()
+        other = (wintypes.FILETIME(), wintypes.FILETIME(), wintypes.FILETIME())
+        ok = ctypes.windll.kernel32.GetProcessTimes(
+            handle, ctypes.byref(created),
+            ctypes.byref(other[0]), ctypes.byref(other[1]), ctypes.byref(other[2]),
+        )
+        if not ok:
+            return 0.0
+        return float((created.dwHighDateTime << 32) | created.dwLowDateTime)
+    except Exception:
+        return 0.0
+    finally:
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.CloseHandle(handle)
+        except Exception:
+            pass
+
+
 def _create_time(pid: int) -> float:
     """프로세스 시작 시각. 모르면 0.
 
@@ -62,6 +146,8 @@ def _create_time(pid: int) -> float:
         return float(psutil.Process(pid).create_time())
     except Exception:
         pass
+    if os.name == "nt":
+        return _win_create_time(pid)
     try:
         stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
         # comm 에 공백이 들어갈 수 있어 마지막 ')' 뒤부터 셉니다.
@@ -79,7 +165,9 @@ def _pid_exists(pid: int) -> bool:
     except Exception:
         pass
     if os.name == "nt":
-        return True              # 확인할 방법이 없으면 '살아 있다' 로 봅니다
+        got = _win_alive(pid)
+        # 커널에 물어봐서 모르겠다고 하면 그때만 '살아 있다' 로 봅니다.
+        return True if got is None else got
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -102,7 +190,11 @@ def _alive(pid: int, create_time: float = 0.0) -> bool:
         return False
     if create_time:
         now = _create_time(pid)
-        if now and abs(now - create_time) > 1.0:
+        # psutil(초)과 윈도우 FILETIME(100ns)은 단위가 다릅니다. 저장할
+        # 때와 비교할 때 같은 _create_time 을 쓰므로 자릿수는 같습니다.
+        # 다만 허용 오차는 상대값으로 둡니다.
+        tol = max(1.0, abs(create_time) * 1e-6)
+        if now and abs(now - create_time) > tol:
             return False         # PID 만 재사용된 남의 프로세스
     return True
 
