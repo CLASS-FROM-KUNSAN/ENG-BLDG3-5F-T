@@ -120,3 +120,38 @@ def test_upload_missing_path(config_file, capsys):
     code = cli.main(["-c", str(config_file()), "-q", "upload", "/nonexistent/x"])
     assert code == 1
     assert "없습니다" in capsys.readouterr().out
+
+
+# --- --dry-run 의 뜻 ---------------------------------------------------
+# 2026-11-13 Windows 실기에서 `record start --dry-run` 이 1분을 통째로
+# 녹화했습니다. 도움말이 비어 있어서 "아무것도 안 하는 옵션" 으로
+# 읽힌 것입니다. 실제로는 **녹화와 전사는 하고 업로드만 흉내** 냅니다.
+def test_every_dry_run_flag_explains_itself():
+    parser = cli.build_parser()
+    empty = []
+
+    def walk(p, path=""):
+        for action in p._actions:
+            if ("--dry-run" in getattr(action, "option_strings", [])
+                    and not (action.help or "").strip()):
+                empty.append(path or "(최상위)")
+            sub = getattr(action, "choices", None)
+            if isinstance(sub, dict):
+                for name, child in sub.items():
+                    walk(child, f"{path} {name}".strip())
+
+    walk(parser)
+    assert not empty, f"--dry-run 설명이 비어 있습니다: {empty}"
+
+
+def test_record_start_dry_run_says_recording_still_happens():
+    """'업로드만 흉내' 라고만 적으면 녹화도 안 하는 줄 압니다."""
+    parser = cli.build_parser()
+    args = parser.parse_args(["record", "start", "--dry-run"])
+    assert args.dry_run
+
+    rec = parser._actions[-1].choices["record"]
+    start = rec._actions[-1].choices["start"]
+    help_text = next(a.help for a in start._actions
+                     if "--dry-run" in a.option_strings)
+    assert "녹화" in help_text, help_text

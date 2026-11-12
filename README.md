@@ -120,7 +120,7 @@ scripts\record_now.bat -l 자료구조 -m 90 REM 이름과 길이 지정
 | 수동 | `record_now.bat` | **가장 확실합니다.** 들고 다니는 노트북에 적합 |
 | 시간표 | `record_schedule.bat` | 고정된 시간표, 늘 같은 자리 |
 | 프로그램 감지 | `record_watch.bat` | Zoom/Webex 온라인 강의 |
-| 터미널 | `python -m gymhall record start` | 직접 호출 |
+| 터미널 | `.venv\Scripts\python -m gymhall record start` | 직접 호출 |
 
 ### 3. 음성 전사
 

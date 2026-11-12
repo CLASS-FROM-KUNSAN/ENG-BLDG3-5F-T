@@ -317,3 +317,105 @@ def test_compute_type_survives_probe_failure(monkeypatch):
 
     monkeypatch.setitem(__import__("sys").modules, "ctranslate2", Broken)
     assert engine.cuda_compute_type() == "float32"
+
+
+# --- 어느 장치를 실제로 잡았는지 ---------------------------------------
+# 2026-11-13 Windows 실기: 두 트랙 모두 "전 구간 무음" 이었습니다.
+# 기본 마이크가 '마이크 배열(Audio Share)' 라는 가상 장치로 잡혀
+# 있었는데, 로그에는 장치 이름이 한 번도 안 나와서 그걸 알 수
+# 없었습니다. 설정값이 아니라 **실제로 열린 것**을 적어야 합니다.
+class _Src:
+    def __init__(self, name):
+        self.name = name
+
+
+def test_the_opened_device_name_is_recorded():
+    from gymhall.recorder.audio import _source_name
+
+    assert _source_name(_Src("스피커 (Realtek)"), "") == "스피커 (Realtek)"
+
+
+def test_a_mismatch_between_config_and_reality_shows_both():
+    """'Focusrite' 라고 적었는데 다른 게 열렸으면 둘 다 보여야 합니다."""
+    from gymhall.recorder.audio import _source_name
+
+    got = _source_name(_Src("마이크 배열 (Audio Share)"), "Focusrite")
+    assert "마이크 배열 (Audio Share)" in got and "Focusrite" in got
+
+
+def test_a_matching_config_is_not_repeated():
+    from gymhall.recorder.audio import _source_name
+
+    got = _source_name(_Src("마이크 배열 (Audio Share)"), "Audio Share")
+    assert got == "마이크 배열 (Audio Share)"
+
+
+def test_a_nameless_source_falls_back_to_the_config():
+    from gymhall.recorder.audio import _source_name
+
+    assert _source_name(object(), "Focusrite") == "Focusrite"
+    assert _source_name(object(), "") == "(기본 장치)"
+
+
+def test_a_silent_track_names_the_device_it_used(tmp_path, caplog):
+    """'전 구간 무음' 만으로는 어디를 고칠지 알 수 없습니다.
+
+    진짜로 돌립니다. 로그 문구를 테스트가 다시 쓰면, 프로덕션에서
+    그 줄을 지워도 초록입니다.
+    """
+    from gymhall.recorder.audio import AudioTrack
+
+    track = AudioTrack(
+        "mic", FakeSource(level=0.0), tmp_path / "m.wav",
+        device_label="마이크 배열 (Audio Share)",
+    )
+    with caplog.at_level("WARNING", logger="gymhall"):
+        track.start()
+        time.sleep(0.5)
+        track.stop()
+        track.join(timeout=15)
+
+    assert track.result.silent, "무음으로 판정되지 않았습니다"
+    assert "마이크 배열 (Audio Share)" in caplog.text, caplog.text
+    assert "mic_device" in caplog.text, "어느 설정을 고쳐야 하는지 안 알려 줍니다"
+
+
+def test_a_track_with_sound_does_not_nag(tmp_path, caplog):
+    from gymhall.recorder.audio import AudioTrack
+
+    track = AudioTrack("system", FakeSource(level=0.5), tmp_path / "s.wav",
+                       device_label="스피커 (Realtek)")
+    with caplog.at_level("WARNING", logger="gymhall"):
+        track.start()
+        time.sleep(0.5)
+        track.stop()
+        track.join(timeout=15)
+    assert not track.result.silent
+    assert "전 구간 무음" not in caplog.text
+
+
+def test_the_device_label_reaches_the_track(tmp_path, monkeypatch):
+    """AudioRecorder 가 리졸버 결과를 AudioTrack 까지 넘기는지.
+
+    중간에서 멈춰도 아무도 안 터집니다 — silence_peak 때와 같은 자리입니다.
+    """
+    from gymhall.recorder import audio as audio_mod
+
+    made = []
+
+    class Spy(audio_mod.AudioTrack):
+        def __init__(self, *a, **kw):
+            made.append(kw)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(audio_mod, "AudioTrack", Spy)
+    monkeypatch.setattr(audio_mod.devices, "resolve_mic_source",
+                        lambda name: _Src("마이크 배열 (Audio Share)"))
+    rec = audio_mod.AudioRecorder(out_dir=tmp_path, system_enabled=False,
+                                  mic_device="Focusrite")
+    rec.start("x")
+    assert made, "트랙이 만들어지지 않았습니다"
+    label = made[0]["device_label"]
+    assert "마이크 배열 (Audio Share)" in label and "Focusrite" in label, label

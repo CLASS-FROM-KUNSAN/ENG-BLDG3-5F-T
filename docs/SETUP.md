@@ -18,6 +18,14 @@
 python --version
 ```
 
+> **아무것도 안 나오면 `py --version` 을 써 보세요.**
+> Windows 에서 `python` 이 `C:\Windows\system32\python` 으로 잡히는
+> PC 가 있습니다. Microsoft Store 스텁이라 진짜 인터프리터가 아니고,
+> 오류도 없이 조용히 끝납니다. 2026-11-13 실기 PC 가 그랬습니다.
+> 그 경우 아래의 `python` 을 전부 `py` 로 읽으세요. venv 를 만든
+> 뒤로는 `.venv\Scripts\python` 을 쓰므로 이 문제가 없습니다.
+
+
 ---
 
 ## 2. 가상환경과 패키지

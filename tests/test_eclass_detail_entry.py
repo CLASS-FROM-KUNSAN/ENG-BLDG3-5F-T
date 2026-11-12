@@ -189,6 +189,16 @@ def test_entering_detail_waits_for_the_form_post(crawler, tmp_path):
 # 를 기준으로 보세요. wait_for_load_state('domcontentloaded') 는
 # 그렇지 않아서(이미 그 상태면 즉시 반환) 목록에 없습니다. 그게 바로
 # 이 버그였습니다.
+#
+# 기준을 만족하지만 아직 안 쓰는 것도 있습니다. 폼 POST 가 아니라
+# 화면을 갈아끼우는 방식으로 바뀌면
+#   page.wait_for_selector(".boardViewBox", state="visible")
+# 가 맞습니다. 그때 이 목록에 넣으세요.
+#
+# 다만 **맨 `wait_for_selector` 는 넣으면 안 됩니다.** 목록 행처럼
+# 이미 있는 요소를 기다리면 즉시 반환이라, 이 버그가 그대로 통과합니다.
+# 상세 화면에만 있는 선택자여야 의미가 있어서, 문자열 검사로는
+# 구분할 수 없습니다. 그래서 지금은 목록에 없습니다.
 WAITS_FOR_NAVIGATION = (
     "expect_navigation",
     "wait_for_url",

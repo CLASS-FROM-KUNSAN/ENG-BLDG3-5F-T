@@ -80,6 +80,16 @@ class VideoRecorder:
             src = f"ddagrab=framerate={self.fps}"
             if target is not None:
                 src += f":output_idx={target.index - 1}"
+            else:
+                # monitor=0 의 뜻이 두 백엔드에서 다릅니다.
+                #   gdigrab -i desktop  = 전체 '가상' 바탕화면(모든 화면)
+                #   ddagrab (idx 없음)  = 출력 0번, 보통 주 모니터 하나
+                # 기본 백엔드가 gdigrab 이라 대부분은 안 겪지만,
+                # ddagrab 을 켠 사람은 "왜 보조 모니터가 안 찍히지" 에서
+                # 헤맵니다. 설정이 아니라 로그로 알려 줍니다.
+                log.info("ddagrab 은 monitor=0 일 때 주 모니터 하나만 잡습니다"
+                         "(gdigrab 의 desktop 은 전체 화면을 이어 붙입니다). "
+                         "보조 모니터를 찍으려면 monitor 번호를 적으세요.")
             return ["-f", "lavfi", "-i", src]
 
         args = ["-f", "gdigrab", "-framerate", str(self.fps),

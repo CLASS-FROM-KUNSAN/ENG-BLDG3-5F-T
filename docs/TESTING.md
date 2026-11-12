@@ -133,6 +133,13 @@ TypeError: 'Event' object is not callable
 정직하게 적어 둡니다. 아래는 **Windows 실기에서 직접 확인해야 합니다.**
 
 - `gdigrab` 화면 캡처 (Linux 에서는 `x11grab` 으로만 확인)
+  - 2026-11-13 Windows 실기에서 **한 화면짜리 PC** 로는 확인했습니다:
+    `monitor = 1` 이 2880×1800 을 어긋남 없이 잡았고(출력 1280×800,
+    비율 일치), 배율 200% 에서도 좌표가 안 줄었습니다
+    (`SetProcessDPIAware` 가 먹습니다).
+  - **아직 확인 못 한 것: 모니터 두 대.** `monitor = 2` 가 그 화면만
+    잡는지, 보조 모니터가 왼쪽일 때 `-offset_x` 가 음수로 나가는지는
+    두 대 꽂은 PC 에서 다시 돌려야 합니다.
 - WASAPI 루프백 실제 캡처 (가짜 소스로만 확인)
 - 작업 스케줄러 등록과 실행
 - `.bat` / `.vbs` 의 실제 동작 (CI 는 문법과 CRLF 만 검사)
@@ -205,6 +212,88 @@ TypeError: 'Event' object is not callable
 3. 설정값이 두 단계 이상 넘어가면(`cfg → Recorder → Track`) 끝까지
    도착하는지 따로 봅니다. 중간에서 멈춰도 아무도 안 터집니다.
    `test_silence_peak_reaches_the_track` 이 그 예입니다.
+4. **로그 문구를 검사할 거면 그 로그를 내는 코드를 실제로 돌리세요.**
+   테스트 안에서 같은 문구를 다시 `log.warning(...)` 하면, 프로덕션에서
+   그 줄을 통째로 지워도 초록입니다.
+
+---
+
+## OS 분기는 순수 로직으로 떼고, OS 판정은 호출부에서만
+
+위 규칙으로도 안 잡히는 것이 하나 더 있었습니다. **실물 객체에
+묶어도 실행 환경이 다르면 그 분기를 아예 안 탑니다.**
+
+모니터 선택이 그랬습니다:
+
+```python
+def _input_args(self):
+    if os.name != "nt":
+        return [... x11grab ...]     # ← 리눅스 CI 는 여기서 끝
+    if self.backend == "ddagrab":
+        ...                          # ← 한 줄도 안 돕니다
+```
+
+Windows 분기 전체가 CI 에서 실행조차 되지 않습니다. 테스트를 아무리
+잘 짜도 그 코드에 도달하지 못합니다.
+
+**OS 가 결정하는 부분과 로직을 분리합니다.** 로직 쪽은 필요한 것을
+인자로 받습니다:
+
+```python
+def _input_args(self):                       # OS 판정은 여기서만
+    if os.name != "nt":
+        return [... x11grab ...]
+    return self.win_input_args(enumerate_monitors())
+
+def win_input_args(self, monitors):          # 어느 OS 에서나 시험 가능
+    ...
+```
+
+`tests/test_video_target.py` 가 `win_input_args([...])` 를 직접
+부릅니다 — monkeypatch 도 필요 없습니다.
+
+### 그 한 줄짜리 배선도 테스트합니다
+
+`win_input_args` 는 CI 에서 잘 돕니다. 그런데 `_input_args` 가
+Windows 에서 `enumerate_monitors()` 를 불러 **그걸 넘기는지** 는
+여전히 안 돕니다. 한 줄이지만 거기서 인자를 빠뜨리면 `monitor` 설정이
+통째로 죽고, 테스트는 초록이고, 사용자만 압니다.
+
+프로덕션 서명에 `_platform=` / `_monitors=` 같은 테스트 전용 인자를
+넣는 방법도 있지만, **`os.name` 을 바꿔 끼우는 쪽이 낫습니다.**
+`_input_args` 가 그 값을 호출 시점에 읽으므로 진짜 함수가 진짜
+분기를 탑니다:
+
+```python
+monkeypatch.setattr(os, "name", "nt")
+monkeypatch.setattr(video, "enumerate_monitors", lambda: [...])
+args = VideoRecorder(..., monitor=2)._input_args()
+```
+
+### 실패하면 기능만 포기하고 작업은 계속
+
+모니터 목록을 못 읽는 것이 **녹화 실패**가 되면 안 됩니다. 전체
+화면이 찍히는 것이 아무것도 안 찍히는 것보다 낫습니다.
+`enumerate_monitors()` 는 어떤 예외든 삼키고 빈 리스트를 돌려주고,
+빈 리스트는 "화면이 없다" 가 아니라 "모르겠다" 이므로 경고하지
+않습니다(리눅스 개발 환경에서 매 실행 뜨면 안 됩니다).
 
 `tests/test_silence.py` 아래쪽의 "가짜가 아니라 진짜 AudioRecorder 와
 맞물리는지" 묶음이 이 규칙을 따른 것입니다.
+
+
+---
+
+## Windows 실기 메모
+
+- **`python` 이 아니라 `py` 입니다.** 이 PC 들에서 `python` 은
+  `C:\Windows\system32\python` 으로 잡히는데 진짜 인터프리터가
+  아니라 아무 출력 없이 끝납니다. Microsoft Store 스텁이거나 PATH
+  오염입니다. 문서의 `python -m gymhall …` 은 그 PC 에서 조용히
+  실패하므로 `py -m gymhall …` 로 읽으세요.
+- **`--dry-run` 은 녹화를 합니다.** 업로드만 흉내 냅니다. 전사
+  대기열에도 실제로 들어갑니다. 2026-11-13 에 이것 때문에 무음
+  테스트 파일 한 건이 대기열에 남았습니다.
+- **기본 마이크를 믿지 마세요.** 그 PC 의 기본 마이크는
+  `마이크 배열 (Audio Share)` 라는 가상 장치였고, 전 구간 0 이
+  나왔습니다. 이제 로그가 **실제로 열린 장치 이름**을 적습니다.
