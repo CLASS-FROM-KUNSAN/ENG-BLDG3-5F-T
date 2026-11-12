@@ -304,3 +304,33 @@ args = VideoRecorder(..., monitor=2)._input_args()
   게 아니라 신호 경로가 없는 것입니다. 반대로 시스템 소리는 WASAPI
   루프백이라 재생 중인 게 없으면 정확히 0 이 정상입니다. 그래서
   마이크일 때만 따로 오류를 냅니다.
+
+
+---
+
+## 인코딩은 로캘에 맡기지 않습니다
+
+`open()` 과 `subprocess(text=True)` 는 인코딩을 안 적으면 **로캘**을
+씁니다. 리눅스 CI 는 UTF-8 이라 늘 초록이고, 한글 Windows 는 cp949 라
+거기서만 죽습니다. 2026-11-13 실기에서 테스트 2건이 이걸로 실패했습니다.
+
+제품 코드는 멀쩡했습니다 — `ffmpeg_util.run` 과 `watcher` 가 이미
+`encoding="utf-8", errors="replace"` 를 적고 있었습니다. 빠진 곳은
+테스트였고(`tests/test_mux.py` 의 ffprobe 호출), **테스트가 못 도는
+것도 고장입니다.** 그 PC 에서는 아무것도 검증되지 않습니다.
+
+`tests/test_encoding_guard.py` 가 `src/` 와 `tests/` 의 모든 .py 를
+AST 로 훑어 인코딩 없는 호출을 찾습니다. ruff 의 `PLW1514` 는
+preview 전용인 데다 `subprocess(text=True)` 는 안 봅니다.
+
+검사기를 쓰면서 **그 검사기가 두 번 틀렸습니다.** 둘 다 멀쩡한 코드를
+위반으로 찍는 쪽이었습니다:
+
+- `Path.open("rb")` 는 모드가 **첫** 인자인데 `open(path, "rb")` 처럼
+  두 번째만 봤습니다 → 정상 바이너리 호출 6개를 전부 위반으로 찍음
+- `read_text("utf-8")` 처럼 인코딩을 **위치 인자**로 넘긴 것을 못 봤습니다
+
+그래서 검사기에는 자기검증 테스트 두 개를 붙였습니다 — 위반을 실제로
+잡는지(`test_the_guard_actually_catches_things`)와 멀쩡한 것을 안
+찍는지(`test_the_guard_does_not_cry_wolf`). 검사기가 조용히 아무것도
+못 잡으면 전체 검사가 영원히 초록입니다.

@@ -70,13 +70,13 @@ def test_nfc_normalisation():
 # ---------------------------------------------------------------------------
 def test_unique_path_avoids_overwrite(tmp_path):
     first = tmp_path / "a.pdf"
-    first.write_text("1")
+    first.write_text("1", encoding="utf-8")
     second = unique_path(first)
     assert second != first
-    second.write_text("2")
+    second.write_text("2", encoding="utf-8")
     third = unique_path(first)
     assert third not in (first, second)
-    assert first.read_text() == "1", "기존 파일을 덮어썼습니다"
+    assert first.read_text(encoding="utf-8") == "1", "기존 파일을 덮어썼습니다"
 
 
 def test_unique_path_passthrough(tmp_path):
@@ -157,7 +157,7 @@ def test_store_write_is_atomic(tmp_path):
     store.save()
     # 임시 파일이 남지 않아야 합니다
     assert not list(tmp_path.glob(".tmp-*")), "임시 파일이 남았습니다"
-    assert len(json.loads(path.read_text())["downloaded"]) == 50
+    assert len(json.loads(path.read_text(encoding="utf-8"))["downloaded"]) == 50
 
 
 def test_digest_helpers(tmp_path):

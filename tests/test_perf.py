@@ -121,7 +121,7 @@ def test_wrong_shape_is_tolerated(tmp_path):
 def test_unwritable_path_does_not_raise(tmp_path):
     """예상 시간 표시가 안 될 뿐, 전사는 계속돼야 합니다."""
     blocked = tmp_path / "afile"
-    blocked.write_text("x")
+    blocked.write_text("x", encoding="utf-8")
     profile = Profile(blocked / "nested" / "perf.json")
     profile.record(3600, 1800, "small", "cpu")   # 예외 없이 넘어가야 합니다
 
