@@ -753,9 +753,11 @@ def test_access_check_distinguishes_missing_repo_from_no_permission():
     with pytest.raises(ReleaseError, match="토큰이 거절"):
         rejected.check_access()
 
+    # permissions.push 가 false 여도 막지 않습니다. Actions 의
+    # GITHUB_TOKEN 은 올릴 수 있는데도 false 로 오는 경우가 있고,
+    # 그걸로 막았더니 업로드가 통째로 멈췄습니다.
     readonly = _up(lambda c: _Resp(200, {"permissions": {"push": False}}))
-    with pytest.raises(ReleaseError, match="읽기만"):
-        readonly.check_access()
+    readonly.check_access()
 
     ok = _up(lambda c: _Resp(200, {"permissions": {"push": True}}))
     ok.check_access()
@@ -843,14 +845,21 @@ def test_no_permission_to_create_is_explained():
         up.ensure_repo(create_missing=True)
 
 
-def test_a_permission_error_is_never_turned_into_a_create():
-    """읽기만 되는 레포를 '없는 레포' 로 오해해 만들려 들면 안 됩니다."""
-    from gymhall.release import ReleaseError
+def test_a_readable_repo_is_never_recreated():
+    """레포가 보이면 만들려 들면 안 됩니다(권한 칸이 뭐라 하든)."""
+    up = _up(lambda c: _Resp(200, {"permissions": {"push": False}}))
+    up.ensure_repo(create_missing=True)
+    assert all(m != "POST" for m, *_ in up.session.calls)
+
+
+def test_a_false_push_permission_does_not_block_the_upload(caplog):
+    """2026-11-12: 이 칸 하나로 46개 올리던 업로드가 통째로 막혔습니다."""
+    import logging
 
     up = _up(lambda c: _Resp(200, {"permissions": {"push": False}}))
-    with pytest.raises(ReleaseError, match="읽기만"):
-        up.ensure_repo(create_missing=True)
-    assert all(m != "POST" for m, *_ in up.session.calls)
+    with caplog.at_level(logging.WARNING):
+        up.check_access()
+    assert "그래도 올려" in caplog.text
 
 
 def test_a_concurrent_creation_by_another_pc_is_not_an_error():

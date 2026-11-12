@@ -289,9 +289,18 @@ class ReleaseUploader:
         except Exception as exc:
             raise ReleaseError(f"{self.slug}: GitHub 에 닿지 못했습니다 - {exc}") from exc
         if resp.status_code == 200:
+            # permissions.push 로 막지 않습니다. Actions 의 GITHUB_TOKEN 은
+            # 릴리스 에셋을 올릴 수 있는데도 이 칸이 false 로 오는 경우가
+            # 있습니다. 2026-11-12 실행에서 그 때문에 업로드가 통째로
+            # 막혔습니다 — 바로 전 실행까지 같은 토큰으로 46개를 올렸는데
+            # 제가 넣은 사전 점검이 그걸 거부했습니다.
+            #
+            # 못 올리면 실제 업로드가 403 으로 알려 줍니다. 사전 점검은
+            # '레포가 없다' 처럼 **그것 말고는 알 길이 없는 것** 만 막습니다.
             if not resp.json().get("permissions", {}).get("push", True):
-                raise ReleaseError(
-                    f"{self.slug}: 읽기만 됩니다. 토큰에 이 레포 쓰기 권한이 없습니다."
+                log.warning(
+                    "%s: 토큰에 쓰기 권한이 없다고 나옵니다. 그래도 올려 봅니다 "
+                    "— 이 칸이 실제 권한과 다른 경우가 있습니다.", self.slug,
                 )
             return
         if resp.status_code == 404:

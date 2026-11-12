@@ -245,3 +245,28 @@ def test_collect_curriculum_terminates_without_a_live_server(crawler):
     )
     assert len(weeks) == 3, list(weeks)
     assert not crawler.stats.errors, crawler.stats.errors
+
+
+# --- 주차를 못 넘기면 알려야 합니다 ------------------------------------
+# 2026-11-12 실행: 16주 과목 아홉 개가 전부 '3주차' 로 저장됐습니다.
+# 첫 창만 읽고 한 칸도 못 넘겼는데 아무 경고가 없었습니다.
+def test_failing_to_step_is_warned_not_silent(crawler, caplog):
+    import logging
+
+    course = type("C", (), {"name": "과목가", "course_id": "C1"})()
+    with caplog.at_level(logging.WARNING):
+        weeks = crawler.collect_curriculum(course)
+    assert len(weeks) == 3
+    assert "한 칸도 못 넘겼습니다" in caplog.text
+    # 화살표가 있는지 없는지를 로그가 구분해 줘야 다음에 어디를 볼지 압니다.
+    assert "prev=" in caplog.text and "next=" in caplog.text
+
+
+def test_step_week_does_not_raise_when_nothing_moves(crawler):
+    """못 넘기면 False 일 뿐, 예외로 올라가면 과목 전체가 날아갑니다.
+
+    (왜 멈췄는지는 debug 로그에 남지만, gymhall 로거는 propagate 를
+     꺼 두어서 caplog 로 보이지 않습니다. 여기서는 계약만 봅니다.)
+    """
+    assert crawler._step_week(Crawler.CURRICULUM_NEXT) is False
+    assert crawler._step_week(Crawler.CURRICULUM_PREV) is False

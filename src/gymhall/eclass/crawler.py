@@ -481,23 +481,49 @@ class Crawler:
             return None
 
     def _step_week(self, selector: str) -> bool:
-        """화살표를 눌러 주차 창을 옮깁니다. 실제로 바뀌어야 True."""
+        """화살표를 눌러 주차 창을 옮깁니다. 실제로 바뀌어야 True.
+
+        화살표는 viewNextPage() 를 불러 **폼을 POST 하고 페이지를 새로
+        띄웁니다.** 그래서 클릭과 새 화면 사이에 navigation 이 있습니다.
+        그냥 클릭하고 domcontentloaded 를 기다리면, 아직 옛 화면인 채로
+        읽거나 locator 가 떨어져 나가 예외가 납니다. 둘 다 조용히
+        '못 넘겼다' 로 끝나서, 2026-11-12 실행에서 16주 과목 아홉 개가
+        전부 첫 세 주차만 저장됐습니다.
+        """
         page = self.br.page
         before = self._curriculum_window()
         before_weeks = before["weeks"] if before else None
         loc = page.locator(selector).first
         try:
             if loc.count() == 0:
+                log.debug("주차 이동: 화살표가 없습니다(%s)", selector)
                 return False
-            loc.click(timeout=self.br.timeout_ms)
-            page.wait_for_load_state("domcontentloaded", timeout=self.br.timeout_ms)
-            page.wait_for_timeout(300)
         except Exception as exc:
-            log.debug("주차 이동 실패(%s): %s", selector, exc)
+            log.debug("주차 이동: 화살표를 세지 못했습니다(%s): %s", selector, exc)
             return False
+
+        try:
+            with page.expect_navigation(wait_until="domcontentloaded",
+                                        timeout=self.br.timeout_ms):
+                loc.click(timeout=self.br.timeout_ms)
+        except Exception as exc:
+            # navigation 이 안 일어나는 화면일 수도 있습니다(AJAX 교체 등).
+            log.debug("주차 이동: navigation 을 못 봤습니다(%s): %s", selector, exc)
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=self.br.timeout_ms)
+            except Exception:
+                pass
+        page.wait_for_timeout(300)
+
         after = self._curriculum_window()
+        if not after:
+            log.debug("주차 이동: 옮긴 뒤 표를 찾지 못했습니다(%s)", selector)
+            return False
         # 눌렸지만 아무 일도 없었던 경우를 성공으로 치면 영원히 돕니다.
-        return bool(after) and after["weeks"] != before_weeks
+        if after["weeks"] == before_weeks:
+            log.debug("주차 이동: 눌렀지만 주차가 그대로입니다(%s)", selector)
+            return False
+        return True
 
     def collect_curriculum(self, course: Course) -> dict[str, list[tuple[str, str]]]:
         """맨 앞 주차까지 되감은 뒤 끝까지 넘기며 전 주차를 모읍니다."""
@@ -518,6 +544,7 @@ class Crawler:
                 found[week] = items
 
         take()
+        first = dict(found)
         rewound = 0
         while rewound < self.MAX_WEEK_STEPS and self._step_week(self.CURRICULUM_PREV):
             rewound += 1
@@ -526,6 +553,23 @@ class Crawler:
         while advanced < self.MAX_WEEK_STEPS and self._step_week(self.CURRICULUM_NEXT):
             advanced += 1
             take()
+
+        if rewound == 0 and advanced == 0 and len(found) <= 3:
+            # 2026-11-12 실행에서 9과목 전부 '3주차' 로 끝났습니다. 16주
+            # 과목인데 첫 창만 읽었다는 뜻입니다. 화살표를 못 찾았는지,
+            # 눌렀는데 화면이 안 바뀌었는지가 로그로 구분돼야 합니다.
+            page = self.br.page
+            try:
+                prev_n = page.locator(self.CURRICULUM_PREV).count()
+                next_n = page.locator(self.CURRICULUM_NEXT).count()
+            except Exception as exc:
+                prev_n = next_n = f"셀 수 없음({exc})"
+            log.warning(
+                "%s / 학습목차: 주차를 한 칸도 못 넘겼습니다(%d주차만). "
+                "화살표 개수 prev=%s next=%s. 0 이면 선택자가 틀린 것이고, "
+                "0 이 아니면 눌러도 화면이 안 바뀐 것입니다.",
+                course.name, len(first), prev_n, next_n,
+            )
 
         if rewound >= self.MAX_WEEK_STEPS or advanced >= self.MAX_WEEK_STEPS:
             msg = (f"{course.name}/학습목차: 주차 이동이 {self.MAX_WEEK_STEPS}번을 넘었습니다. "
@@ -1034,6 +1078,10 @@ class Crawler:
         missing = list(att.failed)
         if expected_file and not att.saved and not missing:
             missing.append("목록에는 첨부 표시가 있는데 링크를 찾지 못했습니다")
+            # 선택자를 또 찍어 맞히지 않도록, 이 화면에 실제로 있는
+            # 것들을 남깁니다. 다음 실행 로그가 답을 줍니다.
+            log.error("  이 화면에 있는 것들:\n      %s",
+                      self.describe_attachment_candidates())
         if missing:
             self.store.set_meta(f"pending:{state_key}", str(md))
             self.store.save()
@@ -1091,6 +1139,61 @@ class Crawler:
             what=f"{course.name}/{MENU_LABELS.get(key, key)}/{row['title']}",
             extra={"title": row["title"], "attachments": [f.name for f in att.saved]},
         )
+
+    def describe_attachment_candidates(self, limit: int = 12) -> str:
+        """첨부를 못 찾았을 때, 화면에 **무엇이 있는지** 적어 둡니다.
+
+        2026-11-12 실행에서 게시글 27건이 "목록에는 첨부 표시가 있는데
+        링크를 찾지 못했습니다" 로 끝났습니다. 선택자를 또 찍어 맞히는
+        대신, 그 화면에 실제로 있는 누를 만한 것들을 로그에 남깁니다.
+        다음 실행 로그가 무엇을 맞춰야 하는지 알려 줍니다.
+        """
+        try:
+            found = _eval_json(
+                self.br.page,
+                """() => {
+                     const out = [];
+                     const seen = new Set();
+                     const add = (el, where) => {
+                       const oc = el.getAttribute('onclick') || '';
+                       const hr = el.getAttribute('href') || '';
+                       const key = el.tagName + '|' + oc.slice(0, 40) + '|' + hr.slice(0, 40);
+                       if (seen.has(key)) return;
+                       seen.add(key);
+                       out.push({
+                         tag: el.tagName,
+                         cls: (el.getAttribute('class') || '').slice(0, 60),
+                         onclick: oc.slice(0, 120),
+                         href: hr.slice(0, 120),
+                         text: (el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40),
+                         where: where
+                       });
+                     };
+                     for (const el of document.querySelectorAll('[onclick]')) add(el, 'onclick');
+                     for (const el of document.querySelectorAll('a[href]')) {
+                       const h = el.getAttribute('href') || '';
+                       if (h && h !== '#' && !h.startsWith('javascript:void')) add(el, 'href');
+                     }
+                     return JSON.stringify(out.slice(0, __LIMIT__));
+                   }""",
+                limit=limit,
+            )
+        except PageReadError as exc:
+            return f"(화면을 읽지 못했습니다: {exc})"
+        if not found:
+            return "(누를 만한 것이 하나도 없습니다 — 상세 화면이 안 열렸을 수 있습니다)"
+        lines = []
+        for item in found:
+            bits = [f"<{item['tag'].lower()}"]
+            if item["cls"]:
+                bits.append(f" class={item['cls']!r}")
+            if item["onclick"]:
+                bits.append(f" onclick={item['onclick']!r}")
+            elif item["href"]:
+                bits.append(f" href={item['href']!r}")
+            bits.append(f"> {item['text']!r}")
+            lines.append("".join(bits))
+        return "\n      ".join(lines)
 
     def _attachment_locators(self):
         """첨부 링크를 담은 locator 를 찾습니다. 프레임 안까지 봅니다.
