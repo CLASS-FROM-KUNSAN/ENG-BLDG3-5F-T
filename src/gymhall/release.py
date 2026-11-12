@@ -17,6 +17,7 @@ import mimetypes
 import re
 import time
 import unicodedata
+import zipfile
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -582,6 +583,70 @@ def upload_many(
             on_done(path, result)
         results.append(result)
     return results
+
+
+def make_archive(root: Path, files: Iterable[Path], dest: Path) -> Path | None:
+    """files 를 root 기준 상대 경로 그대로 담은 zip 을 만듭니다.
+
+    **바이트까지 똑같이 나와야 합니다.** 내용이 그대로인데 zip 이
+    달라지면 해시가 바뀌어 매번 다시 올라갑니다. 그래서
+      - 항목을 경로 순으로 정렬하고
+      - 파일을 zf.write() 가 아니라 ZipInfo + writestr 로 넣고
+        (zf.write 는 디스크의 수정 시각을 그대로 담습니다)
+      - 디렉터리 항목은 넣지 않습니다.
+    zip 안의 이름은 한글 그대로 둡니다(UTF-8 플래그). 에셋 이름만
+    GitHub 때문에 해시가 되고, 받아서 풀면 원래 이름이 나옵니다.
+    """
+    items = sorted({Path(f) for f in files}, key=lambda f: str(f.relative_to(root)))
+    if not items:
+        return None
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for f in items:
+            info = zipfile.ZipInfo(
+                str(Path(f).relative_to(root).as_posix()),
+                date_time=(1980, 1, 1, 0, 0, 0),
+            )
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            zf.writestr(info, Path(f).read_bytes())
+    return dest
+
+
+def group_by_top_folder(root: Path, files: Iterable[Path]) -> dict[str, list[Path]]:
+    """root 바로 아래 폴더 이름으로 묶습니다(과목1, 과목2, 쪽지 ...)."""
+    groups: dict[str, list[Path]] = {}
+    for f in files:
+        rel = Path(f).relative_to(root)
+        if len(rel.parts) < 2:
+            continue          # 학기 폴더 바로 아래 파일은 묶을 데가 없습니다
+        groups.setdefault(rel.parts[0], []).append(Path(f))
+    return groups
+
+
+def write_index(dest: Path, rows: list[tuple[str, str, int, int]], *, tag: str) -> Path:
+    """에셋 이름 -> 폴더 이름 목차.
+
+    GitHub 에셋 이름에서 한글이 빠지기 때문에 `56740f8b.zip` 같은
+    이름만 남습니다. 릴리스 화면에서 어느 과목인지 알 수 없으므로
+    목차를 같이 올립니다. rows = (에셋 이름, 폴더, 파일 수, 바이트).
+    """
+    lines = [
+        f"# {tag} 수집 목차",
+        "",
+        "에셋 이름에 한글이 들어가지 않아 해시로 올라갑니다.",
+        "받아서 풀면 폴더 이름은 원래대로 나옵니다.",
+        "",
+        "| 에셋 | 폴더 | 파일 수 | 크기 |",
+        "|---|---|---:|---:|",
+    ]
+    for name, folder, count, size in sorted(rows, key=lambda r: r[1]):
+        lines.append(f"| `{name}` | {folder} | {count} | {_human(size)} |")
+    lines.append("")
+    lines.append(f"- 만든 시각: {datetime.now().astimezone():%Y-%m-%d %H:%M:%S}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return dest
 
 
 def upload_filter(
