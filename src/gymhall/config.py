@@ -80,6 +80,11 @@ DEFAULTS: dict[str, Any] = {
             "message": True,
         },
         "message_boxes": ["RECEIVE"],
+        # 과목 = 레포지터리. 비우면 예전처럼 github.owner/repo 한 곳으로
+        # 전부 올립니다. 적기 시작하면 그 목록이 이 PC 의 담당 전부입니다.
+        # (수집 대상을 고르는 eclass.courses 와는 다른 것입니다 —
+        #  저쪽은 '무엇을 받을지', 이쪽은 '어디로 올릴지'.)
+        "course_repos": [],
         "risky": {
             "i_understand_the_risk": False,
             "exam": False,

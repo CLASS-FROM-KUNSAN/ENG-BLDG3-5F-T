@@ -636,3 +636,66 @@ def test_index_counts_and_sizes_are_shown(tmp_path):
                        tag="t").read_text("utf-8")
     assert "| 7 |" in text
     assert "KiB" in text
+
+
+# ---------------------------------------------------------------------------
+# 과목 = 레포지터리일 때의 중복 제거
+#
+# Store 가 digest 만으로 기억하면, A레포에 올린 파일과 내용이 같은 것이
+# B레포에서 '이미 올렸다' 로 걸려 조용히 빠집니다. 같은 강의자료가 두
+# 과목에 다 올라가는 것이 정상입니다.
+# ---------------------------------------------------------------------------
+class _RepoSpy:
+    def __init__(self, slug):
+        self.slug = slug
+        self.got: list[str] = []
+
+    def upload(self, path, tag, *, prefix="", rel_path=None, **kw):
+        import pathlib
+
+        self.got.append(rel_path or pathlib.Path(path).name)
+        return {"tag": tag, "assets": [{"name": "x"}], "split": False, "sha256": "x"}
+
+
+def test_the_same_file_goes_to_every_repo(tmp_path):
+    from gymhall.release import upload_many
+    from gymhall.state import Store
+
+    root = tmp_path / "r"
+    root.mkdir()
+    f = root / "자료.pdf"
+    f.write_bytes(b"same bytes")
+    store = Store.open(tmp_path / "s.json")
+
+    a, b = _RepoSpy("org/datastructure"), _RepoSpy("org/os")
+    upload_many(a, [f], "tag", store=store, root=root)
+    upload_many(b, [f], "tag", store=store, root=root)
+    assert a.got == ["자료.pdf"]
+    assert b.got == ["자료.pdf"], "두 번째 레포에서 조용히 빠졌습니다"
+
+
+def test_the_same_file_is_still_skipped_within_one_repo(tmp_path):
+    from gymhall.release import upload_many
+    from gymhall.state import Store
+
+    root = tmp_path / "r"
+    root.mkdir()
+    f = root / "자료.pdf"
+    f.write_bytes(b"same bytes")
+    store = Store.open(tmp_path / "s.json")
+
+    a = _RepoSpy("org/datastructure")
+    upload_many(a, [f], "tag", store=store, root=root)
+    upload_many(a, [f], "tag", store=store, root=root)
+    assert a.got == ["자료.pdf"]
+
+
+def test_the_upload_record_remembers_which_repo(tmp_path):
+    from gymhall.state import Store
+
+    store = Store.open(tmp_path / "s.json")
+    store.mark_uploaded("d1", tag="t", asset_name="a.zip", repo="org/ds")
+    assert store.is_uploaded("d1", "org/ds")
+    assert not store.is_uploaded("d1", "org/os")
+    entry = next(iter(store.data["uploaded"].values()))
+    assert entry["repo"] == "org/ds"

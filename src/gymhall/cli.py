@@ -51,12 +51,17 @@ def _store(layout: Layout, name: str) -> Store:
     return Store.open(layout.state / f"{name}.json")
 
 
-def _uploader(cfg, *, dry_run: bool = False):
+def _uploader(cfg, *, dry_run: bool = False, course=None):
+    """과목을 주면 그 과목의 레포로, 안 주면 github.owner/repo 로.
+
+    과목 = 레포지터리입니다. 라우팅 판단은 courses.resolve 한 곳에서만
+    하고, 여기서는 받은 과목을 그대로 씁니다.
+    """
     from .release import ReleaseUploader
 
     return ReleaseUploader(
-        owner=str(cfg.get("github.owner", "")),
-        repo=str(cfg.get("github.repo", "")),
+        owner=str(getattr(course, "owner", "") or cfg.get("github.owner", "")),
+        repo=str(getattr(course, "repo", "") or cfg.get("github.repo", "")),
         retry_count=int(cfg.get("github.retry_count", 4)),
         retry_backoff=float(cfg.get("github.retry_backoff", 2.0)),
         split_size_mb=int(cfg.get("github.split_size_mb", 1900)),
@@ -260,9 +265,19 @@ def cmd_eclass_sync(args) -> int:
 
 
 def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: bool) -> None:
+    """과목(=레포)마다 따로 올립니다.
+
+    한 과목이 실패해도 나머지는 그대로 올라가야 합니다. 예전에는 학기
+    폴더 전체를 한 레포로 한 번에 올려서, 중간에 하나가 터지면 그 뒤가
+    전부 멈췄습니다.
+    """
     import tempfile
 
+    from . import courses as courses_mod
+    from .eclass.urls import MENU_LABELS
+    from .paths import safe_name
     from .release import (
+        ReleaseError,
         _human,
         group_by_top_folder,
         iter_files,
@@ -274,16 +289,12 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
     )
     from .release import asset_name as _asset_name
 
-    excluded = {str(m) for m in cfg.get("eclass.upload.exclude_menus", [])}
-    from .eclass.urls import MENU_LABELS
-
-    excluded_labels = {MENU_LABELS.get(m, m) for m in excluded}
+    excluded_labels = {
+        MENU_LABELS.get(m, m) for m in cfg.get("eclass.upload.exclude_menus", [])
+    }
 
     # 이번 학기 폴더만 올립니다. layout.eclass 전체를 훑으면 지난 학기
-    # 파일까지 매번 다시 해시 계산하게 됩니다(업로드는 중복 제거로 막히지만
-    # 과목이 쌓이면 동기화가 눈에 띄게 느려집니다).
-    from .paths import safe_name
-
+    # 파일까지 매번 다시 해시 계산하게 됩니다.
     root = layout.eclass / safe_name(term)
     if not root.exists():
         log.info("업로드할 폴더가 없습니다: %s", root)
@@ -296,7 +307,6 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
         max_file_mb=int(cfg.get("eclass.upload.max_file_mb", 0)),
     )
     for path, why in dropped:
-        # 조용히 빼면 사용자는 올라간 줄 압니다. 파일은 로컬에 남습니다.
         log.info("업로드 제외: %s (%s)", path.name, why)
     if dropped:
         log.info("업로드에서 뺀 파일 %d개 — 로컬에는 그대로 있습니다.", len(dropped))
@@ -304,42 +314,67 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
         log.info("새로 올릴 파일이 없습니다.")
         return
 
-    uploader = _uploader(cfg, dry_run=dry_run)
+    groups = group_by_top_folder(root, files)
+    if not groups:
+        log.info("새로 올릴 폴더가 없습니다.")
+        return
+
     tag = tag_for(
         str(cfg.get("github.tag_strategy", "monthly")),
         str(cfg.get("github.tag_prefix_eclass", "eclass")),
         fixed=str(cfg.get("github.fixed_tag", "archive")),
     )
-    # 최상위 폴더(과목1, 과목2, 쪽지 ...)마다 zip 하나로 올립니다.
-    # 파일 하나씩 올리면 에셋 이름이 전부 해시라 릴리스 화면에서
-    # 어느 과목 것인지 알 수 없고, 개수도 금방 수백 개가 됩니다.
-    groups = group_by_top_folder(root, files)
-    if not groups:
-        log.info("새로 올릴 폴더가 없습니다.")
-        return
-    log.info("릴리스 '%s' 로 폴더 %d개 업로드 (파일 %d개)", tag, len(groups), len(files))
+    course_list = courses_mod.load(cfg)
 
-    with tempfile.TemporaryDirectory(prefix="gymhall-zip-") as work:
-        bundles: list[Path] = []
-        index_rows: list[tuple[str, str, int, int]] = []
-        for name, members in sorted(groups.items()):
-            zip_path = Path(work) / f"{name}.zip"
-            if make_archive(root, members, zip_path) is None:
-                continue
-            size = zip_path.stat().st_size
-            log.info("  %s: 파일 %d개 -> %s", name, len(members), _human(size))
-            bundles.append(zip_path)
-            index_rows.append(
-                (_asset_name(zip_path.name, unique_key=zip_path.name),
-                 name, len(members), size)
-            )
-        # 에셋 이름에서 한글이 빠지므로 어느 과목인지 알 수 있게 목차를
-        # 같이 올립니다. 목차는 내용이 바뀌면 매번 갱신돼야 하므로
-        # store 중복 제거에서 빼고 따로 올립니다.
-        if index_rows:
-            bundles.append(write_index(Path(work) / "INDEX.md", index_rows, tag=tag))
-        results = upload_many(uploader, bundles, tag, store=store, root=Path(work))
-    log.info("업로드 완료 %d건 (중복/실패 제외)", len(results))
+    # 폴더 -> 과목(레포). 과목을 안 적었으면 전부 기본 레포 한 곳으로.
+    plan: dict[object, dict[str, list[Path]]] = {}
+    unknown: list[str] = []
+    for folder, members in sorted(groups.items()):
+        course = courses_mod.by_name(course_list, folder) if course_list else None
+        if course_list and course is None:
+            unknown.append(folder)
+            continue
+        plan.setdefault(course, {})[folder] = members
+    for folder in unknown:
+        # 담당이 아닌 과목입니다. 받아는 뒀지만 올릴 레포가 없습니다.
+        log.info("업로드 건너뜀(이 PC 담당 과목이 아님): %s", folder)
+
+    ok, failed = 0, []
+    for course, folders in plan.items():
+        where = course.slug if course is not None else "기본 레포"
+        try:
+            uploader = _uploader(cfg, dry_run=dry_run, course=course)
+            uploader.check_access()
+            total = sum(len(v) for v in folders.values())
+            log.info("[%s] 릴리스 '%s' 로 폴더 %d개 (파일 %d개)",
+                     where, tag, len(folders), total)
+            with tempfile.TemporaryDirectory(prefix="gymhall-zip-") as work:
+                bundles: list[Path] = []
+                rows: list[tuple[str, str, int, int]] = []
+                for name, members in sorted(folders.items()):
+                    zip_path = Path(work) / f"{name}.zip"
+                    if make_archive(root, members, zip_path) is None:
+                        continue
+                    size = zip_path.stat().st_size
+                    log.info("  %s: 파일 %d개 -> %s", name, len(members), _human(size))
+                    bundles.append(zip_path)
+                    rows.append((_asset_name(zip_path.name, unique_key=zip_path.name),
+                                 name, len(members), size))
+                if rows:
+                    bundles.append(write_index(Path(work) / "INDEX.md", rows, tag=tag))
+                done = upload_many(uploader, bundles, tag, store=store, root=Path(work))
+            ok += len(done)
+        except ReleaseError as exc:
+            # 한 과목이 막혀도 나머지는 올라가야 합니다.
+            log.error("[%s] 업로드 실패 — 다른 과목은 계속합니다: %s", where, exc)
+            failed.append(where)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("[%s] 업로드 중 예상 못한 오류: %s", where, exc)
+            failed.append(where)
+
+    log.info("업로드 완료 %d건 (중복/실패 제외)", ok)
+    if failed:
+        log.error("업로드하지 못한 레포 %d곳: %s", len(failed), ", ".join(failed))
 
 
 # ---------------------------------------------------------------------------

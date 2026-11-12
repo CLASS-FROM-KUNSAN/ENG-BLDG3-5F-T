@@ -110,14 +110,25 @@ class Store:
         }
 
     # -- 업로드 기록 --------------------------------------------------
-    def is_uploaded(self, digest: str) -> bool:
-        return digest in self.data["uploaded"]
+    @staticmethod
+    def _upload_key(digest: str, repo: str = "") -> str:
+        """레포가 여러 개면 '같은 내용' 이라도 레포마다 따로 올라갑니다.
 
-    def mark_uploaded(self, digest: str, *, tag: str, asset_name: str,
+        digest 만으로 기억하면, A레포에 올린 파일과 내용이 같은 것이
+        B레포에서 '이미 올렸다' 로 걸려 조용히 빠집니다. 과목 = 레포
+        구조에서는 같은 강의자료가 두 과목에 다 올라가는 것이 정상입니다.
+        """
+        return f"{repo}|{digest}" if repo else digest
+
+    def is_uploaded(self, digest: str, repo: str = "") -> bool:
+        return self._upload_key(digest, repo) in self.data["uploaded"]
+
+    def mark_uploaded(self, digest: str, *, tag: str, asset_name: str, repo: str = "",
                       size: int | None = None) -> None:
-        self.data["uploaded"][digest] = {
+        self.data["uploaded"][self._upload_key(digest, repo)] = {
             "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "tag": tag,
+            "repo": repo,
             "asset": asset_name,
             "size": size,
         }
