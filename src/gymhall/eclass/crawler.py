@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import html
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +27,7 @@ from typing import Any
 from ..logging_setup import get as get_logger
 from ..paths import Layout, safe_name, unique_path
 from ..state import Store, sha256_file, sha256_text
-from . import filedown
+from . import anon, filedown
 from .browser import EclassBrowser
 from .urls import MENU_LABELS, MENU_LINK_TEXTS, RISKY_MENUS, Site
 
@@ -112,6 +113,15 @@ ATTACHMENT = (
 #       <dd><div class="cont"><table class="boardListBasic">…</table></div></dd>
 LESSON_WEEK = "#listBox dl.element"
 
+# 쪽지함. 칸 순서가 게시판과 달라서(맨 앞이 체크박스) 따로 읽습니다.
+#   [체크박스] [번호] [보낸이] [제목] [파일] [읽음] [받은 날짜]
+MESSAGE_ROW = "table.boardListBasic tbody tr"
+MESSAGE_LINK = "td.textLeft a"
+# 첨부는 DWR 로 zip 을 만든 뒤 콜백에서 fileDownload 를 부릅니다.
+# onclick 에 주소가 없으므로 이것만은 눌러서 받아야 합니다.
+MESSAGE_FILE = "a[onclick*='compressFile'], i.icon-message-color, i[class*='message']"
+MAX_MESSAGE_PAGES = 30
+
 
 @dataclass
 class Course:
@@ -177,6 +187,10 @@ def _clean(text: str) -> str:
     return re.sub(r"[ \t]+", " ", html.unescape(text or "")).strip()
 
 
+class PageReadError(RuntimeError):
+    """화면을 읽지 못했습니다. 글이 0건인 것과 구분해야 합니다."""
+
+
 class Crawler:
     def __init__(
         self,
@@ -189,6 +203,7 @@ class Crawler:
         menus: dict[str, bool],
         risky: dict[str, Any] | None = None,
         menu_id_overrides: dict[str, str] | None = None,
+        message_boxes: Iterable[str] = ("RECEIVE",),
     ) -> None:
         self.br = browser
         self.site = site
@@ -198,12 +213,14 @@ class Crawler:
         self.menus = dict(menus)
         self.risky = dict(risky or {})
         self.menu_id_overrides = dict(menu_id_overrides or {})
+        self.message_boxes = [str(b).upper() for b in message_boxes]
         self.stats = Stats()
 
     # -- 메뉴 선택 ---------------------------------------------------
     def enabled_menus(self) -> list[str]:
         """위험 메뉴는 옵트인이 두 겹(전체 동의 + 개별)일 때만 켜집니다."""
-        out = [k for k, v in self.menus.items() if v and k not in RISKY_MENUS]
+        out = [k for k, v in self.menus.items()
+               if v and k not in RISKY_MENUS and k != "message"]
         if self.risky.get("i_understand_the_risk"):
             for key in RISKY_MENUS:
                 if self.risky.get(key):
@@ -536,32 +553,40 @@ class Crawler:
     # 한 장도 받지 않았습니다. 화면에는 파일 이름이 보이니까 저장된 줄
     # 알기 쉬운데, 실제로는 목록만 있었습니다.
     def read_lesson_weeks(self) -> list[dict[str, Any]]:
+        """주차(또는 과제) 블록을 읽습니다.
+
+        dt 안에는 제목(h4) 옆에 버튼 묶음(ul.btnBox)이 있어서, dt 를
+        통째로 읽으면 '과제제출' 같은 글자가 제목에 붙습니다.
+        표가 아닌 dd 는 설명문입니다(과제의 '참고 자료' 등).
+        """
         try:
-            return self.br.page.evaluate(
-                """(sel) => Array.from(document.querySelectorAll(sel)).map(dl => {
-                     // dt 안에는 제목(h4) 옆에 버튼 묶음(ul.btnBox)이 있습니다.
-                     // dt 를 통째로 읽으면 '과제제출' 같은 글자가 제목에 붙습니다.
-                     const h = dl.querySelector('dt h4') || dl.querySelector('dt');
-                     const rows = Array.from(dl.querySelectorAll('table tbody tr'))
-                       .map(tr => Array.from(tr.querySelectorAll('td'))
-                              .map(td => (td.innerText||'').replace(/\\s+/g,' ').trim()))
-                       .filter(cells => cells.length);
-                     // 표가 아닌 dd 는 설명문입니다(과제의 '참고 자료' 등).
-                     const text = Array.from(dl.querySelectorAll('dd'))
-                       .filter(dd => !dd.querySelector('table'))
-                       .map(dd => (dd.innerText||'').trim())
-                       .filter(Boolean).join('\\n').trim();
-                     return {
-                       title: (h ? h.innerText : '').replace(/\\s+/g,' ').trim(),
-                       rows,
-                       text,
-                     };
-                   })""",
+            blocks = self.br.page.evaluate(
+                """(sel) => {
+                     const squash = (v) => (v || '').replace(/\\s+/g, ' ').trim();
+                     return Array.from(document.querySelectorAll(sel)).map(dl => {
+                       const h = dl.querySelector('dt h4') || dl.querySelector('dt');
+                       const rows = Array.from(dl.querySelectorAll('table tbody tr'))
+                         .map(tr => Array.from(tr.querySelectorAll('td'))
+                                .map(td => squash(td.innerText)))
+                         .filter(cells => cells.length);
+                       const text = Array.from(dl.querySelectorAll('dd'))
+                         .filter(dd => !dd.querySelector('table'))
+                         .map(dd => (dd.innerText || '').trim())
+                         .filter(Boolean).join('\\n').trim();
+                       return {
+                         title: squash(h ? h.innerText : ''),
+                         rows: rows,
+                         text: text
+                       };
+                     });
+                   }""",
                 LESSON_WEEK,
             )
         except Exception as exc:
-            log.warning("강의 목록 읽기 실패: %s", exc)
-            return []
+            raise PageReadError(f"주차 목록을 읽지 못했습니다: {exc}") from exc
+        if not isinstance(blocks, list):
+            raise PageReadError(f"주차 목록이 리스트가 아닙니다: {type(blocks).__name__}")
+        return blocks
 
     def crawl_lecture_list(self, course: Course) -> None:
         weeks = self.read_lesson_weeks()
@@ -602,34 +627,167 @@ class Crawler:
             )
         self.store.save()
 
+    # -- 쪽지 --------------------------------------------------------
+    # 강의자료가 쪽지로도 옵니다("[영어2] 한문단쓰기 자료 탑재 완료 알림").
+    # 보낸이 칸은 `김진욱 (101394)` 처럼 이름과 사번이 함께 들어 있어
+    # 익명화해서 저장합니다. 본문은 그대로 둡니다.
+    def read_message_rows(self) -> list[dict[str, Any]]:
+        try:
+            rows = self.br.page.evaluate(
+                """(sel) => {
+                     const squash = (v) => (v || '').replace(/\\s+/g, ' ').trim();
+                     return Array.from(document.querySelectorAll(sel)).map((tr, i) => {
+                       const tds = Array.from(tr.querySelectorAll('td'));
+                       if (tds.length < 6) return null;
+                       const link = tr.querySelector('td.textLeft a');
+                       return {
+                         index: i,
+                         no: squash(tds[1].innerText),
+                         sender: squash(tds[2].innerText),
+                         title: squash(link ? link.innerText : tds[3].innerText),
+                         date: squash(tds[tds.length - 1].innerText),
+                         has_file: !!tr.querySelector("a[onclick*='compressFile']")
+                       };
+                     }).filter(Boolean).filter(r => r.title);
+                   }""",
+                MESSAGE_ROW,
+            )
+        except Exception as exc:
+            raise PageReadError(f"쪽지 목록을 읽지 못했습니다: {exc}") from exc
+        if not isinstance(rows, list):
+            raise PageReadError(f"쪽지 목록이 리스트가 아닙니다: {type(rows).__name__}")
+        return rows
+
+    def message_page_count(self) -> int:
+        n = self.board_page_count()
+        return min(n, MAX_MESSAGE_PAGES)
+
+    def crawl_messages(self, box: str = "RECEIVE") -> None:
+        """쪽지함 하나를 끝까지 긁습니다."""
+        out_dir = self.layout.menu_dir(self.term, "_쪽지", MENU_LABELS["message"])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        total = 0
+
+        self.br.goto(self.site.messages(box))
+        pages = self.message_page_count()
+        for page_no in range(1, pages + 1):
+            if page_no > 1:
+                # 게시판과 달리 페이지 이동이 평범한 GET 입니다.
+                self.br.goto(self.site.messages(box, page_no))
+            self.stats.pages += 1
+            try:
+                rows = self.read_message_rows()
+            except PageReadError as exc:
+                msg = f"쪽지({box}) {page_no}페이지: {exc}"
+                log.error("%s", msg)
+                self.stats.errors.append(msg)
+                return
+            if not rows:
+                break
+
+            list_url = self.br.page.url
+            for row in rows:
+                who = anon.sender(row["sender"])
+                state_key = sha256_text(
+                    f"message|{box}|{row['no']}|{row['title']}|{row['date']}|{who}"
+                )
+                if self.store.is_downloaded(state_key):
+                    self.stats.skipped += 1
+                    continue
+                try:
+                    self._open_message(row, who, out_dir, state_key, box)
+                    total += 1
+                except Exception as exc:
+                    msg = f"쪽지 '{row['title']}': {exc}"
+                    log.warning("%s", msg)
+                    self.stats.errors.append(msg)
+                finally:
+                    try:
+                        self.br.goto(list_url)
+                    except Exception:
+                        pass
+            self.store.save()
+
+        log.info("쪽지(%s): %d건 저장", box, total)
+
+    def _open_message(self, row: dict[str, Any], who: str, out_dir: Path,
+                      state_key: str, box: str) -> None:
+        page = self.br.page
+        link = page.locator(MESSAGE_ROW).nth(row["index"]).locator(MESSAGE_LINK).first
+        if link.count() == 0:
+            raise RuntimeError("제목 링크를 찾지 못했습니다")
+        link.click()
+        page.wait_for_load_state("domcontentloaded", timeout=self.br.timeout_ms)
+        page.wait_for_timeout(250)
+
+        body = ""
+        for sel in (*DETAIL_BODY, "div#listBox"):
+            try:
+                loc = page.locator(sel).first
+                if loc.count() > 0 and loc.inner_text().strip():
+                    body = loc.inner_text()
+                    break
+            except Exception:
+                continue
+        body = re.sub(r"\n{3,}", "\n\n", (body or "").strip())
+
+        stem = f"{row['no']}_{safe_name(row['title'], max_len=70)}" if row["no"] else \
+               safe_name(row["title"], max_len=70)
+        md = unique_path(out_dir / f"{safe_name(stem)}.md")
+        md.write_text(
+            f"# {row['title']}\n\n"
+            f"- 쪽지함: {box}\n"
+            f"- 보낸이: {who}\n"
+            f"- 받은 날짜: {row.get('date','')}\n"
+            f"- 수집시각: {datetime.now().astimezone():%Y-%m-%d %H:%M:%S}\n\n---\n\n"
+            f"{body}\n",
+            encoding="utf-8",
+        )
+        self.stats.posts += 1
+        self._download_attachments(out_dir / safe_name(stem, max_len=60))
+        self.store.mark_downloaded(state_key, path=str(md),
+                                   extra={"title": row["title"], "sender": who})
+        self.store.save()
+
     # -- 게시판 ------------------------------------------------------
     def read_board_rows(self) -> list[dict[str, Any]]:
-        """목록 테이블의 각 행을 읽습니다. 인덱스는 클릭할 때 씁니다."""
+        """목록 테이블의 각 행을 읽습니다. 인덱스는 클릭할 때 씁니다.
+
+        evaluate 에 **리스트를 넘기지 않습니다.** 2026-11-12 러너에서
+        `Page.evaluate: TypeError: refs.set is not a function` 이 나서
+        게시판 27곳이 전부 0건으로 끝났습니다(로컬에서는 재현되지
+        않았습니다). 인자는 객체 하나로 넘기고, 매개변수 자리에서
+        구조분해하지 않습니다. JS 안에 // 주석도 두지 않습니다 —
+        설명은 파이썬 쪽에 적습니다.
+        """
         try:
-            return self.br.page.evaluate(
-                """([sel, FILE_ICON]) => {
-                     const rows = Array.from(document.querySelectorAll(sel));
+            rows = self.br.page.evaluate(
+                """(arg) => {
+                     const rows = Array.from(document.querySelectorAll(arg.row));
                      return rows.map((tr, i) => {
                        const tds = Array.from(tr.querySelectorAll('td'));
                        if (!tds.length) return null;
                        const link = tr.querySelector('a');
-                       const text = tds.map(td => (td.innerText||'').replace(/\\s+/g,' ').trim());
+                       const squash = (v) => (v || '').replace(/\\s+/g, ' ').trim();
+                       const text = tds.map(td => squash(td.innerText));
                        return {
                          index: i,
                          no: text[0] || '',
-                         title: (link ? (link.innerText||'') : (text[1]||'')).replace(/\\s+/g,' ').trim(),
-                         has_file: !!tr.querySelector(FILE_ICON),
-                         author: text.length > 3 ? text[text.length-3] : '',
-                         date: text.length > 2 ? text[text.length-2] : '',
+                         title: squash(link ? link.innerText : (text[1] || '')),
+                         has_file: !!tr.querySelector(arg.icon),
+                         author: text.length > 3 ? text[text.length - 3] : '',
+                         date: text.length > 2 ? text[text.length - 2] : '',
                          cells: text
                        };
                      }).filter(Boolean).filter(r => r.title);
                    }""",
-                [BOARD_ROW, FILE_ICON],
+                {"row": BOARD_ROW, "icon": FILE_ICON},
             )
         except Exception as exc:
-            log.warning("게시판 목록 읽기 실패: %s", exc)
-            return []
+            raise PageReadError(f"게시판 목록을 읽지 못했습니다: {exc}") from exc
+        if not isinstance(rows, list):
+            raise PageReadError(f"게시판 목록이 리스트가 아닙니다: {type(rows).__name__}")
+        return rows
 
     def board_page_count(self) -> int:
         """게시판의 전체 페이지 수. 읽지 못하면 1 로 봅니다."""
@@ -681,8 +839,15 @@ class Crawler:
         return False
 
     def _page_signature(self) -> str:
-        """현재 목록의 지문. 페이지가 실제로 바뀌었는지 판단하는 데 씁니다."""
-        rows = self.read_board_rows()
+        """현재 목록의 지문. 페이지가 실제로 바뀌었는지 판단하는 데 씁니다.
+
+        여기서는 못 읽어도 예외를 올리지 않습니다 — 지문이 같으면
+        '안 넘어갔다' 로 보고 goto_board_page 가 알아서 실패 처리합니다.
+        """
+        try:
+            rows = self.read_board_rows()
+        except PageReadError:
+            return ""
         return "|".join(f"{r.get('no')}:{r.get('title')}" for r in rows[:5])
 
     def crawl_board(self, course: Course, key: str, *, titles_only: bool = False) -> None:
@@ -710,7 +875,15 @@ class Crawler:
                 self.stats.errors.append(msg)
                 break
 
-            rows = self.read_board_rows()
+            try:
+                rows = self.read_board_rows()
+            except PageReadError as exc:
+                # '글이 0건' 과 '못 읽었다' 는 전혀 다른 일입니다.
+                # 섞어 버리면 27곳이 전부 비었는데도 정상으로 보입니다.
+                msg = f"{course.name}/{label}: {exc}"
+                log.error("%s", msg)
+                self.stats.errors.append(msg)
+                break
             if not rows:
                 if page_no == 1:
                     self.stats.boards_empty += 1
@@ -987,5 +1160,14 @@ class Crawler:
         log.info("대상 과목 %d개: %s", len(courses), ", ".join(c.name for c in courses))
         for course in courses:
             self.crawl_course(course)
+        # 쪽지는 과목에 딸린 것이 아니라 계정 단위라 루프 밖에서 한 번만.
+        if self.menus.get("message"):
+            for box in self.message_boxes:
+                try:
+                    self.crawl_messages(box)
+                except Exception as exc:
+                    msg = f"쪽지({box}): {exc}"
+                    log.error("%s", msg)
+                    self.stats.errors.append(msg)
         self.store.save()
         return self.stats
