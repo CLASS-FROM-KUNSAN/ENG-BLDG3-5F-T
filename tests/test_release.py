@@ -495,3 +495,144 @@ def test_upload_derives_the_asset_name_from_the_relative_path(tmp_path):
     for course in ("영어2_23", "운동과건강_01", "스키_01"):
         up.upload(f, "tag", rel_path=f"2026-2/{course}/강의목록/강의목록.md")
     assert len(set(names)) == 3, names
+
+
+# ---------------------------------------------------------------------------
+# 과목 폴더 단위 zip 업로드
+#
+# 파일 하나씩 올리면 에셋 이름이 전부 해시(809b1351.md)라 릴리스 화면에서
+# 어느 과목 것인지 알 수 없고, 개수도 금방 수백 개가 됩니다. 최상위 폴더
+# (과목1, 과목2, 쪽지 ...)마다 zip 하나로 묶습니다.
+# ---------------------------------------------------------------------------
+def _tree(tmp_path):
+    root = tmp_path / "2026-2"
+    made = []
+    plan = {
+        "영어2_23": {"공지사항": ["중간고사 안내.md"], "강의자료실": ["1주차 자료.pdf"]},
+        "운동과건강_01": {"강의목록": ["강의목록.md"]},
+        "_쪽지": {"쪽지": ["28_스키 수업 공지.md"]},
+    }
+    for course, menus in plan.items():
+        for menu, names in menus.items():
+            d = root / course / menu
+            d.mkdir(parents=True, exist_ok=True)
+            for n in names:
+                f = d / n
+                f.write_text(f"{course}/{menu}/{n}", encoding="utf-8")
+                made.append(f)
+    return root, made
+
+
+def test_files_are_grouped_by_their_top_folder(tmp_path):
+    from gymhall.release import group_by_top_folder
+
+    root, files = _tree(tmp_path)
+    groups = group_by_top_folder(root, files)
+    assert set(groups) == {"영어2_23", "운동과건강_01", "_쪽지"}
+    assert len(groups["영어2_23"]) == 2
+
+
+def test_a_file_directly_under_the_term_folder_is_not_grouped(tmp_path):
+    from gymhall.release import group_by_top_folder
+
+    root, files = _tree(tmp_path)
+    loose = root / "읽어보세요.md"
+    loose.write_text("x", encoding="utf-8")
+    groups = group_by_top_folder(root, [*files, loose])
+    assert all(loose not in v for v in groups.values())
+
+
+def test_archive_keeps_korean_paths_inside(tmp_path):
+    import zipfile
+
+    from gymhall.release import group_by_top_folder, make_archive
+
+    root, files = _tree(tmp_path)
+    members = group_by_top_folder(root, files)["영어2_23"]
+    z = make_archive(root, members, tmp_path / "out" / "영어2_23.zip")
+    names = zipfile.ZipFile(z).namelist()
+    assert "영어2_23/공지사항/중간고사 안내.md" in names, names
+    assert "영어2_23/강의자료실/1주차 자료.pdf" in names, names
+
+
+def test_archive_contents_round_trip(tmp_path):
+    import zipfile
+
+    from gymhall.release import group_by_top_folder, make_archive
+
+    root, files = _tree(tmp_path)
+    members = group_by_top_folder(root, files)["영어2_23"]
+    z = make_archive(root, members, tmp_path / "out" / "a.zip")
+    with zipfile.ZipFile(z) as zf:
+        body = zf.read("영어2_23/공지사항/중간고사 안내.md").decode("utf-8")
+    assert body == "영어2_23/공지사항/중간고사 안내.md"
+
+
+def test_archive_is_byte_identical_for_the_same_input(tmp_path):
+    """내용이 그대로인데 zip 이 달라지면 매번 다시 올라갑니다.
+
+    zip 은 기본적으로 수정 시각을 담으므로 그냥 만들면 실행마다
+    바이트가 달라집니다. 해시 중복 제거가 통째로 무력화됩니다.
+    """
+    import os
+    import time
+
+    from gymhall.release import group_by_top_folder, make_archive
+
+    root, files = _tree(tmp_path)
+    members = group_by_top_folder(root, files)["영어2_23"]
+    first = make_archive(root, members, tmp_path / "1.zip").read_bytes()
+    # 파일 수정 시각을 바꿔도 내용이 같으면 같은 zip 이어야 합니다.
+    later = time.time() + 86400
+    for f in members:
+        os.utime(f, (later, later))
+    second = make_archive(root, list(reversed(members)), tmp_path / "2.zip").read_bytes()
+    assert first == second
+
+
+def test_archive_changes_when_a_file_changes(tmp_path):
+    from gymhall.release import group_by_top_folder, make_archive
+
+    root, files = _tree(tmp_path)
+    members = group_by_top_folder(root, files)["영어2_23"]
+    first = make_archive(root, members, tmp_path / "1.zip").read_bytes()
+    members[0].write_text("바뀐 내용", encoding="utf-8")
+    second = make_archive(root, members, tmp_path / "2.zip").read_bytes()
+    assert first != second
+
+
+def test_archive_of_nothing_is_none(tmp_path):
+    from gymhall.release import make_archive
+
+    assert make_archive(tmp_path, [], tmp_path / "x.zip") is None
+
+
+def test_each_course_zip_gets_its_own_asset_name(tmp_path):
+    from gymhall.release import asset_name
+
+    names = {asset_name(f"{c}.zip", unique_key=f"{c}.zip")
+             for c in ("영어2_23", "운동과건강_01", "_쪽지")}
+    assert len(names) == 3, names
+
+
+def test_index_maps_asset_names_back_to_folders(tmp_path):
+    """에셋 이름이 해시라 목차 없이는 어느 과목인지 알 수 없습니다."""
+    from gymhall.release import write_index
+
+    rows = [("2_23_84aadfbc.zip", "영어2_23", 3, 571),
+            ("56740f8b.zip", "_쪽지", 1, 221)]
+    text = write_index(tmp_path / "INDEX.md", rows, tag="eclass-2026-11").read_text("utf-8")
+    assert "eclass-2026-11" in text
+    for name, folder, _n, _s in rows:
+        assert name in text and folder in text
+    # 폴더 이름 순으로 정렬합니다(해시 순이면 사람이 못 찾습니다).
+    assert text.index("_쪽지") < text.index("영어2_23")
+
+
+def test_index_counts_and_sizes_are_shown(tmp_path):
+    from gymhall.release import write_index
+
+    text = write_index(tmp_path / "I.md", [("a.zip", "과목가", 7, 2048)],
+                       tag="t").read_text("utf-8")
+    assert "| 7 |" in text
+    assert "KiB" in text

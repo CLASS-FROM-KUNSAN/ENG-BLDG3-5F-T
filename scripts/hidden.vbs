@@ -32,6 +32,16 @@ For i = 1 To args.Count - 1
     cmd = cmd & " """ & args(i) & """"
 Next
 
-' 두 번째 인자 0 = 창 숨김,  세 번째 False = 끝날 때까지 기다리지 않음
-shell.Run cmd, 0, False
-WScript.Quit 0
+' 두 번째 인자 0 = 창 숨김,  세 번째 True = 끝날 때까지 기다림
+'
+' 기다리지 않으면 작업 스케줄러가 곧바로 '성공' 으로 보고 끝냅니다.
+' 그러면 register_tasks.ps1 의
+'     -RestartCount 2 -RestartInterval 5분
+'     -ExecutionTimeLimit 12시간
+' 이 전부 무용지물입니다 — 재시작할 '실패' 가 없고, 시간 제한은 이미
+' 끝난 wscript 에 걸립니다. 수업 중에 파이썬이 죽어도 스케줄러는
+' 모르고, 다음 로그온까지 그날 수업이 통째로 빕니다.
+' .bat 의 종료 코드를 그대로 돌려줘야 스케줄러가 실패를 알아봅니다.
+Dim rc
+rc = shell.Run(cmd, 0, True)
+WScript.Quit rc

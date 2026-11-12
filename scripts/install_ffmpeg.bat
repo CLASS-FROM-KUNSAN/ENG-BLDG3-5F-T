@@ -9,7 +9,7 @@ set "DEST=%REPO%\tools"
 
 echo ffmpeg 를 내려받습니다... (약 80MB)
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "try { [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri %URL% -OutFile %ZIP% -UseBasicParsing } catch { Write-Host $_.Exception.Message; exit 1 }"
+  "try { [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%URL%' -OutFile '%ZIP%' -UseBasicParsing } catch { Write-Host $_.Exception.Message; exit 1 }"
 if errorlevel 1 (
     echo.
     echo [X] 내려받기 실패. 직접 설치하세요:
@@ -22,7 +22,7 @@ if errorlevel 1 (
 echo 압축을 푸는 중...
 if not exist "%DEST%" mkdir "%DEST%"
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "Expand-Archive -Path %ZIP% -DestinationPath %DEST%\_ffmpeg_tmp -Force"
+  "Expand-Archive -Path '%ZIP%' -DestinationPath '%DEST%\_ffmpeg_tmp' -Force"
 
 for /d %%D in ("%DEST%\_ffmpeg_tmp\ffmpeg-*") do (
     if exist "%DEST%\ffmpeg" rmdir /s /q "%DEST%\ffmpeg"

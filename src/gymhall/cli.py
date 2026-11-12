@@ -260,7 +260,19 @@ def cmd_eclass_sync(args) -> int:
 
 
 def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: bool) -> None:
-    from .release import iter_files, tag_for, upload_filter, upload_many
+    import tempfile
+
+    from .release import (
+        _human,
+        group_by_top_folder,
+        iter_files,
+        make_archive,
+        tag_for,
+        upload_filter,
+        upload_many,
+        write_index,
+    )
+    from .release import asset_name as _asset_name
 
     excluded = {str(m) for m in cfg.get("eclass.upload.exclude_menus", [])}
     from .eclass.urls import MENU_LABELS
@@ -298,8 +310,35 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
         str(cfg.get("github.tag_prefix_eclass", "eclass")),
         fixed=str(cfg.get("github.fixed_tag", "archive")),
     )
-    log.info("릴리스 '%s' 로 %d개 파일 업로드", tag, len(files))
-    results = upload_many(uploader, files, tag, store=store, root=root)
+    # 최상위 폴더(과목1, 과목2, 쪽지 ...)마다 zip 하나로 올립니다.
+    # 파일 하나씩 올리면 에셋 이름이 전부 해시라 릴리스 화면에서
+    # 어느 과목 것인지 알 수 없고, 개수도 금방 수백 개가 됩니다.
+    groups = group_by_top_folder(root, files)
+    if not groups:
+        log.info("새로 올릴 폴더가 없습니다.")
+        return
+    log.info("릴리스 '%s' 로 폴더 %d개 업로드 (파일 %d개)", tag, len(groups), len(files))
+
+    with tempfile.TemporaryDirectory(prefix="gymhall-zip-") as work:
+        bundles: list[Path] = []
+        index_rows: list[tuple[str, str, int, int]] = []
+        for name, members in sorted(groups.items()):
+            zip_path = Path(work) / f"{name}.zip"
+            if make_archive(root, members, zip_path) is None:
+                continue
+            size = zip_path.stat().st_size
+            log.info("  %s: 파일 %d개 -> %s", name, len(members), _human(size))
+            bundles.append(zip_path)
+            index_rows.append(
+                (_asset_name(zip_path.name, unique_key=zip_path.name),
+                 name, len(members), size)
+            )
+        # 에셋 이름에서 한글이 빠지므로 어느 과목인지 알 수 있게 목차를
+        # 같이 올립니다. 목차는 내용이 바뀌면 매번 갱신돼야 하므로
+        # store 중복 제거에서 빼고 따로 올립니다.
+        if index_rows:
+            bundles.append(write_index(Path(work) / "INDEX.md", index_rows, tag=tag))
+        results = upload_many(uploader, bundles, tag, store=store, root=Path(work))
     log.info("업로드 완료 %d건 (중복/실패 제외)", len(results))
 
 
@@ -534,7 +573,8 @@ def cmd_upload(args) -> int:
         print(f"경로가 없습니다: {target}")
         return 1
 
-    files = [target] if target.is_file() else list(iter_files(target))
+    is_dir = target.is_dir()
+    files = [target] if not is_dir else list(iter_files(target))
     if not files:
         print("올릴 파일이 없습니다.")
         return 0
@@ -546,8 +586,12 @@ def cmd_upload(args) -> int:
     )
     store = _store(layout, "manual_upload")
     print(f"릴리스 '{tag}' 에 {len(files)}개 파일을 올립니다.")
+    # 폴더를 올릴 때 root 를 넘기지 않으면 에셋 이름이 '파일 이름' 만으로
+    # 정해져서, 하위 폴더가 다른 동명 파일(courseA/자료.md, courseB/자료.md)이
+    # 같은 이름이 됩니다. 실행 내 중복 검사에 걸려 두 번째가 통째로 빠집니다.
     results = upload_many(_uploader(cfg, dry_run=args.dry_run), files, tag,
-                          prefix=f"{cfg.machine_label}_", store=store)
+                          prefix=f"{cfg.machine_label}_", store=store,
+                          root=target if is_dir else target.parent)
     print(f"완료 {len(results)}건")
     return 0
 
