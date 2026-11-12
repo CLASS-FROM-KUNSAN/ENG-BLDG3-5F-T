@@ -183,3 +183,118 @@ def test_audio_is_not_delayed(tmp_path):
     src = inspect.getsource(RecordingSession._record_segment)
     assert src.index("audio_rec.start(") < src.index("video_rec.start("), \
         "화면을 소리보다 먼저 켜고 있습니다 — pre-roll 동안 화면이 찍힙니다"
+
+
+# --- OS 분기 그 자체 ---------------------------------------------------
+# win_input_args 는 리눅스 CI 에서 잘 돕니다. 그런데 _input_args 가
+# Windows 에서 enumerate_monitors() 를 불러 그걸 넘기는지는 여전히
+# 실행되지 않습니다. 한 줄이지만 그 한 줄이 틀리면(인자를 빠뜨리면)
+# 테스트는 초록이고 사용자만 압니다 — 이 코드베이스에서 세 번째로
+# 같은 모양입니다.
+#
+# 프로덕션 함수에 _platform / _monitors 같은 테스트 전용 인자를 넣는
+# 대신 os.name 을 바꿔 끼웁니다. _input_args 가 그걸 호출 시점에
+# 읽으므로 **진짜 함수가 진짜 분기를 탑니다.** 서명이 깨끗하게
+# 남는다는 점에서 주입보다 낫습니다.
+def test_input_args_dispatches_to_the_windows_builder(monkeypatch):
+    import os as os_mod
+
+    from gymhall.recorder import video as V
+
+    monkeypatch.setattr(os_mod, "name", "nt")
+    monkeypatch.setattr(V, "enumerate_monitors",
+                        lambda: [mon(1, primary=True), mon(2, x=1920, w=1280, h=720)])
+    args = VideoRecorder(out_dir="/tmp", backend="gdigrab", monitor=2)._input_args()
+    assert args[args.index("-offset_x") + 1] == "1920"
+    assert args[args.index("-video_size") + 1] == "1280x720"
+
+
+def test_input_args_passes_the_monitor_list_through(monkeypatch):
+    """목록을 안 넘기면 monitor 설정이 통째로 죽습니다."""
+    import os as os_mod
+
+    from gymhall.recorder import video as V
+
+    monkeypatch.setattr(os_mod, "name", "nt")
+    monkeypatch.setattr(V, "enumerate_monitors", lambda: [])
+    args = VideoRecorder(out_dir="/tmp", backend="gdigrab", monitor=2)._input_args()
+    assert "-offset_x" not in args and args[-1] == "desktop"
+
+
+def test_input_args_uses_x11_off_windows(monkeypatch):
+    import os as os_mod
+
+    monkeypatch.setattr(os_mod, "name", "posix")
+    args = VideoRecorder(out_dir="/tmp", backend="gdigrab", monitor=2)._input_args()
+    assert "x11grab" in args
+
+
+def test_a_broken_monitor_api_does_not_stop_recording(monkeypatch):
+    """모니터 선택 실패가 녹화 실패가 되면 안 됩니다.
+
+    전체 화면이 찍히는 것이 아무것도 안 찍히는 것보다 낫습니다.
+    원격 데스크톱이나 DWM 이 꺼진 환경에서 WinAPI 가 터질 수 있습니다.
+    """
+    import os as os_mod
+
+    from gymhall.recorder import monitors as MM
+
+    monkeypatch.setattr(os_mod, "name", "nt")
+    monkeypatch.setattr(MM, "_win_monitors",
+                        lambda: (_ for _ in ()).throw(OSError("DWM 없음")))
+    assert MM.enumerate_monitors() == []
+    args = VideoRecorder(out_dir="/tmp", backend="gdigrab", monitor=2)._input_args()
+    assert args[-1] == "desktop", "예외 때문에 녹화가 통째로 죽었습니다"
+
+
+# conftest 가 gymhall 로거를 WARNING 으로 묶어 둡니다. logger 를 안
+# 적으면 caplog 가 root 만 낮춰서 INFO 가 레벨 검사에서 먼저 죽고,
+# 테스트는 "로그가 없다" 가 아니라 "못 봤다" 로 빨개집니다.
+def test_ddagrab_says_monitor_zero_means_primary(caplog):
+    """gdigrab 의 desktop 과 뜻이 다릅니다. 모르면 보조 모니터를 찾아 헤맵니다."""
+    with caplog.at_level("INFO", logger="gymhall"):
+        cmd([mon(1), mon(2, x=1920)], backend="ddagrab", monitor=0)
+    assert "주 모니터 하나만" in caplog.text, caplog.text
+
+
+def test_gdigrab_desktop_says_nothing_of_the_sort(caplog):
+    """gdigrab 의 desktop 은 전체 화면이 맞으므로 안내가 틀립니다."""
+    with caplog.at_level("INFO", logger="gymhall"):
+        cmd([mon(1)], backend="gdigrab", monitor=0)
+    assert "주 모니터 하나만" not in caplog.text
+
+
+def test_ddagrab_with_a_monitor_number_says_nothing(caplog):
+    with caplog.at_level("INFO", logger="gymhall"):
+        args = cmd([mon(1), mon(2, x=1920)], backend="ddagrab", monitor=2)
+    assert "output_idx=1" in args[-1]
+    assert "주 모니터 하나만" not in caplog.text
+
+
+# --- 수동 녹화에는 pre-roll 이 붙으면 안 됩니다 -----------------------
+def test_manual_record_start_gets_no_pre_roll():
+    """사용자가 '지금부터' 를 누른 것이지 '2분 뒤부터' 가 아닙니다.
+
+    schedule 만 pre-roll 을 씁니다. 수동 녹화에 붙으면 누르고 나서
+    2분 동안 화면이 안 찍히는데 사용자는 이유를 모릅니다.
+    """
+    import inspect
+
+    from gymhall import cli
+
+    src = inspect.getsource(cli.cmd_record_start)
+    assert "video_not_before" not in src, "수동 녹화에 pre-roll 이 붙었습니다"
+    assert "pre_roll" not in src
+
+    # 기본값이 0 이어야 _run_recording 을 그냥 불러도 안 기다립니다.
+    sig = inspect.signature(cli._run_recording)
+    assert sig.parameters["video_not_before"].default == 0.0
+
+
+def test_watch_mode_gets_no_pre_roll_either():
+    """watch 는 '프로그램이 떴다' 가 시작 신호입니다. 당길 앞이 없습니다."""
+    import inspect
+
+    from gymhall import cli
+
+    assert "video_not_before" not in inspect.getsource(cli.cmd_record_watch)

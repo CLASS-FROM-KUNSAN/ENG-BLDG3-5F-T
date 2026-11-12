@@ -29,6 +29,21 @@ log = get_logger("recorder.audio")
 BLOCK_FRAMES = 4096
 
 
+def _source_name(source, configured: str) -> str:
+    """실제로 열린 장치의 이름. 설정값이 아니라 **열린 것**을 적습니다.
+
+    설정이 비어 있으면 OS 기본 장치가 잡힙니다. 그게 무엇인지 모르면
+    '전 구간 무음' 을 보고도 어디를 고쳐야 할지 알 수 없습니다.
+    """
+    name = str(getattr(source, "name", "") or "").strip()
+    if name and configured and configured.lower() not in name.lower():
+        # 설정한 이름과 실제로 열린 장치가 다르면 둘 다 보여 줍니다.
+        return f"{name} (설정: {configured})"
+    if name:
+        return name
+    return configured or "(기본 장치)"
+
+
 def _db_to_gain(db: float) -> float:
     return 10.0 ** (float(db) / 20.0)
 
@@ -70,6 +85,7 @@ class AudioTrack(threading.Thread):
         gain_db: float = 0.0,
         silence_warn_sec: float = 60.0,
         silence_peak: float = 1e-5,
+        device_label: str = "",
         tap: queue.Queue | None = None,
     ) -> None:
         super().__init__(name=f"audio-{name}", daemon=True)
@@ -87,6 +103,12 @@ class AudioTrack(threading.Thread):
         self.gain = _db_to_gain(gain_db)
         self.silence_warn_sec = float(silence_warn_sec)
         self.silence_peak = float(silence_peak)
+        # 실제로 열린 장치 이름. 설정이 비어 있으면 OS 기본값이 잡히는데,
+        # 그게 무엇인지 로그에 없으면 '전 구간 무음' 만 보고 원인을
+        # 알 수 없습니다. 2026-11-13 Windows 실기에서 기본 마이크가
+        # '마이크 배열(Audio Share)' 라는 가상 장치로 잡혀 마이크가
+        # 통째로 0 이었는데, 로그만 봐서는 알 수 없었습니다.
+        self.device_label = str(device_label or "(이름 미상)")
         self.tap = tap  # 실시간 전사로 흘려보낼 큐 (없으면 None)
         self._stop_event = threading.Event()
         self.result = TrackResult(name=name, path=self.out_path, samplerate=self.samplerate)
@@ -119,7 +141,8 @@ class AudioTrack(threading.Thread):
                                       channels=self.channels,
                                       blocksize=BLOCK_FRAMES) as rec:
                 self.result.started_at = time.time()
-                log.info("[%s] 녹음 시작 -> %s", self.track_name, self.out_path.name)
+                log.info("[%s] 녹음 시작: %s -> %s",
+                         self.track_name, self.device_label, self.out_path.name)
 
                 while not self._stop_event.is_set():
                     data = rec.record(numframes=BLOCK_FRAMES)
@@ -172,6 +195,13 @@ class AudioTrack(threading.Thread):
                 self.track_name, self.result.seconds, self.result.peak,
                 "  ** 전 구간 무음 **" if self.result.silent else "",
             )
+            if self.result.silent:
+                log.warning(
+                    "[%s] 전 구간 무음입니다. 잡은 장치는 '%s' 였습니다. "
+                    "이게 의도한 장치가 아니면 config.toml 의 %s_device 에 "
+                    "이름 일부를 적으세요(python -m gymhall devices 로 확인).",
+                    self.track_name, self.device_label, self.track_name,
+                )
 
 
 @dataclass
@@ -218,7 +248,9 @@ class AudioRecorder:
                 name, source, Path(self.out_dir) / f"{stem}.{name}.wav",
                 samplerate=self.samplerate, channels=self.channels, gain_db=gain,
                 silence_warn_sec=self.silence_warn_sec,
-                silence_peak=self.silence_peak, tap=tap,
+                silence_peak=self.silence_peak,
+                device_label=_source_name(source, device_name),
+                tap=tap,
             )
             self.tracks.append(track)
             track.start()

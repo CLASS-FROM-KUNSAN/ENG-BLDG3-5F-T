@@ -863,14 +863,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-m", "--minutes", type=float, help="녹화 길이(분). 생략 시 config 의 최대값")
     p.add_argument("--language", help="이 녹화의 전사 언어 (ko / en / auto / ko+en)")
     p.add_argument("--no-upload", action="store_true")
-    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--dry-run", action="store_true",
+                   help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
     p.set_defaults(func=cmd_record_start)
 
     p = rec.add_parser("schedule", help="시간표대로 대기하다 녹화")
     p.add_argument("--show", action="store_true", help="시간표만 출력하고 종료")
     p.add_argument("--once", action="store_true", help="한 번만 녹화하고 종료")
     p.add_argument("--no-upload", action="store_true")
-    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--dry-run", action="store_true",
+                   help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
     p.set_defaults(func=cmd_record_schedule)
 
     p = rec.add_parser("watch", help="프로그램이 뜨면 자동 녹화")
@@ -880,7 +882,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--language", help="전사 언어 (ko / en / auto / ko+en)")
     p.add_argument("--once", action="store_true")
     p.add_argument("--no-upload", action="store_true")
-    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--dry-run", action="store_true",
+                   help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
     p.set_defaults(func=cmd_record_watch)
 
     # --- transcribe ---
@@ -891,7 +894,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=0, help="이번에 처리할 개수")
     p.add_argument("--language", help="대기열 전체에 적용할 언어 (ko / en / auto / ko+en)")
     p.add_argument("--no-upload", action="store_true")
-    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--dry-run", action="store_true",
+                   help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
     p.set_defaults(func=cmd_transcribe_queue)
 
     tr.add_parser("warmup", help="모델 미리 내려받기").set_defaults(func=cmd_transcribe_warmup)
@@ -902,7 +906,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tag", help="릴리스 태그 (기본: 설정의 전략대로)")
     p.add_argument("--course", default="",
                    help="과목(코드 또는 이름). [[eclass.course_repos]] 를 쓸 때 필요합니다.")
-    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--dry-run", action="store_true",
+                   help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
     p.set_defaults(func=cmd_upload)
 
     return parser
