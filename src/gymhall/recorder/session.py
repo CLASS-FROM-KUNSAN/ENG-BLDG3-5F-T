@@ -39,6 +39,9 @@ class Segment:
     seconds: float
     audio_tracks: list[str] = field(default_factory=list)
     wav_paths: dict[str, Path] = field(default_factory=dict)
+    # 장치 무음으로 중단된 세그먼트. 로컬에는 두되 올리지는 않습니다 —
+    # 소리 없는 영상이 백업된 것처럼 보이면 안 됩니다.
+    broken: bool = False
 
 
 @dataclass
@@ -68,6 +71,7 @@ class RecordingSession:
         label: str,
         *,
         course=None,
+        stop_on_silence: bool = False,
         realtime_queue: queue.Queue | None = None,
         on_segment_done: Callable[[Segment], None] | None = None,
     ) -> None:
@@ -77,10 +81,42 @@ class RecordingSession:
         # 이 녹화가 어느 과목인지. None 이면 과목 폴더 없이 예전 경로 그대로고,
         # 업로드도 하지 않습니다(어느 레포로 갈지 모르므로).
         self.course = course
+        # 무음으로 멈출지. 수동 녹화는 멈추지 않고 경고만 합니다.
+        self.stop_on_silence = bool(stop_on_silence)
+        self.silence_stop_sec = float(cfg.get("recording.audio.silence_stop_sec", 900))
+        self.silence_abort_sec = float(cfg.get("recording.audio.silence_abort_sec", 3600))
+        # 장치 무음으로 중단된 세션은 올리지 않습니다.
+        self.broken = False
         self.realtime_queue = realtime_queue
         self.on_segment_done = on_segment_done
         self._stop_event = threading.Event()
         self._install_signal_handlers()
+
+    # -- 무음 판정 ---------------------------------------------------
+    # "루프백은 잡히는데 소리가 0" 은 녹화가 쓸모없어지는 가장 흔한 길입니다.
+    # 지금까지는 60초 뒤 경고 한 줄이 전부라, 끝나고 로그를 봐야 알았습니다.
+    #
+    # 트랙 하나만 보면 안 됩니다. 마이크만 조용한 것은 아주 흔합니다
+    # (교수가 판서만 하는 5분, 시험 시간). **켜져 있는 트랙이 전부
+    # 동시에** 조용할 때만 장치 문제로 봅니다.
+    #
+    # 수동 녹화(record start)에는 적용하지 않습니다. 사용자가 직접
+    # 시작한 것을 코드가 멈추면 안 됩니다 — 경고만 합니다.
+    def _silence_verdict(self, audio_rec) -> tuple[str, str] | None:
+        if audio_rec is None or not self.stop_on_silence:
+            return None
+        tracks = [t for t in getattr(audio_rec, "results", []) or [] if not t.error]
+        if not tracks:
+            return None
+        quiet = min((t.silent_for for t in tracks), default=0.0)
+        if self.silence_abort_sec and quiet >= self.silence_abort_sec:
+            return ("abort", f"모든 트랙이 {quiet / 60:.0f}분째 무음입니다. "
+                             "장치 문제로 보고 세션을 중단합니다(업로드 안 함).")
+        if self.silence_stop_sec and quiet >= self.silence_stop_sec:
+            return ("stop", f"모든 트랙이 {quiet / 60:.0f}분째 무음입니다. "
+                            "녹화를 멈춥니다. python -m gymhall devices 로 "
+                            "장치를 확인하세요.")
+        return None
 
     # -- 종료 신호 ---------------------------------------------------
     def _install_signal_handlers(self) -> None:
@@ -200,6 +236,7 @@ class RecordingSession:
                 mic_device=str(cfg.get("recording.audio.mic_device", "")),
                 mic_gain_db=float(cfg.get("recording.audio.mic_gain_db", 0.0)),
                 silence_warn_sec=float(cfg.get("recording.audio.silence_warn_sec", 60)),
+                silence_peak=float(cfg.get("recording.audio.silence_peak", 1e-5)),
                 realtime_queue=self.realtime_queue,
                 realtime_source=str(cfg.get("transcribe.source_track", "system")),
             )
@@ -213,6 +250,14 @@ class RecordingSession:
             if video_rec is not None and not video_rec.is_running:
                 log.error("ffmpeg 가 예기치 않게 종료됐습니다. 세그먼트를 마무리합니다.")
                 result.warnings.append(f"세그먼트 {index}: ffmpeg 비정상 종료")
+                break
+            verdict = self._silence_verdict(audio_rec)
+            if verdict:
+                result.warnings.append(f"세그먼트 {index}: {verdict[1]}")
+                log.error("%s", verdict[1])
+                if verdict[0] == "abort":
+                    self.broken = True
+                self._stop_event.set()
                 break
 
         # --- 정지 ---
@@ -251,7 +296,8 @@ class RecordingSession:
             result.warnings.append(f"세그먼트 {index} 합치기 실패: {exc}")
             # 합치기에 실패해도 원본은 남겨 둡니다. 데이터가 더 중요합니다.
             return Segment(index, work, now, (time.time() - (video_started or time.time())),
-                           [t.name for t in audio_results], wav_copies)
+                           [t.name for t in audio_results], wav_copies,
+                           broken=self.broken)
 
         # 전사를 위해 WAV 를 세그먼트 폴더로 옮깁니다.
         moved: dict[str, Path] = {}
@@ -284,4 +330,5 @@ class RecordingSession:
         seconds = duration_of(final) or max(0.0, time.time() - (video_started or time.time()))
         log.info("세그먼트 %d 완료: %s (%.1f분)", index, final.name, seconds / 60)
         return Segment(index, final, now, seconds,
-                       [t.name for t in audio_results], moved or wav_copies)
+                       [t.name for t in audio_results], moved or wav_copies,
+                       broken=self.broken)

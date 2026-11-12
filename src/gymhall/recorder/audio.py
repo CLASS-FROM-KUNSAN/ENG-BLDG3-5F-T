@@ -43,6 +43,10 @@ class TrackResult:
     peak: float = 0.0
     silent: bool = False
     error: str | None = None
+    # 지금 이 순간까지 이어진 무음 길이(초). 세션이 트랙들을 모아
+    # '모두 동시에 무음인가' 를 판단하는 데 씁니다. 트랙 하나만 보면
+    # 안 됩니다 — 마이크만 조용한 것은 아주 흔한 일입니다.
+    silent_for: float = 0.0
 
     @property
     def seconds(self) -> float:
@@ -65,6 +69,7 @@ class AudioTrack(threading.Thread):
         channels: int = 2,
         gain_db: float = 0.0,
         silence_warn_sec: float = 60.0,
+        silence_peak: float = 1e-5,
         tap: queue.Queue | None = None,
     ) -> None:
         super().__init__(name=f"audio-{name}", daemon=True)
@@ -81,6 +86,7 @@ class AudioTrack(threading.Thread):
         self.channels = int(channels)
         self.gain = _db_to_gain(gain_db)
         self.silence_warn_sec = float(silence_warn_sec)
+        self.silence_peak = float(silence_peak)
         self.tap = tap  # 실시간 전사로 흘려보낼 큐 (없으면 None)
         self._stop_event = threading.Event()
         self.result = TrackResult(name=name, path=self.out_path, samplerate=self.samplerate)
@@ -127,8 +133,9 @@ class AudioTrack(threading.Thread):
                     self.result.peak = max(self.result.peak, peak)
 
                     block_sec = len(data) / self.samplerate
-                    if peak < 1e-4:
+                    if peak < self.silence_peak:
                         silent_for += block_sec
+                        self.result.silent_for = silent_for
                         if not warned and silent_for >= self.silence_warn_sec:
                             log.warning(
                                 "[%s] %.0f초 동안 무음입니다. 장치 선택이 잘못됐을 수 있습니다. "
@@ -138,6 +145,7 @@ class AudioTrack(threading.Thread):
                             warned = True
                     else:
                         silent_for = 0.0
+                        self.result.silent_for = 0.0
 
                     clipped = np.clip(data, -1.0, 1.0)
                     pcm = (clipped * 32767.0).astype("<i2")
@@ -158,7 +166,7 @@ class AudioTrack(threading.Thread):
                 wav.close()
             except Exception:
                 pass
-            self.result.silent = self.result.peak < 1e-4
+            self.result.silent = self.result.peak < self.silence_peak
             log.info(
                 "[%s] 녹음 종료: %.1f초, 최대레벨 %.3f%s",
                 self.track_name, self.result.seconds, self.result.peak,
@@ -180,6 +188,7 @@ class AudioRecorder:
     mic_device: str = ""
     mic_gain_db: float = 0.0
     silence_warn_sec: float = 60.0
+    silence_peak: float = 1e-5
     realtime_queue: queue.Queue | None = None
     realtime_source: str = "system"
 
@@ -208,7 +217,8 @@ class AudioRecorder:
             track = AudioTrack(
                 name, source, Path(self.out_dir) / f"{stem}.{name}.wav",
                 samplerate=self.samplerate, channels=self.channels, gain_db=gain,
-                silence_warn_sec=self.silence_warn_sec, tap=tap,
+                silence_warn_sec=self.silence_warn_sec,
+                silence_peak=self.silence_peak, tap=tap,
             )
             self.tracks.append(track)
             track.start()
@@ -221,6 +231,21 @@ class AudioRecorder:
             track.stop()
         for track in self.tracks:
             track.join(timeout=timeout)
+        return [t.result for t in self.tracks]
+
+    @property
+    def results(self) -> list[TrackResult]:
+        """녹음이 '도는 중' 에도 트랙 상태를 봅니다.
+
+        stop() 은 끝난 뒤에만 결과를 주므로, 세션이 중간에
+        '전 트랙이 몇 분째 무음인가' 를 묻는 데는 쓸 수 없습니다.
+        TrackResult 는 스레드가 제자리에서 갱신하는 객체라
+        여기서 그대로 내보내면 현재 값이 보입니다.
+
+        주의: 이 property 를 지우거나 이름을 바꾸면
+        RecordingSession._silence_verdict 의 getattr 가 조용히
+        빈 리스트를 받아 무음 감지가 통째로 죽습니다.
+        """
         return [t.result for t in self.tracks]
 
     @property

@@ -2,6 +2,22 @@
 
 이 테스트들은 네트워크, 오디오 장치, 브라우저 없이 전부 돌아갑니다.
 GitHub API 는 가짜 세션으로, 오디오 장치는 가짜 소스로 대체합니다.
+
+바이트코드 주의
+---------------
+**PYTHONDONTWRITEBYTECODE=1 로 돌리세요.** 파일 수정 시각은 초 단위라,
+편집이 같은 초에 몰리면 파이썬이 묵은 .pyc 를 그대로 씁니다. 그러면
+고친 코드가 아니라 옛 코드가 돌고, 테스트가 거짓으로 통과합니다.
+2026-11-12 에 실제로 당했습니다 — 경로 테스트 둘이 소스는 맞는데
+실패했고, 그 직전에 돌린 변이 테스트 결과도 전부 믿을 수 없었습니다.
+
+    PYTHONDONTWRITEBYTECODE=1 python -m pytest
+
+CI(.github/workflows/tests.yml)와 scripts/_common.bat 에는 이미 켜 뒀습니다.
+변이 테스트를 손으로 돌릴 때는 파일을 고친 뒤
+    find . -name __pycache__ -type d -exec rm -rf {} +
+까지 같이 하세요. conftest.py 에서 sys.dont_write_bytecode 를 켜는 것은
+**늦습니다** — 그 시점에는 이미 .pyc 를 읽고 난 뒤입니다.
 """
 
 from __future__ import annotations
