@@ -266,7 +266,7 @@ def test_crawl_lecture_list_writes_markdown_with_every_week(lesson, tmp_path):
 def test_filedown_actually_saves_the_pdf(lesson, tmp_path):
     """클릭이 아니라 주소로 직접 받아 파일이 디스크에 남아야 합니다."""
     SERVER_MODE["mode"] = "pdf"
-    saved = lesson._download_attachments(tmp_path / "att")
+    saved = lesson._download_attachments(tmp_path / "att").saved
     assert len(saved) == 14, [p.name for p in saved]
     assert all(p.read_bytes().startswith(b"%PDF") for p in saved)
     names = {p.name for p in saved}
@@ -281,7 +281,7 @@ def test_html_instead_of_a_file_is_refused(lesson, tmp_path):
     """
     SERVER_MODE["mode"] = "html"
     try:
-        saved = lesson._download_attachments(tmp_path / "att")
+        saved = lesson._download_attachments(tmp_path / "att").saved
     finally:
         SERVER_MODE["mode"] = "pdf"
     assert saved == [], [p.name for p in saved]
@@ -292,7 +292,7 @@ def test_html_instead_of_a_file_is_refused(lesson, tmp_path):
 def test_zero_byte_response_is_refused(lesson, tmp_path):
     SERVER_MODE["mode"] = "empty"
     try:
-        saved = lesson._download_attachments(tmp_path / "att")
+        saved = lesson._download_attachments(tmp_path / "att").saved
     finally:
         SERVER_MODE["mode"] = "pdf"
     assert saved == []
@@ -300,8 +300,8 @@ def test_zero_byte_response_is_refused(lesson, tmp_path):
 
 def test_same_file_is_not_downloaded_twice(lesson, tmp_path):
     SERVER_MODE["mode"] = "pdf"
-    first = lesson._download_attachments(tmp_path / "a")
-    second = lesson._download_attachments(tmp_path / "b")
+    first = lesson._download_attachments(tmp_path / "a").saved
+    second = lesson._download_attachments(tmp_path / "b").saved
     assert len(first) == 14
     # 내용이 같으므로 두 번째는 전부 건너뜁니다.
     assert second == [], [p.name for p in second]
@@ -484,7 +484,7 @@ def test_submit_button_is_never_clicked(assignment, tmp_path):
     for i in range(submits.count()):
         onclick = submits.nth(i).get_attribute("onclick")
         assert C._is_unsafe_click(onclick), onclick
-    saved = assignment._download_attachments(tmp_path / "att")
+    saved = assignment._download_attachments(tmp_path / "att").saved
     assert saved == [], [p.name for p in saved]
 
 
@@ -503,7 +503,7 @@ def test_unsafe_handler_on_a_matched_attachment_is_skipped(detail, tmp_path):
         "el => el.setAttribute('onclick', 'goSave();' + el.getAttribute('onclick'))",
     )
     before = len(detail.stats.errors)
-    saved = detail._download_attachments(tmp_path / "att")
+    saved = detail._download_attachments(tmp_path / "att").saved
     assert saved == [], [p.name for p in saved]
     assert not list((tmp_path / "att").glob("*")), "누르지 말아야 할 것을 눌렀습니다"
     assert len(detail.stats.errors) == before
@@ -535,3 +535,65 @@ def test_crawl_assignments_writes_every_block(assignment, tmp_path):
     md = next(tmp_path.rglob("과제.md"), None)
     assert md is not None, "과제.md 가 만들어지지 않았습니다"
     assert md.read_text(encoding="utf-8").count("\n## ") == 19
+
+
+# --- 엔드포인트와 쿼리 인자를 못으로 박습니다 --------------------------
+# 리뷰 지적: 완성된 URL 의 경로와 쿼리 인자를 각각 확인할 것.
+def _q(url: str) -> dict[str, list[str]]:
+    from urllib.parse import parse_qs, urlsplit
+
+    return parse_qs(urlsplit(url).query, keep_blank_values=True)
+
+
+def test_filedown_url_carries_all_three_arguments_verbatim():
+    call = F.parse("fileDown('r*20name.pdf','s*20name.pdf','*2Fa*2Fb.pdf')")
+    url = F.url("https://eclass.kunsan.ac.kr/Lesson.do?cmd=x", call)
+    from urllib.parse import urlsplit
+
+    assert urlsplit(url).path == "/fileDown"
+    q = _q(url)
+    # 서버가 '*' 를 쓰는 인코딩을 그대로 받습니다. parse_qs 는 '*' 를
+    # 건드리지 않으므로 값이 원문 그대로여야 합니다.
+    assert q["rFileName"] == ["r*20name.pdf"]
+    assert q["sFileName"] == ["s*20name.pdf"]
+    assert q["filePath"] == ["*2Fa*2Fb.pdf"]
+
+
+def test_filedownload_url_uses_the_servlet_path_with_the_same_arguments():
+    call = F.parse("fileDownload('*EB*B3*B4.hwp','COMF_1.hwp','*2Fbusiness*2Fboard*2FX-N*2F')")
+    url = F.url("https://eclass.kunsan.ac.kr/Course.do?cmd=x", call)
+    from urllib.parse import urlsplit
+
+    assert urlsplit(url).path == "/fileDownServlet"
+    q = _q(url)
+    assert q["rFileName"] == ["*EB*B3*B4.hwp"]
+    assert q["sFileName"] == ["COMF_1.hwp"]
+    assert q["filePath"] == ["*2Fbusiness*2Fboard*2FX-N*2F"]
+
+
+def test_a_directory_path_is_never_used_as_the_file_name():
+    """fileDownload 의 filePath 는 디렉터리입니다.
+
+    경로의 마지막 조각으로 넘어가면 빈 이름이 나옵니다.
+    """
+    call = F.parse("fileDownload('','COMF_1.hwp','*2Fbusiness*2Fboard*2FX-N*2F')")
+    assert F.filename(call) == "COMF_1.hwp"
+
+
+def test_a_failed_download_is_reported_not_swallowed(lesson, tmp_path):
+    """세션 만료(HTML 응답)면 실패 목록에 남아야 합니다."""
+    SERVER_MODE["mode"] = "html"
+    try:
+        att = lesson._download_attachments(tmp_path / "att")
+    finally:
+        SERVER_MODE["mode"] = "pdf"
+    assert att.saved == []
+    assert len(att.failed) == 14, att.failed[:3]
+    assert att.ok is False
+
+
+def test_a_successful_download_reports_no_failure(lesson, tmp_path):
+    SERVER_MODE["mode"] = "pdf"
+    att = lesson._download_attachments(tmp_path / "att")
+    assert len(att.saved) == 14
+    assert att.failed == [] and att.ok is True
