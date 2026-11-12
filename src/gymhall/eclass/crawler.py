@@ -49,7 +49,27 @@ DETAIL_BODY = (
     "td.boardContents", "div#bodyContent div.cont", "div#bodyContent",
 )
 # 첨부가 아닌 버튼. 클릭하면 목록으로 나가거나 글을 지웁니다.
-SKIP_LINK_TEXTS = frozenset({"목록", "수정", "삭제", "답글", "이전글", "다음글", "인쇄"})
+SKIP_LINK_TEXTS = frozenset({"목록", "수정", "삭제", "답글", "이전글", "다음글", "인쇄",
+                             "목록보기", "제출", "제 출", "과제제출", "취소", "글쓰기"})
+
+# 절대 누르면 안 되는 것. 과제 화면에는 첨부 옆에 제출 버튼이 있습니다.
+#   <a class="btn small" onclick="submitReport('REPT_...')">과제제출</a>
+#   <a class="btn btn-blue" onclick="goSave();">제 출</a>
+# 빈 과제를 제출하면 교수에게 '제출함' 으로 보이고 되돌릴 수 없습니다.
+# 첨부 선택자가 이것들을 잡을 일은 지금은 없지만, 선택자 폴백이
+# 넓어서 한 번만 어긋나도 되돌릴 수 없는 일이 일어납니다. 눌리는
+# 자리에서 한 번 더 막습니다.
+NEVER_CLICK = (
+    "gosave", "submitreport", "savereport", "uploaderclick", "submit(",
+    "delete", "remove", "addboardcontents", "updateboardcontents",
+    "replyboardcontents", "etest", "survey", "forum",
+)
+
+
+def _is_unsafe_click(target: str) -> bool:
+    """onclick/href 에 되돌릴 수 없는 동작이 들어 있는지."""
+    low = (target or "").lower().replace(" ", "")
+    return any(bad in low for bad in NEVER_CLICK)
 
 # 목록의 '파일' 칸에 붙는 첨부 표시. 어떤 아이콘 클래스가 쓰이는지는
 # 사이트 스프라이트(icon_button.css)에서 뽑은 후보를 전부 넣었습니다.
@@ -432,6 +452,48 @@ class Crawler:
         log.info("저장: %s / 학습목차 (%d주차)", course.name, len(weeks))
         return out
 
+    # -- 과제 -------------------------------------------------------
+    # 과제 목록(/Report.do viewReportInfoPageList)은 게시판이 아닙니다.
+    # table.boardListBasic 이 아니라 dl.element + table.boardListInfo 라서
+    # crawl_board 로 읽으면 행이 0건이고 "글이 없습니다" 로 끝납니다.
+    # 과제가 19개 있어도 그렇습니다.
+    #
+    # 이 화면에는 제목 옆에 '과제제출' 버튼이, 그 폼에는 '제출' 버튼이
+    # 있습니다. 첨부만 받고 그 둘은 절대 누르지 않습니다
+    # (_is_unsafe_click / SKIP_LINK_TEXTS).
+    def crawl_assignments(self, course: Course) -> None:
+        blocks = self.read_lesson_weeks()
+        out_dir = self._dir(course, "assignment")
+
+        if not blocks:
+            log.info("%s / 과제: 과제 블록을 찾지 못했습니다.", course.name)
+            self.save_page_text(course, "assignment")
+            return
+
+        lines = [f"# {course.name} - 과제", ""]
+        for b in blocks:
+            lines += [f"## {b['title'] or '(제목 없음)'}", ""]
+            for cells in b["rows"]:
+                lines.append("- " + " | ".join(c for c in cells if c))
+            if b.get("text"):
+                lines += ["", b["text"]]
+            lines.append("")
+        body = "\n".join(lines).strip()
+
+        digest = sha256_text(body)
+        state_key = f"page:{course.course_id}:assignment"
+        if self.store.data["downloaded"].get(state_key, {}).get("sha256") == digest:
+            self.stats.skipped += 1
+        else:
+            md = out_dir / safe_name("과제.md")
+            md.write_text(body + "\n", encoding="utf-8")
+            self.store.mark_downloaded(state_key, path=str(md), digest=digest)
+            self.stats.posts += 1
+
+        files = self._download_attachments(out_dir)
+        log.info("%s / 과제: %d건, 첨부 %d개", course.name, len(blocks), len(files))
+        self.store.save()
+
     # -- 강의 목록(교안) ---------------------------------------------
     # 이 화면이 사용자가 제일 원하는 것 — 주차별 교안 PDF 가 여기 있습니다.
     # 예전에는 save_page_text 로 보내서 표의 '글자' 만 저장하고 PDF 는
@@ -441,14 +503,22 @@ class Crawler:
         try:
             return self.br.page.evaluate(
                 """(sel) => Array.from(document.querySelectorAll(sel)).map(dl => {
+                     // dt 안에는 제목(h4) 옆에 버튼 묶음(ul.btnBox)이 있습니다.
+                     // dt 를 통째로 읽으면 '과제제출' 같은 글자가 제목에 붙습니다.
                      const h = dl.querySelector('dt h4') || dl.querySelector('dt');
                      const rows = Array.from(dl.querySelectorAll('table tbody tr'))
                        .map(tr => Array.from(tr.querySelectorAll('td'))
                               .map(td => (td.innerText||'').replace(/\\s+/g,' ').trim()))
                        .filter(cells => cells.length);
+                     // 표가 아닌 dd 는 설명문입니다(과제의 '참고 자료' 등).
+                     const text = Array.from(dl.querySelectorAll('dd'))
+                       .filter(dd => !dd.querySelector('table'))
+                       .map(dd => (dd.innerText||'').trim())
+                       .filter(Boolean).join('\\n').trim();
                      return {
                        title: (h ? h.innerText : '').replace(/\\s+/g,' ').trim(),
                        rows,
+                       text,
                      };
                    })""",
                 LESSON_WEEK,
@@ -801,11 +871,20 @@ class Crawler:
             if text in SKIP_LINK_TEXTS:
                 continue
 
-            got: list[Path] = []
             try:
-                args = filedown.parse(item.get_attribute("onclick") or "")
+                onclick = item.get_attribute("onclick") or ""
+                href = item.get_attribute("href") or ""
             except Exception:
-                args = None
+                onclick = href = ""
+            if _is_unsafe_click(onclick) or _is_unsafe_click(href):
+                log.warning(
+                    "첨부가 아니라 되돌릴 수 없는 동작으로 보여 건너뜁니다: %s (%s)",
+                    text or f"#{i}", (onclick or href)[:80],
+                )
+                continue
+
+            got: list[Path] = []
+            args = filedown.parse(onclick)
             if args:
                 one = self._fetch_filedown(args, dest_dir)
                 if one is not None:
@@ -837,7 +916,7 @@ class Crawler:
             return
         self.stats.courses += 1
 
-        board_keys = {"notice", "qna", "materials", "assignment"}
+        board_keys = {"notice", "qna", "materials"}
         for key in self.enabled_menus():
             label = MENU_LABELS.get(key, key)
             try:
@@ -851,6 +930,8 @@ class Crawler:
                     self.save_curriculum(course)
                 elif key == "lecture_list":
                     self.crawl_lecture_list(course)
+                elif key == "assignment":
+                    self.crawl_assignments(course)
                 else:
                     self.save_page_text(course, key)
             except Exception as exc:

@@ -390,3 +390,109 @@ def test_detail_shows_author_and_date(detail):
     info = detail.br.page.locator("dd.info").first.inner_text()
     assert "작성자" in info and "조교수" in info
     assert "2026-08-30" in info
+
+
+# --- 과제 ------------------------------------------------------------
+ASSIGN = "eclass_assignment_list.html"
+
+
+@pytest.fixture
+def assignment(browser, server, tmp_path):
+    c = _crawler(browser, server, tmp_path, ASSIGN)
+    yield c
+    c.br.page.close()
+
+
+def test_assignment_page_is_not_a_boardlistbasic(assignment):
+    """과제 목록은 게시판이 아닙니다.
+
+    table.boardListBasic 이 아니라 dl.element + table.boardListInfo 라서
+    crawl_board 로 읽으면 과제가 19개 있어도 0건으로 끝납니다.
+    """
+    page = assignment.br.page
+    assert page.locator("table.boardListBasic").count() == 0
+    assert page.locator(C.BOARD_ROW).count() == 0
+    assert assignment.read_board_rows() == []
+
+
+def test_assignment_blocks_are_read(assignment):
+    blocks = assignment.read_lesson_weeks()
+    assert len(blocks) == 19, len(blocks)
+    titles = [b["title"] for b in blocks]
+    assert any("파일 실습 과제(1)" in t for t in titles), titles[:3]
+
+
+def test_assignment_title_excludes_the_submit_button_text(assignment):
+    """dt 를 통째로 읽으면 제목에 '과제제출' 이 붙습니다."""
+    titles = [b["title"] for b in assignment.read_lesson_weeks()]
+    assert not any("과제제출" in t for t in titles), [t for t in titles if "과제제출" in t]
+
+
+def test_assignment_rows_carry_the_due_date(assignment):
+    cells = [c for b in assignment.read_lesson_weeks() for row in b["rows"] for c in row]
+    assert any("~" in c and "2026-" in c for c in cells), cells[:5]
+
+
+def test_submit_button_is_never_clicked(assignment, tmp_path):
+    """과제 화면의 '과제제출' 을 누르면 되돌릴 수 없습니다.
+
+    첨부 선택자가 이걸 잡는 일은 지금은 없지만, 폴백 선택자가 넓어서
+    한 번만 어긋나면 빈 과제가 제출됩니다. 눌리는 자리에서 막습니다.
+    """
+    page = assignment.br.page
+    submits = page.locator("a[onclick*='submitReport']")
+    assert submits.count() >= 1, "픽스처에 과제제출 버튼이 없습니다"
+    for i in range(submits.count()):
+        onclick = submits.nth(i).get_attribute("onclick")
+        assert C._is_unsafe_click(onclick), onclick
+    saved = assignment._download_attachments(tmp_path / "att")
+    assert saved == [], [p.name for p in saved]
+
+
+def test_unsafe_handler_on_a_matched_attachment_is_skipped(detail, tmp_path):
+    """첨부 선택자가 잡은 요소라도 되돌릴 수 없어 보이면 누르지 않습니다.
+
+    이 가드는 '아직 본 적 없는 화면' 을 위한 것입니다. 지금 선택자가
+    제출 버튼을 잡는 일은 없지만, 폴백 선택자(td.file a 등)가 넓어서
+    한 번만 어긋나면 빈 과제가 제출됩니다. 그래서 실제 상세 화면의
+    진짜 첨부 span 에 goSave() 를 덧붙여, 눌리는 자리에서 정말로
+    막히는지 봅니다. 이 가드를 빼면 아래 단언이 깨집니다.
+    """
+    page = detail.br.page
+    page.eval_on_selector(
+        "[onclick*='fileDown']",
+        "el => el.setAttribute('onclick', 'goSave();' + el.getAttribute('onclick'))",
+    )
+    before = len(detail.stats.errors)
+    saved = detail._download_attachments(tmp_path / "att")
+    assert saved == [], [p.name for p in saved]
+    assert not list((tmp_path / "att").glob("*")), "누르지 말아야 할 것을 눌렀습니다"
+    assert len(detail.stats.errors) == before
+
+
+@pytest.mark.parametrize("handler", [
+    "javascript:goSave();",
+    "javascript:submitReport('REPT_1');",
+    "javascript:uploaderclick('atchuploader');",
+    "deleteBoardContents('BOAD_1','X')",
+    "ViewEtestContent('ETST_1','menu_00104')",
+])
+def test_unsafe_handlers_are_recognised(handler):
+    assert C._is_unsafe_click(handler), handler
+
+
+@pytest.mark.parametrize("handler", [
+    "fileDown('a','b','c')",
+    "fileDownload('a','b','c')",
+    "javascript:moveBoardView('BOAD_1','2');",
+])
+def test_download_handlers_are_allowed(handler):
+    assert not C._is_unsafe_click(handler), handler
+
+
+def test_crawl_assignments_writes_every_block(assignment, tmp_path):
+    course = C.Course("2026210357604", "과목바", "조교수")
+    assignment.crawl_assignments(course)
+    md = next(tmp_path.rglob("과제.md"), None)
+    assert md is not None, "과제.md 가 만들어지지 않았습니다"
+    assert md.read_text(encoding="utf-8").count("\n## ") == 19
