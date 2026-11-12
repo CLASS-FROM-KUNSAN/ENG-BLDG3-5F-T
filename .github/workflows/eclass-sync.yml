@@ -160,7 +160,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _data/state
-          key: eclass-state-${{ github.run_id }}
+          # run_id 를 키로 쓰면 실행마다 새 캐시를 저장합니다. 지금은
+          # state 가 10KB 라 티가 안 나지만, 쌓이면 저장소 캐시
+          # 10GB 한도를 먹고 오래된 것부터 밀려납니다(= 복원 실패).
+          # run_number 는 같은 날 여러 번 돌아도 하나씩만 늘어납니다.
+          key: eclass-state-${{ github.run_number }}
           restore-keys: |
             eclass-state-
 
