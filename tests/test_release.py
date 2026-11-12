@@ -352,3 +352,146 @@ def test_extension_matching_ignores_case_and_dots(tmp_path):
     f = _make(tmp_path, "자료.PDF")
     keep, _ = upload_filter([f], allow_extensions=[".pdf"])
     assert keep == [f]
+
+
+# ---------------------------------------------------------------------------
+# 에셋 이름 충돌
+#
+# 2026-11-12 실제 GitHub Actions 실행 기록:
+#   업로드 시작: 809b1351.md (880 B)      <- 어느 과목의 강의목록.md
+#   업로드 완료: 809b1351.md
+#   같은 이름의 에셋을 교체합니다: 809b1351.md
+#   업로드 시작: 809b1351.md (4.3 KiB)    <- 다른 과목의 강의목록.md
+#   ...
+# 9개 과목 × 2종 = 16개를 올렸는데 이름이 두 개뿐이라 서로 덮어썼고,
+# 릴리스에는 2개만 남았습니다. 로그에는 '업로드 완료' 가 16번 찍혔고
+# 작업은 성공으로 끝났습니다.
+# ---------------------------------------------------------------------------
+REAL_COURSES = [
+    "기초웹프로그래밍_05", "생명과학의이해_01", "스키_01", "승마입문_01",
+    "영어2_23", "운동과건강_01", "프로그래밍언어및실습_04",
+    "[이수필수] 2026년 재학생 법정의무교육(성폭력·가정폭력)",
+    "학생생활관 안내 및 안전교육(2)",
+]
+
+
+def _term_tree(tmp_path):
+    """실제 실행과 같은 모양의 학기 폴더를 만듭니다."""
+    root = tmp_path / "2026-2"
+    made = []
+    for i, course in enumerate(REAL_COURSES):
+        for menu, stem in (("강의목록", "강의목록"), ("강의계획서", "강의계획서")):
+            d = root / course / menu
+            d.mkdir(parents=True, exist_ok=True)
+            f = d / f"{stem}.md"
+            f.write_text(f"# {course} {menu}\n" + "x" * (i + 1), encoding="utf-8")
+            made.append(f)
+    return root, made
+
+
+def test_same_filename_in_different_courses_got_one_asset_name(tmp_path):
+    """고치기 전 동작을 못으로 박아 둡니다 — 파일 이름만 보면 전부 같습니다."""
+    from gymhall.release import asset_name
+
+    names = {asset_name("강의목록.md") for _ in REAL_COURSES}
+    assert names == {"809b1351.md"}, names
+
+
+def test_relative_path_makes_every_asset_name_unique(tmp_path):
+    from gymhall.release import asset_name
+
+    root, files = _term_tree(tmp_path)
+    names = [
+        asset_name(f.name, unique_key=str(f.relative_to(root)))
+        for f in files
+    ]
+    assert len(names) == 18, len(names)
+    assert len(set(names)) == len(names), "에셋 이름이 겹칩니다"
+
+
+def test_upload_many_uploads_every_file_under_a_distinct_name(tmp_path):
+    """실제 실행을 그대로 재현합니다. 하나도 덮어쓰지 않아야 합니다."""
+    from gymhall.release import upload_many
+
+    root, files = _term_tree(tmp_path)
+    seen: list[str] = []
+
+    class Spy:
+        def upload(self, path, tag, *, prefix="", rel_path=None, **kw):
+            import pathlib
+
+            from gymhall.release import asset_name
+            name = asset_name(pathlib.Path(path).name, prefix=prefix,
+                              unique_key=rel_path or pathlib.Path(path).name)
+            seen.append(name)
+            return {"tag": tag, "assets": [{"name": name}], "split": False, "sha256": "x"}
+
+    results = upload_many(Spy(), files, "tag", root=root)
+    assert len(results) == len(files)
+    assert len(set(seen)) == len(seen), f"덮어쓴 이름이 있습니다: {len(seen) - len(set(seen))}건"
+
+
+def test_upload_many_refuses_to_overwrite_within_one_run(tmp_path, caplog):
+    """이름이 겹치면 두 번째를 올리지 않고 기록을 남깁니다.
+
+    root 를 주지 않으면 예전과 같은 상황이 됩니다. 그때도 조용히
+    덮어쓰는 대신 멈춰야 합니다.
+    """
+    import logging
+
+    from gymhall.release import upload_many
+
+    _root, files = _term_tree(tmp_path)
+
+    class Spy:
+        def __init__(self):
+            self.n = 0
+
+        def upload(self, path, tag, *, prefix="", rel_path=None, **kw):
+            self.n += 1
+            return {"tag": tag, "assets": [{"name": "x"}], "split": False, "sha256": "x"}
+
+    spy = Spy()
+    with caplog.at_level(logging.ERROR):
+        upload_many(spy, files, "tag")          # root 없음 = 예전 동작
+    assert spy.n == 2, f"겹치는 이름을 {spy.n}번 올렸습니다"
+    assert "겹칩니다" in caplog.text
+
+
+def test_label_carries_the_relative_path(tmp_path):
+    """에셋 이름이 해시라서, 어느 과목 파일인지는 label 이 유일한 단서입니다."""
+    up, _ = make_uploader()
+    rel = "2026-2/영어2_23/강의목록/강의목록.md"
+    f = tmp_path / "강의목록.md"
+    f.write_text("x", encoding="utf-8")
+    seen = {}
+
+    def fake_upload_one(release, path, *, name=None, label=None):
+        seen.update(name=name, label=label)
+        return {"name": name}
+
+    up.upload_one = fake_upload_one
+    up.get_or_create_release = lambda tag: {"id": 1, "upload_url": "u"}
+    up.upload(f, "tag", rel_path=rel)
+    assert seen["label"] == rel
+    assert seen["name"].endswith(".md") and seen["name"] != "강의목록.md"
+
+
+def test_upload_derives_the_asset_name_from_the_relative_path(tmp_path):
+    """upload() 가 rel_path 를 실제로 이름에 쓰는지.
+
+    label 만 보면 이름은 여전히 파일명 해시일 수 있습니다. 그러면
+    과목이 달라도 같은 이름이 나와 서로 덮어씁니다.
+    """
+    up, _ = make_uploader()
+    f = tmp_path / "강의목록.md"
+    f.write_text("x", encoding="utf-8")
+    names = []
+
+    up.upload_one = lambda release, path, *, name=None, label=None: (
+        names.append(name) or {"name": name}
+    )
+    up.get_or_create_release = lambda tag: {"id": 1, "upload_url": "u"}
+    for course in ("영어2_23", "운동과건강_01", "스키_01"):
+        up.upload(f, "tag", rel_path=f"2026-2/{course}/강의목록/강의목록.md")
+    assert len(set(names)) == 3, names

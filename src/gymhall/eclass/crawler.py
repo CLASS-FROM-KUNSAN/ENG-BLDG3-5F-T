@@ -131,11 +131,44 @@ class Stats:
     files: int = 0
     skipped: int = 0
     errors: list[str] = field(default_factory=list)
+    # 아래 셋은 '아무것도 못 받았는데 성공으로 끝나는' 것을 잡기 위한 것입니다.
+    boards_seen: int = 0                       # 들어간 게시판 수
+    boards_empty: int = 0                      # 그중 0건이던 것
+    menus_missing: dict[str, int] = field(default_factory=dict)
 
     def line(self) -> str:
         base = (f"과목 {self.courses}개 / 페이지 {self.pages} / 글 {self.posts} / "
                 f"첨부 {self.files} / 건너뜀 {self.skipped}")
         return base + (f" / 오류 {len(self.errors)}" if self.errors else "")
+
+    def suspicions(self) -> list[str]:
+        """숫자만 보면 성공인데 실제로는 아무것도 못 받은 경우를 짚습니다.
+
+        2026-11-12 실행이 정확히 그랬습니다 — 9개 과목을 돌고 '글 16 /
+        첨부 0' 으로 끝났고, 게시판 27곳이 전부 '글이 없습니다' 였으며,
+        '과목정보' 는 9개 과목 모두에서 메뉴를 찾지 못했습니다. 그런데도
+        작업은 성공(exit 0)으로 끝났습니다. 교수가 안 올린 것과 우리가
+        못 찾는 것은 로그만 봐서는 똑같이 생겼습니다.
+        """
+        out: list[str] = []
+        if self.courses >= 2 and self.boards_seen >= 2 and self.boards_empty == self.boards_seen:
+            out.append(
+                f"게시판 {self.boards_seen}곳이 전부 0건입니다. 과목이 {self.courses}개인데 "
+                "한 곳도 글이 없는 것은 드문 일입니다. 주소나 목록 선택자가 "
+                "어긋났을 수 있습니다."
+            )
+        if self.courses >= 2 and self.files == 0 and self.posts > 0:
+            out.append(
+                f"글 {self.posts}건을 저장했는데 첨부는 0개입니다. 첨부 링크를 "
+                "못 찾고 있을 수 있습니다(화면마다 fileDown / fileDownload 로 다릅니다)."
+            )
+        for menu, n in sorted(self.menus_missing.items()):
+            if n >= max(2, self.courses):
+                out.append(
+                    f"'{menu}' 메뉴를 {n}개 과목 전부에서 찾지 못했습니다. "
+                    "과목마다 없는 메뉴가 아니라, 주소나 링크 텍스트가 바뀐 것일 수 있습니다."
+                )
+        return out
 
 
 def _clean(text: str) -> str:
@@ -262,8 +295,9 @@ class Crawler:
                 return True
             except Exception:
                 continue
-        log.info("%s: '%s' 메뉴가 없습니다(과목에 해당 메뉴 미개설).",
-                 course.name, MENU_LABELS.get(key, key))
+        label = MENU_LABELS.get(key, key)
+        self.stats.menus_missing[label] = self.stats.menus_missing.get(label, 0) + 1
+        log.info("%s: '%s' 메뉴가 없습니다(과목에 해당 메뉴 미개설).", course.name, label)
         return False
 
     # -- 저장 --------------------------------------------------------
@@ -652,6 +686,7 @@ class Crawler:
     def crawl_board(self, course: Course, key: str, *, titles_only: bool = False) -> None:
         """게시판 하나를 전부 긁습니다. 페이지가 여러 장이면 끝까지 넘깁니다."""
         label = MENU_LABELS.get(key, key)
+        self.stats.boards_seen += 1
         total_pages = self.board_page_count()
         if total_pages > MAX_BOARD_PAGES:
             log.warning("%s / %s: 페이지가 %d장입니다. 앞 %d장만 봅니다.",
@@ -676,6 +711,7 @@ class Crawler:
             rows = self.read_board_rows()
             if not rows:
                 if page_no == 1:
+                    self.stats.boards_empty += 1
                     log.info("%s / %s: 글이 없습니다.", course.name, label)
                 break
 

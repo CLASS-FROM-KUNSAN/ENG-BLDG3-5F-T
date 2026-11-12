@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import traceback
 from datetime import date, datetime
@@ -239,6 +240,15 @@ def cmd_eclass_sync(args) -> int:
     log.info("수집 결과: %s", stats.line())
     for err in stats.errors[:10]:
         log.warning("  ! %s", err)
+    # 숫자만 보면 성공인데 실제로는 아무것도 못 받은 경우를 짚어 줍니다.
+    suspicions = stats.suspicions()
+    for note in suspicions:
+        log.warning("※ %s", note)
+    if suspicions and os.environ.get("GITHUB_ACTIONS") == "true":
+        # Actions 요약에 노란 경고로 뜹니다. 초록불만 보고 넘어가지
+        # 않도록 하는 것이 목적입니다.
+        for note in suspicions:
+            print(f"::warning title=수집 결과가 의심스럽습니다::{note}", flush=True)
 
     if args.no_upload or not cfg.get("eclass.upload.enabled") or not cfg.get("github.enabled"):
         log.info("업로드는 생략합니다.")
@@ -288,7 +298,7 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
         fixed=str(cfg.get("github.fixed_tag", "archive")),
     )
     log.info("릴리스 '%s' 로 %d개 파일 업로드", tag, len(files))
-    results = upload_many(uploader, files, tag, store=store)
+    results = upload_many(uploader, files, tag, store=store, root=root)
     log.info("업로드 완료 %d건 (중복/실패 제외)", len(results))
 
 
