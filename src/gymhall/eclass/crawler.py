@@ -266,11 +266,6 @@ class Attachments:
     def ok(self) -> bool:
         return not self.failed
 
-    @property
-    def got_nothing_new(self) -> bool:
-        """후보는 있었는데 새로 받은 것도, 이미 받은 것도 없습니다."""
-        return bool(self.candidates) and not self.saved and not self.known
-
     def __len__(self) -> int:         # 기존 len(files) 호출부 호환
         return len(self.saved)
 
