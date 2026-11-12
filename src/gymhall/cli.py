@@ -281,6 +281,7 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
         _human,
         group_by_top_folder,
         iter_files,
+        machine_prefix,
         make_archive,
         tag_for,
         upload_filter,
@@ -325,6 +326,10 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
         fixed=str(cfg.get("github.fixed_tag", "archive")),
     )
     course_list = courses_mod.load(cfg)
+    # 같은 과목이 두 강의실 PC 에 배포될 수 있습니다. 이름이 같으면 뒤에
+    # 올린 쪽이 앞엣것을 지웁니다(중복 제거 기록은 PC 안에만 있어 서로를
+    # 못 봅니다). 기기 이름을 에셋 이름에 넣어 애초에 겹치지 않게 합니다.
+    prefix = machine_prefix(cfg.machine_label)
 
     # 폴더 -> 과목(레포). 과목을 안 적었으면 전부 기본 레포 한 곳으로.
     plan: dict[object, dict[str, list[Path]]] = {}
@@ -344,7 +349,10 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
         where = course.slug if course is not None else "기본 레포"
         try:
             uploader = _uploader(cfg, dry_run=dry_run, course=course)
-            uploader.check_access()
+            uploader.ensure_repo(
+                create_missing=bool(cfg.get("github.create_missing_repos", False)),
+                private=bool(cfg.get("github.repo_private", True)),
+            )
             total = sum(len(v) for v in folders.values())
             log.info("[%s] 릴리스 '%s' 로 폴더 %d개 (파일 %d개)",
                      where, tag, len(folders), total)
@@ -358,11 +366,15 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
                     size = zip_path.stat().st_size
                     log.info("  %s: 파일 %d개 -> %s", name, len(members), _human(size))
                     bundles.append(zip_path)
-                    rows.append((_asset_name(zip_path.name, unique_key=zip_path.name),
+                    rows.append((_asset_name(zip_path.name, prefix=prefix,
+                                             unique_key=zip_path.name),
                                  name, len(members), size))
                 if rows:
-                    bundles.append(write_index(Path(work) / "INDEX.md", rows, tag=tag))
-                done = upload_many(uploader, bundles, tag, store=store, root=Path(work))
+                    # 목차도 PC 마다 따로 올라가야 서로 덮어쓰지 않습니다.
+                    index = Path(work) / f"INDEX_{cfg.machine_label or 'this-pc'}.md"
+                    bundles.append(write_index(index, rows, tag=tag))
+                done = upload_many(uploader, bundles, tag, prefix=prefix,
+                                   store=store, root=Path(work))
             ok += len(done)
         except ReleaseError as exc:
             # 한 과목이 막혀도 나머지는 올라가야 합니다.
@@ -426,6 +438,32 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
 def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
                    upload: bool, dry_run: bool, stop_when=None,
                    language: str | None = None):
+    from .recorder import lock as rec_lock
+
+    # 한 PC 에서 녹화는 한 번에 하나만. RecordSchedule 과 RecordWatch 는
+    # 서로 다른 작업이라 스케줄러가 둘 사이를 막아 주지 않습니다. 둘이
+    # 같이 돌면 ffmpeg 두 개가 같은 오디오 장치를 열어 양쪽 다 무음이
+    # 되는데, 둘 다 '녹화 중' 으로 보입니다.
+    lock_path = layout.state / "recording.lock"
+    try:
+        guard = rec_lock.hold(lock_path, label)
+        guard.__enter__()
+    except rec_lock.RecordingBusy as exc:
+        log.warning("녹화를 시작하지 않습니다: %s", exc)
+        return None
+
+    try:
+        return _run_recording_locked(
+            cfg, layout, label, minutes=minutes, upload=upload,
+            dry_run=dry_run, stop_when=stop_when, language=language,
+        )
+    finally:
+        guard.__exit__(None, None, None)
+
+
+def _run_recording_locked(cfg, layout: Layout, label: str, *, minutes: float | None,
+                          upload: bool, dry_run: bool, stop_when=None,
+                          language: str | None = None):
     from .recorder.session import RecordingSession
     from .transcribe import realtime
 

@@ -76,15 +76,50 @@ def run(args: list[str], *, timeout: float | None = None, check: bool = True) ->
     return proc
 
 
-def popen(args: list[str], *, stdin_pipe: bool = True) -> subprocess.Popen:
+def popen(args: list[str], *, stdin_pipe: bool = True,
+          stderr_log: Path | None = None) -> subprocess.Popen:
+    """오래 도는 ffmpeg 를 띄웁니다.
+
+    **stderr 를 파이프로 받지 않습니다.** ffmpeg 는 -loglevel warning
+    에서도 녹화 중에 계속 stderr 에 씁니다(프레임 드롭, 인코더 경고).
+    아무도 읽지 않는 파이프는 버퍼가 차는 순간 ffmpeg 의 write 를
+    막아 세웁니다. 윈도우 파이프 버퍼는 4KB 라 긴 녹화에서는 쉽게
+    찹니다. 그러면 그 뒤 프레임이 파일에 들어가지 않는데 poll() 은
+    None 이라 '녹화 중' 으로 보입니다. 사용자는 끝까지 찍힌 줄 알고
+    있다가 토막 난 파일을 받습니다.
+
+    진단이 필요하면 stderr_log 에 파일 경로를 주세요. 파일은 버퍼가
+    차지 않습니다. 주지 않으면 버립니다.
+    """
     log.debug("백그라운드 실행: %s", " ".join(args))
-    return subprocess.Popen(
+    if stderr_log is not None:
+        Path(stderr_log).parent.mkdir(parents=True, exist_ok=True)
+        # 핸들을 닫지 않습니다 — ffmpeg 가 살아 있는 동안 열려 있어야 합니다.
+        err = Path(stderr_log).open("ab", buffering=0)  # noqa: SIM115
+    else:
+        err = subprocess.DEVNULL
+    proc = subprocess.Popen(
         args,
         stdin=subprocess.PIPE if stdin_pipe else subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        stderr=err,
         creationflags=_creationflags(),
     )
+    # 파일 핸들을 프로세스에 묶어 둡니다. 여기서 닫으면 ffmpeg 가
+    # 끝나기 전에 파일이 사라집니다.
+    proc._gymhall_stderr = err if stderr_log is not None else None  # type: ignore[attr-defined]
+    return proc
+
+
+def read_stderr_log(path: Path | None, lines: int = 10) -> str:
+    """ffmpeg 가 남긴 로그의 끝부분. 없으면 빈 문자열."""
+    if path is None:
+        return ""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return "\n".join(text.strip().splitlines()[-lines:])
 
 
 def duration_of(path: Path) -> float | None:

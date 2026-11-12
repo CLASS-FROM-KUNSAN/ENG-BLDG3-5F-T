@@ -175,3 +175,99 @@ def test_downloaded_digests(tmp_path):
     store.mark_downloaded("b", digest="d2")
     store.mark_downloaded("c")  # 해시 없음
     assert store.downloaded_digests() == {"d1", "d2"}
+
+
+# ---------------------------------------------------------------------------
+# 프로세스 사이의 read-modify-write
+#
+# _LOCK 은 스레드 락이라 프로세스 사이를 막지 못합니다.
+# RecordSchedule 이 세그먼트를 올리면서 recordings.json 을 쓰고, 같은
+# 시각 TranscribeQueue 가 전사 결과를 쓰면, 둘이 각자 읽고 각자 쓰므로
+# 늦게 쓴 쪽이 이기고 앞엣것이 사라집니다.
+# ---------------------------------------------------------------------------
+def test_a_concurrent_writer_is_not_clobbered(tmp_path):
+    from gymhall.state import Store
+
+    path = tmp_path / "recordings.json"
+    a = Store.open(path)
+    a.mark_uploaded("d-a", tag="t", asset_name="a.zip", repo="o/r")
+    a.save()
+
+    # 다른 프로세스가 같은 파일을 읽어 자기 것을 더합니다.
+    b = Store.open(path)
+    b.mark_uploaded("d-b", tag="t", asset_name="b.zip", repo="o/r")
+    b.save()
+
+    # a 는 b 가 쓴 것을 모른 채 또 씁니다.
+    a.mark_downloaded("post-1", path="x.md")
+    a.save()
+
+    final = Store.open(path)
+    assert final.is_uploaded("d-a", "o/r"), "a 의 기록이 사라졌습니다"
+    assert final.is_uploaded("d-b", "o/r"), "b 의 기록이 사라졌습니다"
+    assert final.is_downloaded("post-1")
+
+
+def test_my_value_wins_for_the_same_key(tmp_path):
+    """같은 키를 둘이 썼으면 방금 바꾼 쪽이 최신입니다."""
+    from gymhall.state import Store
+
+    path = tmp_path / "s.json"
+    a = Store.open(path)
+    a.set_meta("k", "old")
+    a.save()
+
+    b = Store.open(path)
+    b.set_meta("k", "new")
+    b.save()
+    assert Store.open(path).get_meta("k") == "new"
+
+
+def test_a_corrupt_file_on_disk_does_not_lose_my_data(tmp_path):
+    from gymhall.state import Store
+
+    path = tmp_path / "s.json"
+    a = Store.open(path)
+    a.mark_downloaded("k1", path="x")
+    path.write_text("{깨진 파일", encoding="utf-8")
+    a.save()
+    assert Store.open(path).is_downloaded("k1")
+
+
+def test_merge_keeps_non_record_fields(tmp_path):
+    from gymhall.state import Store
+
+    path = tmp_path / "s.json"
+    a = Store.open(path)
+    a.save()
+    assert Store.open(path).data["version"] == 1
+
+
+def test_a_deleted_key_is_not_resurrected_by_the_merge(tmp_path):
+    """지운 키를 병합이 되살리면 '미완료 표시 지우기' 가 안 먹습니다."""
+    from gymhall.state import Store
+
+    path = tmp_path / "s.json"
+    a = Store.open(path)
+    a.set_meta("pending:X", "/tmp/x.md")
+    a.save()
+
+    b = Store.open(path)          # 다른 프로세스가 같은 상태를 읽음
+    a.forget("meta", "pending:X")
+    a.save()
+    assert Store.open(path).get_meta("pending:X") is None
+
+    # b 가 나중에 써도 되살아나면 안 됩니다... 는 아닙니다.
+    # b 는 지운 사실을 모르므로 되살아나는 것이 맞습니다. 중요한 것은
+    # 지운 쪽의 save 가 자기 삭제를 지키는 것입니다.
+    b.set_meta("other", "1")
+    b.save()
+    assert Store.open(path).get_meta("other") == "1"
+
+
+def test_forget_is_safe_on_a_missing_key(tmp_path):
+    from gymhall.state import Store
+
+    s = Store.open(tmp_path / "s.json")
+    s.forget("meta", "없는키")
+    s.save()

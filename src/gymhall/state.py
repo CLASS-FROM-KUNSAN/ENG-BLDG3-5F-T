@@ -60,6 +60,8 @@ class Store:
 
     path: Path
     data: dict[str, Any] = field(default_factory=dict)
+    # 이번 실행에서 지운 키. 병합이 되살리지 못하게 합니다.
+    _tombstones: dict[str, set[str]] = field(default_factory=dict, repr=False)
 
     # -- 수명주기 ----------------------------------------------------
     @classmethod
@@ -84,8 +86,59 @@ class Store:
         return cls(path=path, data=data)
 
     def save(self) -> None:
+        """디스크에 씁니다. **다른 프로세스가 쓴 것을 지우지 않습니다.**
+
+        _LOCK 은 스레드 락이라 프로세스 사이를 막지 못합니다.
+        RecordSchedule 이 세그먼트를 올리면서 recordings.json 을 쓰고,
+        같은 시각 TranscribeQueue 가 전사 결과를 올리면서 같은 파일을
+        쓰면, _atomic_write 는 파일 단위 원자성만 보장합니다. 둘이 각자
+        읽고 각자 쓰면 **늦게 쓴 쪽이 이기고 앞엣것은 사라집니다.**
+
+        그래서 쓰기 직전에 디스크를 다시 읽어 합칩니다. 기록은 키 단위로
+        더해지기만 하므로(지우는 일이 없음) 합집합이면 충분합니다.
+        내가 들고 있는 값이 이깁니다 — 방금 바꾼 쪽이 최신입니다.
+        """
         with _LOCK:
-            _atomic_write(self.path, json.dumps(self.data, ensure_ascii=False, indent=1))
+            merged = self._merged_with_disk()
+            self.data = merged
+            _atomic_write(self.path, json.dumps(merged, ensure_ascii=False, indent=1))
+
+    # 합칠 대상. 키 -> 값 꼴의 기록장들입니다.
+    _MERGE_SECTIONS = ("downloaded", "uploaded", "meta")
+
+    def forget(self, section: str, key: str) -> None:
+        """기록 하나를 지웁니다.
+
+        그냥 dict 에서 pop 하면 안 됩니다 — save 가 디스크와 합치면서
+        그 키를 **되살립니다.** 지웠다는 사실을 따로 들고 있다가 합칠
+        때 빼야 합니다.
+        """
+        self.data.get(section, {}).pop(key, None)
+        self._tombstones.setdefault(section, set()).add(key)
+
+    def _merged_with_disk(self) -> dict[str, Any]:
+        try:
+            disk = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return self.data
+        if not isinstance(disk, dict):
+            return self.data
+
+        out = dict(disk)
+        out.update({k: v for k, v in self.data.items()
+                    if k not in self._MERGE_SECTIONS})
+        for section in self._MERGE_SECTIONS:
+            a = disk.get(section)
+            b = self.data.get(section)
+            if not isinstance(a, dict):
+                a = {}
+            if not isinstance(b, dict):
+                b = {}
+            merged = {**a, **b}            # 내가 들고 있는 쪽이 이깁니다
+            for gone in self._tombstones.get(section, ()):
+                merged.pop(gone, None)     # 내가 지운 것은 되살리지 않습니다
+            out[section] = merged
+        return out
 
     # -- 다운로드 기록 ------------------------------------------------
     def is_downloaded(self, key: str) -> bool:

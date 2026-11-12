@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -189,6 +190,52 @@ def _clean(text: str) -> str:
 
 class PageReadError(RuntimeError):
     """화면을 읽지 못했습니다. 글이 0건인 것과 구분해야 합니다."""
+
+
+def _js_literal(value: Any) -> str:
+    """파이썬 값을 JS 소스에 그대로 박아 넣을 리터럴로."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _eval_json(page, expression: str, **literals: Any) -> Any:
+    """evaluate 를 **문자열로만** 주고받습니다.
+
+    **인자를 넘기지 않습니다.** 2026-11-12 러너 기록이 이렇습니다.
+
+        인자 없음  + 복합 반환  -> 정상 (list_courses 는 9과목을 찾았음)
+        문자열 인자 + 복합 반환  -> 조용히 None (read_lesson_weeks)
+        리스트/객체 인자         -> TypeError: refs.set is not a function
+
+    즉 터지는 쪽은 **인자** 입니다. playwright 의 역직렬화기
+    (coreBundle.js parseSerializedValue)가 인자를 풀면서
+    `refs.set(value.id, result)` 를 부르는데, 러너의 playwright 에서는
+    그 refs 가 Map 이 아닙니다. 리스트를 객체로 바꿔도 같은 가지입니다.
+
+    그래서 값은 인자로 보내지 않고 **JS 소스에 리터럴로 박습니다**
+    (_js_literal). 선택자는 우리 상수라 외부 입력이 아닙니다. 결과도
+    JSON.stringify 로 받아 문자열로만 건넵니다. 이러면 playwright
+    버전과 무관하게 동작합니다.
+    """
+    for name, value in literals.items():
+        token = f"__{name.upper()}__"
+        if token not in expression:
+            raise PageReadError(f"JS 안에 {token} 자리가 없습니다(오타?).")
+        expression = expression.replace(token, _js_literal(value))
+    left = re.search(r"__[A-Z_]+__", expression)
+    if left:
+        raise PageReadError(f"JS 안에 채우지 못한 자리가 있습니다: {left.group(0)}")
+    try:
+        raw = page.evaluate(expression)
+    except Exception as exc:
+        raise PageReadError(str(exc)) from exc
+    if raw is None:
+        raise PageReadError("페이지가 아무것도 돌려주지 않았습니다.")
+    if not isinstance(raw, str):
+        raise PageReadError(f"문자열을 기대했는데 {type(raw).__name__} 이 왔습니다.")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise PageReadError(f"결과를 읽지 못했습니다: {exc}") from exc
 
 
 @dataclass
@@ -407,13 +454,14 @@ class Crawler:
     def _curriculum_window(self) -> dict[str, Any] | None:
         """지금 보이는 세 주차를 주차별로 쪼개서 읽습니다."""
         try:
-            return self.br.page.evaluate(
-                """(sel) => {
-                     const t = document.querySelector(sel);
-                     if (!t) return null;
+            return _eval_json(
+                self.br.page,
+                """() => {
+                     const t = document.querySelector(__SEL__);
+                     if (!t) return "null";
                      const weeks = Array.from(t.querySelectorAll('thead th[scope="col"]'))
                        .map(th => (th.innerText||'').replace(/\\s+/g,' ').trim());
-                     if (!weeks.length) return null;
+                     if (!weeks.length) return "null";
                      const rows = Array.from(t.querySelectorAll('tbody tr')).map(tr => {
                        // 행 머리에는 이름 옆에 '더보기' 링크가 붙어 있어서
                        // innerText 를 그대로 쓰면 '강의영상 더보기' 가 됩니다.
@@ -424,11 +472,11 @@ class Crawler:
                                   .map(td => (td.innerText||'').replace(/[ \\t]+/g,' ').trim()),
                        };
                      });
-                     return {weeks, rows};
+                     return JSON.stringify({weeks: weeks, rows: rows});
                    }""",
-                self.CURRICULUM_TABLE,
+                sel=self.CURRICULUM_TABLE,
             )
-        except Exception as exc:
+        except PageReadError as exc:
             log.debug("학습목차 창 읽기 실패: %s", exc)
             return None
 
@@ -582,31 +630,27 @@ class Crawler:
         통째로 읽으면 '과제제출' 같은 글자가 제목에 붙습니다.
         표가 아닌 dd 는 설명문입니다(과제의 '참고 자료' 등).
         """
-        try:
-            blocks = self.br.page.evaluate(
-                """(sel) => {
-                     const squash = (v) => (v || '').replace(/\\s+/g, ' ').trim();
-                     return Array.from(document.querySelectorAll(sel)).map(dl => {
-                       const h = dl.querySelector('dt h4') || dl.querySelector('dt');
-                       const rows = Array.from(dl.querySelectorAll('table tbody tr'))
-                         .map(tr => Array.from(tr.querySelectorAll('td'))
-                                .map(td => squash(td.innerText)))
-                         .filter(cells => cells.length);
-                       const text = Array.from(dl.querySelectorAll('dd'))
-                         .filter(dd => !dd.querySelector('table'))
-                         .map(dd => (dd.innerText || '').trim())
-                         .filter(Boolean).join('\\n').trim();
-                       return {
-                         title: squash(h ? h.innerText : ''),
-                         rows: rows,
-                         text: text
-                       };
-                     });
-                   }""",
-                LESSON_WEEK,
-            )
-        except Exception as exc:
-            raise PageReadError(f"주차 목록을 읽지 못했습니다: {exc}") from exc
+        blocks = _eval_json(
+            self.br.page,
+            """() => {
+                 const sel = __SEL__;
+                 const squash = (v) => (v || '').replace(/\\s+/g, ' ').trim();
+                 const out = Array.from(document.querySelectorAll(sel)).map(dl => {
+                   const h = dl.querySelector('dt h4') || dl.querySelector('dt');
+                   const rows = Array.from(dl.querySelectorAll('table tbody tr'))
+                     .map(tr => Array.from(tr.querySelectorAll('td'))
+                            .map(td => squash(td.innerText)))
+                     .filter(cells => cells.length);
+                   const text = Array.from(dl.querySelectorAll('dd'))
+                     .filter(dd => !dd.querySelector('table'))
+                     .map(dd => (dd.innerText || '').trim())
+                     .filter(Boolean).join('\\n').trim();
+                   return { title: squash(h ? h.innerText : ''), rows: rows, text: text };
+                 });
+                 return JSON.stringify(out);
+               }""",
+            sel=LESSON_WEEK,
+        )
         if not isinstance(blocks, list):
             raise PageReadError(f"주차 목록이 리스트가 아닙니다: {type(blocks).__name__}")
         return blocks
@@ -655,28 +699,28 @@ class Crawler:
     # 보낸이 칸은 `김진욱 (101394)` 처럼 이름과 사번이 함께 들어 있어
     # 익명화해서 저장합니다. 본문은 그대로 둡니다.
     def read_message_rows(self) -> list[dict[str, Any]]:
-        try:
-            rows = self.br.page.evaluate(
-                """(sel) => {
-                     const squash = (v) => (v || '').replace(/\\s+/g, ' ').trim();
-                     return Array.from(document.querySelectorAll(sel)).map((tr, i) => {
-                       const tds = Array.from(tr.querySelectorAll('td'));
-                       if (tds.length < 6) return null;
-                       const link = tr.querySelector('td.textLeft a');
-                       return {
-                         index: i,
-                         no: squash(tds[1].innerText),
-                         sender: squash(tds[2].innerText),
-                         title: squash(link ? link.innerText : tds[3].innerText),
-                         date: squash(tds[tds.length - 1].innerText),
-                         has_file: !!tr.querySelector("a[onclick*='compressFile']")
-                       };
-                     }).filter(Boolean).filter(r => r.title);
-                   }""",
-                MESSAGE_ROW,
-            )
-        except Exception as exc:
-            raise PageReadError(f"쪽지 목록을 읽지 못했습니다: {exc}") from exc
+        rows = _eval_json(
+            self.br.page,
+            """() => {
+                 const sel = __SEL__;
+                 const squash = (v) => (v || '').replace(/\\s+/g, ' ').trim();
+                 const out = Array.from(document.querySelectorAll(sel)).map((tr, i) => {
+                   const tds = Array.from(tr.querySelectorAll('td'));
+                   if (tds.length < 6) return null;
+                   const link = tr.querySelector('td.textLeft a');
+                   return {
+                     index: i,
+                     no: squash(tds[1].innerText),
+                     sender: squash(tds[2].innerText),
+                     title: squash(link ? link.innerText : tds[3].innerText),
+                     date: squash(tds[tds.length - 1].innerText),
+                     has_file: !!tr.querySelector("a[onclick*='compressFile']")
+                   };
+                 }).filter(Boolean).filter(r => r.title);
+                 return JSON.stringify(out);
+               }""",
+            sel=MESSAGE_ROW,
+        )
         if not isinstance(rows, list):
             raise PageReadError(f"쪽지 목록이 리스트가 아닙니다: {type(rows).__name__}")
         return rows
@@ -777,40 +821,32 @@ class Crawler:
 
     # -- 게시판 ------------------------------------------------------
     def read_board_rows(self) -> list[dict[str, Any]]:
-        """목록 테이블의 각 행을 읽습니다. 인덱스는 클릭할 때 씁니다.
-
-        evaluate 에 **리스트를 넘기지 않습니다.** 2026-11-12 러너에서
-        `Page.evaluate: TypeError: refs.set is not a function` 이 나서
-        게시판 27곳이 전부 0건으로 끝났습니다(로컬에서는 재현되지
-        않았습니다). 인자는 객체 하나로 넘기고, 매개변수 자리에서
-        구조분해하지 않습니다. JS 안에 // 주석도 두지 않습니다 —
-        설명은 파이썬 쪽에 적습니다.
-        """
-        try:
-            rows = self.br.page.evaluate(
-                """(arg) => {
-                     const rows = Array.from(document.querySelectorAll(arg.row));
-                     return rows.map((tr, i) => {
-                       const tds = Array.from(tr.querySelectorAll('td'));
-                       if (!tds.length) return null;
-                       const link = tr.querySelector('a');
-                       const squash = (v) => (v || '').replace(/\\s+/g, ' ').trim();
-                       const text = tds.map(td => squash(td.innerText));
-                       return {
-                         index: i,
-                         no: text[0] || '',
-                         title: squash(link ? link.innerText : (text[1] || '')),
-                         has_file: !!tr.querySelector(arg.icon),
-                         author: text.length > 3 ? text[text.length - 3] : '',
-                         date: text.length > 2 ? text[text.length - 2] : '',
-                         cells: text
-                       };
-                     }).filter(Boolean).filter(r => r.title);
-                   }""",
-                {"row": BOARD_ROW, "icon": FILE_ICON},
-            )
-        except Exception as exc:
-            raise PageReadError(f"게시판 목록을 읽지 못했습니다: {exc}") from exc
+        """목록 테이블의 각 행을 읽습니다. 인덱스는 클릭할 때 씁니다."""
+        rows = _eval_json(
+            self.br.page,
+            """() => {
+                 const arg = __ARG__;
+                 const squash = (v) => (v || '').replace(/\\s+/g, ' ').trim();
+                 const out = Array.from(document.querySelectorAll(arg.row))
+                   .map((tr, i) => {
+                     const tds = Array.from(tr.querySelectorAll('td'));
+                     if (!tds.length) return null;
+                     const link = tr.querySelector('a');
+                     const text = tds.map(td => squash(td.innerText));
+                     return {
+                       index: i,
+                       no: text[0] || '',
+                       title: squash(link ? link.innerText : (text[1] || '')),
+                       has_file: !!tr.querySelector(arg.icon),
+                       author: text.length > 3 ? text[text.length - 3] : '',
+                       date: text.length > 2 ? text[text.length - 2] : '',
+                       cells: text
+                     };
+                   }).filter(Boolean).filter(r => r.title);
+                 return JSON.stringify(out);
+               }""",
+            arg={"row": BOARD_ROW, "icon": FILE_ICON},
+        )
         if not isinstance(rows, list):
             raise PageReadError(f"게시판 목록이 리스트가 아닙니다: {type(rows).__name__}")
         return rows
@@ -1005,7 +1041,7 @@ class Crawler:
             log.error("%s", msg)
             self.stats.errors.append(msg)
             return
-        self.store.data["meta"].pop(f"pending:{state_key}", None)
+        self.store.forget("meta", f"pending:{state_key}")
         self.store.mark_downloaded(state_key, path=str(md), extra=extra)
         self.store.save()
 

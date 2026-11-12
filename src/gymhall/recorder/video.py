@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..logging_setup import get as get_logger
-from .ffmpeg_util import find_ffmpeg, popen
+from .ffmpeg_util import find_ffmpeg, popen, read_stderr_log
 
 log = get_logger("recorder.video")
 
@@ -37,6 +37,7 @@ class VideoRecorder:
 
     _proc: subprocess.Popen | None = None
     _path: Path | None = None
+    _err_log: Path | None = None
     _started_at: float = 0.0
 
     # -- 명령 구성 ---------------------------------------------------
@@ -94,15 +95,17 @@ class VideoRecorder:
         path = out_dir / f"{stem}.video.{self.container}"
         cmd = self.build_command(path)
         log.info("화면 녹화 시작 (%s, %dfps) -> %s", self.backend, self.fps, path.name)
-        self._proc = popen(cmd)
+        # stderr 는 파이프가 아니라 파일로 받습니다. 파이프로 받고 읽지
+        # 않으면 버퍼가 차는 순간 ffmpeg 가 멈춰 섭니다(ffmpeg_util.popen 참고).
+        self._err_log = path.with_suffix(path.suffix + ".ffmpeg.log")
+        self._proc = popen(cmd, stderr_log=self._err_log)
         self._path = path
         self._started_at = time.time()
 
         # 즉시 죽는 경우(장치 없음, 창 제목 오타)를 바로 잡아냅니다.
         time.sleep(1.5)
         if self._proc.poll() is not None:
-            stderr = (self._proc.stderr.read() or b"").decode("utf-8", "replace")
-            tail = "\n".join(stderr.strip().splitlines()[-10:])
+            tail = read_stderr_log(self._err_log)
             self._proc = None
             raise RuntimeError(f"ffmpeg 가 바로 종료됐습니다:\n{tail}")
         return path
@@ -134,11 +137,14 @@ class VideoRecorder:
                 log.error("ffmpeg 강제 종료. 영상 끝부분이 잘릴 수 있습니다.")
                 self._proc.kill()
 
-        if self._proc.stderr:
-            err = (self._proc.stderr.read() or b"").decode("utf-8", "replace").strip()
-            if err:
-                for line in err.splitlines()[-5:]:
-                    log.debug("ffmpeg: %s", line)
+        handle = getattr(self._proc, "_gymhall_stderr", None)
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+        for line in read_stderr_log(getattr(self, "_err_log", None), lines=5).splitlines():
+            log.debug("ffmpeg: %s", line)
 
         self._proc = None
         if self._path and self._path.exists():
