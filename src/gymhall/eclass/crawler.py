@@ -96,6 +96,8 @@ ATTACHMENT = (
     # <a> 가 아니라 <span> 이라서 'a[...]' 로 시작하는 선택자로는
     # 영원히 못 찾습니다.
     # 'fileDownload' 는 'fileDown' 을 포함하므로 이 한 줄이 둘 다 잡습니다.
+    # 둘은 엔드포인트가 다릅니다(fileDown / fileDownServlet). 어느 쪽인지는
+    # filedown.parse 가 함수 이름을 보고 가립니다.
     # 둘을 따로 적고 순서를 두면, 한 화면에 섞여 있을 때 먼저 걸린 쪽만
     # 받고 나머지를 조용히 흘립니다(_attachment_locators 는 처음 걸린
     # 선택자 하나만 돌려줍니다). 어느 함수인지는 filedown.parse 가 가립니다.
@@ -847,7 +849,7 @@ class Crawler:
     # 본문이 아니라 오류 페이지를 받아 놓고 성공으로 치지 않도록.
     _HTMLISH = ("text/html", "application/xhtml")
 
-    def _fetch_filedown(self, args: tuple[str, str, str], dest_dir: Path) -> Path | None:
+    def _fetch_filedown(self, call: filedown.Call, dest_dir: Path) -> Path | None:
         """fileDown(...) 링크를 클릭 대신 주소로 직접 받습니다.
 
         클릭하면 숨은 iframe 이 그 주소로 이동합니다. 서버가
@@ -857,8 +859,8 @@ class Crawler:
         없고, 받기 전에 파일 이름도 알 수 있습니다.
         """
         page = self.br.page
-        target = filedown.url(page.url, args)
-        name = safe_name(filedown.filename(args), max_len=120) or "첨부"
+        target = filedown.url(page.url, call)
+        name = safe_name(filedown.filename(call), max_len=120) or "첨부"
         try:
             resp = page.request.get(target, timeout=self.br.timeout_ms)
         except Exception as exc:
@@ -920,9 +922,9 @@ class Crawler:
                 continue
 
             got: list[Path] = []
-            args = filedown.parse(onclick)
-            if args:
-                one = self._fetch_filedown(args, dest_dir)
+            call = filedown.parse(onclick)
+            if call:
+                one = self._fetch_filedown(call, dest_dir)
                 if one is not None:
                     got = [one]
             else:
