@@ -419,3 +419,58 @@ def test_the_device_label_reaches_the_track(tmp_path, monkeypatch):
     assert made, "트랙이 만들어지지 않았습니다"
     label = made[0]["device_label"]
     assert "마이크 배열 (Audio Share)" in label and "Focusrite" in label, label
+
+
+# --- '조용했다' 와 '아무것도 안 왔다' ----------------------------------
+# 2026-11-13 실기 녹음 파일: 두 트랙 모두 11.8MB 에 0 아닌 바이트가
+# 하나도 없었습니다. 레벨 로그만 봐서는 둘을 구분할 수 없었습니다.
+#   - system: WASAPI 루프백은 재생 중인 게 없으면 정확히 0. 정상.
+#   - mic:    진짜 마이크는 조용한 방에서도 ADC 열잡음으로 ±1 LSB 는
+#             흔들립니다. 정확히 0 이면 신호 경로가 없는 것입니다.
+def test_a_mic_at_exactly_zero_is_called_out_as_a_dead_path(tmp_path, caplog):
+    from gymhall.recorder.audio import AudioTrack
+
+    track = AudioTrack("mic", FakeSource(level=0.0), tmp_path / "m.wav",
+                       device_label="마이크 배열 (Audio Share)")
+    with caplog.at_level("WARNING", logger="gymhall"):
+        track.start()
+        time.sleep(0.5)
+        track.stop()
+        track.join(timeout=15)
+
+    assert track.result.peak == 0.0
+    assert "정확히 0" in caplog.text, caplog.text
+    assert "마이크 배열 (Audio Share)" in caplog.text
+
+
+def test_a_silent_system_track_is_not_called_a_dead_path(tmp_path, caplog):
+    """루프백은 재생 중인 게 없으면 정확히 0 입니다. 정상입니다."""
+    from gymhall.recorder.audio import AudioTrack
+
+    track = AudioTrack("system", FakeSource(level=0.0), tmp_path / "s.wav",
+                       device_label="스피커 (Realtek)")
+    with caplog.at_level("WARNING", logger="gymhall"):
+        track.start()
+        time.sleep(0.5)
+        track.stop()
+        track.join(timeout=15)
+
+    assert track.result.silent, "무음 판정 자체는 되어야 합니다"
+    assert "정확히 0" not in caplog.text, "새벽에 매번 오류가 뜹니다"
+
+
+def test_a_very_quiet_mic_is_not_called_a_dead_path(tmp_path, caplog):
+    """잡음이라도 들어오면 장치는 살아 있는 것입니다. 무음 경고까지만."""
+    from gymhall.recorder.audio import AudioTrack
+
+    track = AudioTrack("mic", FakeSource(level=1e-7), tmp_path / "m.wav",
+                       device_label="인텔 마이크")
+    with caplog.at_level("WARNING", logger="gymhall"):
+        track.start()
+        time.sleep(0.5)
+        track.stop()
+        track.join(timeout=15)
+
+    assert track.result.silent, "임계값 아래라 무음이어야 합니다"
+    assert track.result.peak > 0.0
+    assert "정확히 0" not in caplog.text, caplog.text
