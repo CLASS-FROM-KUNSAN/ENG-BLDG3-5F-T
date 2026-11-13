@@ -14,6 +14,7 @@ def test_example_config_is_valid(config_file):
     """
     cfg = cfgmod.load(config_file())
     assert cfg.get("github.tag_strategy") == "monthly"
+    assert cfg.get("github.tag_strategy_eclass") == "daily"
     assert cfg.get("recording.audio.track_layout") == "separate"
 
 

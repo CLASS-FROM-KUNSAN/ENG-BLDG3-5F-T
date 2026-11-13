@@ -357,7 +357,7 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
         return 0
 
     tag = tag_for(
-        str(cfg.get("github.tag_strategy", "monthly")),
+        str(cfg.get("github.tag_strategy_eclass", "daily")),
         str(cfg.get("github.tag_prefix_eclass", "eclass")),
         fixed=str(cfg.get("github.fixed_tag", "archive")),
     )

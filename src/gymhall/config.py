@@ -44,6 +44,9 @@ DEFAULTS: dict[str, Any] = {
         "owner": "",
         "repo": "",
         "tag_strategy": "monthly",
+        # e-class 자료는 날짜별 릴리스(eclass-2026-11-13)로 올립니다.
+        # 언제 받은 자료인지 릴리스 이름만 보고 알 수 있어야 합니다.
+        "tag_strategy_eclass": "daily",
         "fixed_tag": "archive",
         "tag_prefix_eclass": "eclass",
         "tag_prefix_recording": "recordings",
@@ -336,6 +339,7 @@ def validate(cfg: Config) -> None:
     errors: list[str] = []
 
     _choice(cfg, "github.tag_strategy", _VALID_TAG_STRATEGIES, errors)
+    _choice(cfg, "github.tag_strategy_eclass", _VALID_TAG_STRATEGIES, errors)
     _choice(cfg, "recording.audio.track_layout", _VALID_TRACK_LAYOUTS, errors)
     _choice(cfg, "recording.video.backend", _VALID_VIDEO_BACKENDS, errors)
     _choice(cfg, "recording.audio.backend", _VALID_AUDIO_BACKENDS, errors)
