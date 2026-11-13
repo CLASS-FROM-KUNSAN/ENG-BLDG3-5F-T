@@ -263,61 +263,6 @@ def test_crawl_lecture_list_writes_markdown_with_every_week(lesson, tmp_path):
     assert text.count("\n## ") == 16, "주차 16개가 다 들어가지 않았습니다"
 
 
-# --- "교안 0개" 경고는 진짜 고장일 때만 ---------------------------------
-# 2026-11-13 실기 sync 에서 경고 7건이 떴는데 전부 '강의 항목이 한 줄도
-# 없는 과목' 이었습니다. 그리고 이미 다 받은 과목은 두 번째 실행부터
-# 매번 같은 경고가 뜹니다(내용이 같은 파일은 saved 에서 빠지므로).
-# 정상이 고장 사이에 섞이면 둘 다 안 보게 됩니다.
-def _warnings(caplog):
-    return [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
-
-
-def test_a_second_run_does_not_cry_zero_handouts(lesson, caplog):
-    """CI 는 상태 파일을 이어 가므로 매 실행이 '두 번째 실행' 입니다."""
-    SERVER_MODE["mode"] = "pdf"
-    course = C.Course("2026211605005", "과목가", "이교수")
-    lesson.crawl_lecture_list(course)
-    caplog.clear()
-    with caplog.at_level("INFO", logger="gymhall"):
-        lesson.crawl_lecture_list(course)
-    assert not any("교안을 하나도" in m for m in _warnings(caplog)), _warnings(caplog)
-    assert any("이미 받음 14개" in r.getMessage() for r in caplog.records), \
-        "이미 받은 교안을 세지 않았습니다"
-
-
-def test_already_downloaded_files_are_counted(lesson, tmp_path):
-    SERVER_MODE["mode"] = "pdf"
-    lesson._download_attachments(tmp_path / "a")
-    again = lesson._download_attachments(tmp_path / "b")
-    assert again.saved == [] and again.known == 14, again
-
-
-def test_weeks_without_any_item_are_not_a_warning(lesson, monkeypatch, caplog):
-    """교수가 강의목록을 안 쓰는 과목. 받을 게 없는 것이 정상입니다."""
-    weeks = [{"title": f"{i}. {i}주차", "rows": []} for i in range(1, 17)]
-    monkeypatch.setattr(lesson, "read_lesson_weeks", lambda: weeks)
-    monkeypatch.setattr(lesson, "_download_attachments", lambda _d: C.Attachments())
-    with caplog.at_level("INFO", logger="gymhall"):
-        lesson.crawl_lecture_list(C.Course("2026211784801", "과목나", "교수"))
-    assert _warnings(caplog) == [], _warnings(caplog)
-    assert any("강의 항목이 하나도" in r.getMessage() for r in caplog.records)
-
-
-def test_items_without_any_handout_still_warn_with_what_was_on_screen(
-        lesson, monkeypatch, caplog):
-    """항목은 있는데 첨부를 못 찾으면 여전히 경고 — 선택자 고장과 같은 모양입니다.
-
-    경고만 남기면 다음 사람이 또 선택자를 찍어 맞혀야 합니다. 화면에
-    무엇이 있었는지를 같이 남깁니다.
-    """
-    monkeypatch.setattr(lesson, "_download_attachments", lambda _d: C.Attachments())
-    with caplog.at_level("INFO", logger="gymhall"):
-        lesson.crawl_lecture_list(C.Course("2026211605005", "과목가", "이교수"))
-    w = _warnings(caplog)
-    assert any("강의 항목 15개" in m and "교안을 하나도" in m for m in w), w
-    assert any("이 화면에 있는 것들" in m for m in w), w
-
-
 def test_filedown_actually_saves_the_pdf(lesson, tmp_path):
     """클릭이 아니라 주소로 직접 받아 파일이 디스크에 남아야 합니다."""
     SERVER_MODE["mode"] = "pdf"
@@ -652,3 +597,135 @@ def test_a_successful_download_reports_no_failure(lesson, tmp_path):
     att = lesson._download_attachments(tmp_path / "att")
     assert len(att.saved) == 14
     assert att.failed == [] and att.ok is True
+
+
+# --- 교안 0개일 때 단서를 남기는가 -------------------------------------
+# 2026-11-13 수집에서 6과목이 "주차 16개인데 교안 0개" 로 끝났는데
+# 로그에 단서가 한 줄도 없었습니다. 진단 덤프가 _finish_post(게시판
+# 경로)에만 걸려 있었기 때문입니다. 강의목록은 상세 진입이 없는 단일
+# 페이지라 그 경로를 안 탑니다.
+#
+# "교수가 안 올렸다" 와 "선택자가 어긋났다" 는 겉모습이 똑같습니다.
+# 덤프가 없으면 영영 구분할 수 없습니다.
+def _warnings(caplog):
+    return [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+
+
+def test_weeks_without_any_item_are_not_a_warning(lesson, monkeypatch, caplog):
+    """교수가 강의목록을 안 쓰는 과목. 받을 게 없는 것이 정상입니다.
+
+    2026-11-13 실기 경고 7건이 **전부** 이 경우였습니다. 정상이 매번
+    경고로 뜨면 진짜 고장이 그 사이에 묻힙니다.
+    """
+    weeks = [{"title": f"{i}. {i}주차", "rows": []} for i in range(1, 17)]
+    monkeypatch.setattr(lesson, "read_lesson_weeks", lambda: weeks)
+    monkeypatch.setattr(lesson, "_download_attachments", lambda _d: C.Attachments())
+    with caplog.at_level("INFO", logger="gymhall"):
+        lesson.crawl_lecture_list(C.Course("x", "영어2_23", "이교수"))
+    assert _warnings(caplog) == [], _warnings(caplog)
+    assert any("강의 항목이 하나도" in r.getMessage() for r in caplog.records)
+
+
+def test_a_second_run_does_not_cry_zero_handouts(lesson, caplog):
+    """CI 는 상태 파일을 이어 가므로 사실상 매 실행이 '두 번째' 입니다."""
+    SERVER_MODE["mode"] = "pdf"
+    course = C.Course("2026211605005", "기초웹프로그래밍_05", "이교수")
+    lesson.crawl_lecture_list(course)
+    caplog.clear()
+    with caplog.at_level("INFO", logger="gymhall"):
+        lesson.crawl_lecture_list(course)
+    assert _warnings(caplog) == [], _warnings(caplog)
+    assert any("이미 받아 뒀습니다" in r.getMessage() for r in caplog.records), \
+        "이미 받은 교안을 세지 않았습니다"
+
+
+def test_the_second_run_log_does_not_lead_with_zero(lesson, caplog):
+    """'교안 0개' 가 앞에 오면 매번 선택자 고장으로 오해합니다."""
+    SERVER_MODE["mode"] = "pdf"
+    course = C.Course("2026211605005", "기초웹프로그래밍_05", "이교수")
+    lesson.crawl_lecture_list(course)
+    caplog.clear()
+    with caplog.at_level("INFO", logger="gymhall"):
+        lesson.crawl_lecture_list(course)
+    line = next(r.getMessage() for r in caplog.records if "강의목록" in r.getMessage())
+    assert "교안 0개" not in line, f"0 이 앞에 왔습니다: {line}"
+    assert "14개를 이미 받아" in line, line
+
+
+def test_items_without_any_handout_still_warn_with_what_was_on_screen(
+        lesson, monkeypatch, caplog):
+    """항목은 있는데 첨부를 못 찾으면 경고 — 선택자 고장과 같은 모양입니다."""
+    monkeypatch.setattr(lesson, "_download_attachments", lambda _d: C.Attachments())
+    with caplog.at_level("INFO", logger="gymhall"):
+        lesson.crawl_lecture_list(C.Course("2026211605005", "과목가", "이교수"))
+    w = _warnings(caplog)
+    assert any("강의 항목 15개" in m and "교안을 하나도" in m for m in w), w
+    assert any("이 화면에 있는 것들" in m for m in w), w
+    assert any("[프레임" in m for m in w), w
+
+
+def test_a_broken_attachment_selector_still_warns(lesson, monkeypatch, caplog):
+    """후보 수만 보면 선택자가 통째로 고장나도 '받을 게 없는 과목' 이 됩니다.
+
+    항목 수는 read_lesson_weeks 가 읽고 후보 수는 _attachment_locators
+    가 읽습니다. **경로가 다르기 때문에** 하나가 고장나도 다른 하나가
+    알려 줍니다. 이 테스트가 그 안전망입니다.
+    """
+    monkeypatch.setattr(lesson, "_attachment_locators", lambda: None)
+    with caplog.at_level("INFO", logger="gymhall"):
+        lesson.crawl_lecture_list(C.Course("2026211605005", "과목가", "이교수"))
+    w = _warnings(caplog)
+    assert any("교안을 하나도" in m for m in w), (
+        "첨부 선택자가 통째로 고장났는데 조용히 '정상' 으로 분류했습니다"
+    )
+    assert any("첨부 후보 0개" in m for m in w), w
+
+
+def test_handouts_found_means_no_diagnostic_noise(lesson, caplog):
+    """받았으면 덤프를 찍지 않습니다. 매 과목 쏟아지면 안 봅니다."""
+    SERVER_MODE["mode"] = "pdf"
+    with caplog.at_level("WARNING", logger="gymhall"):
+        lesson.crawl_lecture_list(
+            C.Course("2026211605005", "기초웹프로그래밍_05", "이교수"))
+    assert "이 화면에 있는 것들" not in caplog.text
+
+
+def test_failed_handouts_are_reported_as_errors(lesson, monkeypatch):
+    """받다가 실패한 것은 '안 올렸다' 와 다릅니다. stats.errors 로 올립니다."""
+    att = C.Attachments(failed=["1장.pdf", "2장.pdf"], candidates=14)
+    monkeypatch.setattr(lesson, "_download_attachments", lambda d: att)
+    before = len(lesson.stats.errors)
+    lesson.crawl_lecture_list(C.Course("x", "과목가", "이교수"))
+    assert len(lesson.stats.errors) > before
+    assert any("강의목록" in e and "2개" in e for e in lesson.stats.errors), \
+        lesson.stats.errors
+
+
+# --- 집계가 실제로 채워지는가 (연결부) ---------------------------------
+def test_already_downloaded_files_are_counted(lesson, tmp_path):
+    """가짜 Attachments 로는 안 잡힙니다. 진짜로 두 번 돌립니다."""
+    SERVER_MODE["mode"] = "pdf"
+    first = lesson._download_attachments(tmp_path / "a")
+    assert len(first.saved) == 14 and first.known == 0
+    assert first.candidates == 14
+
+    second = lesson._download_attachments(tmp_path / "b")
+    assert second.saved == [], "같은 파일을 또 받았습니다"
+    assert second.known == 14, second
+    assert second.candidates == 14, "후보 수는 그대로여야 합니다"
+
+
+def test_a_page_without_attachments_reports_zero_candidates(browser, server, tmp_path):
+    from gymhall.eclass.urls import Site
+    from gymhall.paths import Layout
+    from gymhall.state import Store
+
+    pg = browser.new_page()
+    pg.goto(f"{server}/{EMPTY}")
+    try:
+        c = C.Crawler(_Shim(pg), Site(), Layout(tmp_path),
+                      Store.open(tmp_path / "s.json"), term="2026-2", menus={})
+        got = c._download_attachments(tmp_path / "att")
+        assert got.candidates == 0 and got.known == 0
+    finally:
+        pg.close()

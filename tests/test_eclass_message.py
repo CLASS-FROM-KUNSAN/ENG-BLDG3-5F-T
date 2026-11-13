@@ -451,3 +451,62 @@ def test_eval_json_rejects_a_non_string_result(tmp_path):
 
     with pytest.raises(C.PageReadError, match="문자열"):
         C._eval_json(P(), "() => 1")
+
+
+# --- 이미 받은 첨부가 글을 영원히 미완료로 만들지 않아야 합니다 --------
+# 내용이 같은 첨부는 두 번째부터 saved 에서 빠집니다(해시 중복 제거).
+# 그걸 '못 받았다' 로 치면, 미완료로 남아 재시도되는 글이 매번 같은
+# 판정을 받아 영원히 완료되지 않습니다. 같은 파일이 강의목록에도
+# 걸려 있으면 첫 실행에서도 납니다.
+def test_an_already_downloaded_attachment_completes_the_post(tmp_path):
+    c = _c(tmp_path)
+    md = tmp_path / "a.md"
+    md.write_text("x", encoding="utf-8")
+    att = Attachments(saved=[], failed=[], known=1, candidates=1)
+    c._finish_post("KEY-ALREADY", md, att, expected_file=True,
+                   what="공지", extra={})
+    assert c.store.is_downloaded("KEY-ALREADY"), (
+        "이미 받아 둔 첨부인데 글을 미완료로 남겼습니다 — "
+        "다음 실행에서도 같은 판정이라 영원히 안 끝납니다"
+    )
+    assert not c.stats.errors, c.stats.errors
+
+
+def test_nothing_at_all_still_keeps_the_post_pending(tmp_path):
+    """이미 받은 것도 없으면 그때는 진짜 미완료입니다."""
+    c = _c(tmp_path)
+    md = tmp_path / "b.md"
+    md.write_text("x", encoding="utf-8")
+    c._finish_post("KEY-NONE", md, Attachments(), expected_file=True,
+                   what="공지", extra={})
+    assert not c.store.is_downloaded("KEY-NONE")
+    assert c.stats.errors
+
+
+def test_a_pending_post_clears_once_the_files_are_present(tmp_path):
+    """1회차에서 부분 실패한 글이 2회차에 완료로 승격돼야 합니다.
+
+    _finish_post 는 미완료면 downloaded 를 안 적고 pending 만 남깁니다.
+    그러면 다음 실행이 그 글을 다시 엽니다. 그런데 첨부는 내용 해시가
+    같아 saved 에서 빠지므로, att.known 을 안 보면 **매번 같은 판정**을
+    받아 영원히 안 끝납니다. API 낭비와 로그 노이즈가 영구화됩니다.
+    """
+    c = _c(tmp_path)
+    md = tmp_path / "글.md"
+    md.write_text("본문", encoding="utf-8")
+
+    # 1회차: 첨부 실패 -> 미완료
+    c._finish_post("KEY-P", md, Attachments(failed=["자료.pdf"]),
+                   expected_file=True, what="과목가/공지/글", extra={})
+    assert not c.store.is_downloaded("KEY-P")
+    assert c.store.get_meta("pending:KEY-P") == str(md)
+
+    # 2회차: 그 파일은 이미 받아 둔 상태 -> saved 는 비어도 known 이 있음
+    c.stats.errors.clear()
+    c._finish_post("KEY-P", md, Attachments(known=1, candidates=1),
+                   expected_file=True, what="과목가/공지/글", extra={})
+    assert c.store.is_downloaded("KEY-P"), (
+        "이미 받아 둔 첨부인데 또 미완료로 남겼습니다 — 영원히 안 끝납니다"
+    )
+    assert not c.store.get_meta("pending:KEY-P"), "pending 표시가 안 지워졌습니다"
+    assert not c.stats.errors, c.stats.errors

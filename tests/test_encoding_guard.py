@@ -155,3 +155,43 @@ def test_the_guard_does_not_cry_wolf(tmp_path):
         encoding="utf-8",
     )
     assert _offenders(sample) == []
+
+
+# --- 같은 이름의 테스트가 조용히 가려지는 것 ---------------------------
+# 2026-11-13: git 자동 병합이 같은 파일에 같은 이름의 테스트를 4쌍
+# 만들었습니다. 파이썬은 나중 정의만 남기므로 4개가 조용히 죽었고,
+# CI 는 초록인데 커버리지는 사라진 상태였습니다.
+#
+# 게다가 가려진 쪽 중 하나는 **실패했을** 테스트였습니다(로그 형식이
+# 바뀌어서). 가려지지 않았다면 병합이 빨개져서 바로 알았을 것입니다.
+def test_no_test_function_name_is_defined_twice():
+    import ast
+    from collections import Counter
+
+    bad = []
+    for path in sorted((ROOT / "tests").rglob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
+        names = [n.name for n in tree.body
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and n.name.startswith("test_")]
+        for name, count in Counter(names).items():
+            if count > 1:
+                bad.append(f"{path.name}: {name} x{count}")
+    assert not bad, (
+        "같은 이름의 테스트가 두 번 정의됐습니다. 파이썬은 나중 것만 "
+        "남기므로 앞엣것은 조용히 안 돕니다:\n  " + "\n  ".join(bad)
+    )
+
+
+def test_the_duplicate_guard_actually_catches_one(tmp_path):
+    import ast
+    from collections import Counter
+
+    sample = tmp_path / "test_x.py"
+    sample.write_text("def test_a(): pass\ndef test_a(): pass\ndef test_b(): pass\n",
+                      encoding="utf-8")
+    tree = ast.parse(sample.read_text(encoding="utf-8"))
+    names = [n.name for n in tree.body
+             if isinstance(n, ast.FunctionDef) and n.name.startswith("test_")]
+    dupes = [n for n, c in Counter(names).items() if c > 1]
+    assert dupes == ["test_a"], dupes

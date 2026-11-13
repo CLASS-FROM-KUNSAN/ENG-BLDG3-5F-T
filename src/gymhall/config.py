@@ -145,6 +145,8 @@ DEFAULTS: dict[str, Any] = {
             # '완전 무음' 기준. 기본 1e-4 는 너무 관대해서 아주 작은
             # 잡음에도 '소리가 있다' 가 됩니다.
             "silence_peak": 1e-5,
+            "mic_auto_select": True,
+            "mic_probe_sec": 1.5,
         },
         "triggers": {
             "manual": True,

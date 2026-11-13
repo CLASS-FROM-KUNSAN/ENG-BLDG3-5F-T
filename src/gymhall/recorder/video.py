@@ -79,7 +79,35 @@ class VideoRecorder:
             # 화면 선택은 잘라내기가 아니라 output_idx(0부터)로 합니다.
             src = f"ddagrab=framerate={self.fps}"
             if target is not None:
+                # 주의: 이 번호가 맞는다는 보장이 없습니다.
+                #
+                # monitors.primary_first() 는 "주 모니터 먼저, 그다음
+                # x 좌표순" 으로 번호를 다시 매깁니다. 사람이 세는
+                # 순서와 맞추려는 것입니다. 그런데 ddagrab 의
+                # output_idx 는 **그래픽 드라이버가 정한 D3D11 출력
+                # 순서**입니다. 둘이 같다는 근거가 없습니다.
+                #
+                # 모니터가 하나면 둘 다 0 이라 차이가 안 납니다. 그래서
+                # 1대 PC 에서는 원리적으로 검증할 수 없습니다. 2대
+                # 실기가 필요합니다(docs/TESTING.md 의 테스트 불가 목록).
+                #
+                # 기본 백엔드인 gdigrab 은 좌표로 잘라내므로 이 문제가
+                # 없습니다.
                 src += f":output_idx={target.index - 1}"
+                if len(monitors) > 1:
+                    # 쓴 값을 그대로 적습니다. 그래야 2대 PC 에서
+                    # monitor=1,2 를 차례로 시험해 "어느 idx 가 어느
+                    # 화면인지" 를 사용자가 역으로 알아낼 수 있습니다.
+                    # "지원 안 함" 이 아니라 "스스로 알아낼 수 있음" 이
+                    # 됩니다.
+                    log.warning(
+                        "ddagrab + monitor=%d: output_idx=%d 로 녹화합니다. "
+                        "출력 번호는 그래픽 드라이버가 정한 순서라 다른 "
+                        "화면일 수 있습니다. 의심되면 backend = \"gdigrab\" "
+                        "(기본값)을 쓰세요 — 그쪽은 좌표로 잘라내므로 "
+                        "정확합니다.",
+                        self.monitor, target.index - 1,
+                    )
             else:
                 # monitor=0 의 뜻이 두 백엔드에서 다릅니다.
                 #   gdigrab -i desktop  = 전체 '가상' 바탕화면(모든 화면)

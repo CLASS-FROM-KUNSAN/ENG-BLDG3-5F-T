@@ -181,6 +181,17 @@ TypeError: 'Event' object is not callable
 폼 POST 는 1ms 안에 끝나서, 기다리든 말든 로컬에서는 둘 다 초록입니다.
 실제 서버에서만 틈이 벌어집니다.
 
+**테스트를 제안할 때 머릿속으로 변이를 한 번 돌리세요.**
+"이 테스트가 그 코드를 삭제했을 때 실패하는가?" 를 먼저 자문합니다.
+실패하지 않으면 그건 테스트가 아니라 **위장**입니다.
+
+실제로 V9(`SetProcessDPIAware`)의 Windows 통합 테스트 제안이 이
+함정이었습니다. 테스트 프로세스에서 `SetProcessDpiAwareness(2)` 를
+부른 뒤 `GetSystemMetrics` 와 `devices` 출력을 비교하자는 것이었는데,
+그러면 양쪽 다 DPI-aware 라 그 호출을 지워도 같은 값이 나옵니다.
+CI 러너는 배율 100% 라 더더욱 차이가 없습니다. 넣었으면 "방어선이
+생겼다" 는 착각만 남았을 것입니다.
+
 이런 것은 **동작 대신 수단을 고정합니다.** 소스에 `expect_navigation`
 이 있는지 직접 검사하는 테스트가
 `tests/test_eclass_detail_entry.py::test_enter_detail_actually_waits_for_navigation`
@@ -308,6 +319,26 @@ args = VideoRecorder(..., monitor=2)._input_args()
 
 ---
 
+## caplog 에는 logger="gymhall" 을 적으세요
+
+`conftest.py` 가 `logging_setup.setup(level="WARNING")` 을 부르고,
+그게 `gymhall` 로거에 자체 수준을 겁니다. 그래서
+
+```python
+with caplog.at_level("INFO"):        # 루트만 바뀝니다 — INFO 가 안 잡힙니다
+```
+
+INFO 로그가 레벨 검사에서 **먼저 죽어** caplog 에 도달하지 않습니다.
+테스트는 "로그가 없다" 가 아니라 "못 봤다" 로 빨개집니다.
+
+```python
+with caplog.at_level("INFO", logger="gymhall"):   # 이렇게
+```
+
+로그 문구를 검사하는 테스트 전부에 해당합니다.
+
+---
+
 ## 인코딩은 로캘에 맡기지 않습니다
 
 `open()` 과 `subprocess(text=True)` 는 인코딩을 안 적으면 **로캘**을
@@ -403,6 +434,36 @@ preview 전용인 데다 `subprocess(text=True)` 는 안 봅니다.
 **변이 세트의 단위는 "PR 변경분" 이 아니라 "같은 실패 패턴" 입니다.**
 버그를 하나 찾으면 그 모양으로 전 코드를 grep 하세요.
 
+### 같은 계열이 네 번 나왔습니다 — "새 결과만 돌려주는 함수"
+
+| 함수 | 호출부가 구분 못 한 것 |
+|---|---|
+| `upload_many` | "올릴 게 없음" / "전부 중복" / "전부 실패" |
+| `run_queue` | "큐가 비었음" / "전부 실패" |
+| `_run_recording` → `None` | "녹화함" / "잠금 충돌로 한 프레임도 못 찍음" |
+| `_download_attachments` | "첨부 없는 화면" / "이미 다 받음" / "선택자 고장" |
+
+네 번 반복됐다는 것 자체가 규칙의 근거입니다.
+
+> **새 결과만 돌려주는 함수는 호출부가 상태를 구분하지 못하게 만듭니다.**
+> 호출부가 갈라야 할 상태가 있으면 집계를 함께 돌려주거나 지역
+> 카운터를 노출하세요.
+
+판정은 **반드시 지역 카운터로** 합니다. `stats.skipped` 는 실행 전체
+누적이라 다른 메뉴의 수가 섞입니다. `Attachments.known` 은 이 페이지·
+이 호출 한정입니다. 둘은 같은 이벤트를 세지만 범위가 다릅니다.
+
+### 신호는 서로 다른 경로에서 읽습니다
+
+"교안 0개" 판정이 그 예입니다. 화면의 첨부 후보 수(`candidates`)만
+보면 **첨부 선택자가 통째로 고장나도** 후보가 0 이라 "받을 게 없는
+과목" 으로 조용히 분류됩니다. 강의 항목 수(`items`)는
+`read_lesson_weeks` 가 읽으므로 경로가 다릅니다 — 항목이 있는데
+후보가 0 이면 그때가 선택자 고장입니다.
+
+**한 신호가 고장나면 그 신호로는 고장을 못 봅니다.** 판정에는 서로
+다른 경로에서 온 신호를 쓰세요.
+
 `rg "return 0" src/gymhall/cli.py` 로 훑어 나온 것 셋:
 
 | 자리 | 조용한 0 |
@@ -425,8 +486,54 @@ preview 전용인 데다 `subprocess(text=True)` 는 안 봅니다.
 
 | 코드 | 왜 못 잡나 | 어떻게 확인하나 |
 |---|---|---|
-| `monitors._win_monitors` 의 `SetProcessDPIAware()` | 고DPI Windows 에서만 좌표가 달라집니다. 호출을 지워도 어떤 유닛 테스트도 안 빨개집니다. | 배율 200% PC 에서 `devices` 출력이 실제 해상도(예: 2880×1800)와 같은지. 2026-11-13 수동 확인 완료. Windows CI 를 넣으면 자동화 가능합니다. |
+| `monitors._win_monitors` 의 `SetProcessDPIAware()` | 고DPI Windows 에서만 좌표가 달라집니다. 호출을 지워도 어떤 유닛 테스트도 안 빨개집니다. CI 러너는 배율 100% 라 Windows CI 로도 못 잡습니다 — DPI-aware 여부가 결과에 영향이 없어 둘 다 통과합니다. | 배율 200% PC 에서 `devices` 출력이 실제 해상도(예: 2880×1800)와 같은지. **2026-11-13 수동 확인 완료.** |
+| `video.win_input_args` 의 ddagrab `output_idx` | `primary_first()` 는 "주 모니터 먼저" 로 번호를 다시 매기고, ddagrab 의 `output_idx` 는 그래픽 드라이버가 정한 D3D11 출력 순서입니다. 둘이 같다는 근거가 없습니다. **모니터가 하나면 둘 다 0 이라 차이가 안 납니다** — 1대 PC 에서는 원리적으로 검증 불가. 지금 테스트는 "번호 − 1" 이라는 가정을 그대로 확인할 뿐입니다. | **모니터 2대 PC 에서 `backend = "ddagrab"`, `monitor = 2` 로 실측.** 그때까지 `ddagrab` + `monitor > 0` + 화면 2대 이상이면 런타임에 경고를 찍습니다. 기본값 `gdigrab` 은 좌표로 잘라내므로 이 문제가 없습니다. |
 
 `_win_monitors` 의 나머지(EnumDisplayMonitors 호출, MONITORINFO 해석)도
 같은 부류지만, 정렬·번호 매기기는 `primary_first()` 로 빼서 어느
 OS 에서나 시험합니다. 남은 것은 **WinAPI 를 부르는 줄 자체**뿐입니다.
+
+
+---
+
+## 변이 테스트를 돌리는 동안에는 그 체크아웃을 건드리지 마세요
+
+변이 러너는 소스를 바꿨다가 되돌립니다. 그동안 같은 체크아웃에서
+
+- **전체 스위트를 돌리면** 변이된 소스를 검사합니다. 결과가 거짓입니다.
+- **소스를 편집하면** 러너의 복원이 그 편집을 **덮어씁니다.**
+
+둘 다 실제로 당했습니다. 두 번째가 더 고약합니다 — 테스트는 빨개지는데
+소스를 보면 고친 내용이 사라져 있어서, 고친 적이 없는 것처럼 보입니다.
+
+**별도 worktree 에서만 돌리세요.** 기다리는 것으로는 부족합니다 —
+사람은 기다리는 동안 다른 것을 합니다.
+
+```bash
+git commit -am "wip"          # 변이는 HEAD 기준입니다
+git worktree add /tmp/mut HEAD --detach
+cd /tmp/mut && python mutate.py .
+cd - && git worktree remove /tmp/mut --force
+```
+
+러너 첫 줄에 작업 트리를 못 건드리게 막는 줄을 넣으세요. 없으면
+다음에 또 in-place 로 돌립니다.
+
+```python
+import os, pathlib, sys
+if pathlib.Path.cwd() == pathlib.Path(os.environ.get("GYMHALL_MAIN", "")):
+    sys.exit("작업 트리에서 돌리지 마세요. git worktree 를 쓰세요.")
+```
+
+worktree 는 **커밋된 내용**만 가져갑니다. 고친 것을 커밋하지 않고
+worktree 를 만들면 옛 코드를 시험하게 되고, 변이가 전부 "패턴 못
+찾음" 으로 나옵니다(그 모양을 보면 커밋을 빠뜨린 것입니다).
+
+### 복원이 .pyc 때문에 안 먹는 경우
+
+크기가 같은 변이(`return 1` → `return 0`)를 **같은 초 안에** 되돌리면,
+파이썬이 묵은 `.pyc` 를 최신으로 착각해 변이된 코드를 계속 씁니다.
+파일 수정 시각이 초 단위라서 생깁니다.
+
+러너는 매 실행 전에 `__pycache__` 를 지우고 `PYTHONDONTWRITEBYTECODE=1`
+로 pytest 를 띄워야 합니다. 둘 중 하나만 하면 부족합니다.
