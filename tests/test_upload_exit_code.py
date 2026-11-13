@@ -301,3 +301,52 @@ def test_manual_upload_returns_zero_on_success(upload_cmd, capsys):
     run, _ = upload_cmd
     assert run() == 0
     assert "::error" not in capsys.readouterr().out
+
+
+# --- 릴리스 이름 -------------------------------------------------------
+def test_eclass_release_is_named_by_date(tmp_path, monkeypatch):
+    """e-class 자료는 eclass-년-월-일 릴리스로 올라가야 합니다.
+
+    녹화용 tag_strategy(monthly)를 같이 쓰면 eclass-2026-11 이 됩니다.
+    부품(tag_for)이 아니라 _upload_eclass 가 실제로 넘기는 태그를 봅니다.
+    """
+    from datetime import date
+
+    from gymhall import cli
+    from gymhall.paths import Layout
+    from gymhall.state import Store
+
+    layout = Layout(tmp_path)
+    root = layout.eclass / "2026-2" / "과목가"
+    root.mkdir(parents=True)
+    (root / "a.pdf").write_bytes(b"%PDF-1.4 a")
+
+    class Cfg:
+        machine_label = "pc"
+
+        def get(self, key, default=None):
+            # 녹화 쪽은 monthly 로 둡니다. 이게 새어 들어오면 안 됩니다.
+            return {"github.tag_strategy": "monthly"}.get(key, default)
+
+        def section(self, _k):
+            return {}
+
+    tags = []
+
+    class FakeUploader:
+        slug = "owner/repo"
+
+        def ensure_repo(self, **kw):
+            pass
+
+        def upload(self, path, tag, *, prefix="", rel_path=None):
+            tags.append(tag)
+            return {"assets": [{"name": Path(path).name}]}
+
+    monkeypatch.setattr(cli, "_uploader", lambda *a, **k: FakeUploader())
+    cli._upload_eclass(Cfg(), layout, Store.open(tmp_path / "s.json"),
+                       "2026-2", dry_run=False)
+
+    assert tags, "업로드가 한 번도 불리지 않았습니다"
+    expected = f"eclass-{date.today():%Y-%m-%d}"
+    assert set(tags) == {expected}, tags

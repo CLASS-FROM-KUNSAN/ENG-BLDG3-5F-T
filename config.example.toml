@@ -48,6 +48,10 @@ repo  = "gym-w-hall-2f"
 tag_strategy = "monthly"
 fixed_tag    = "archive"
 
+# e-class 자료만 따로 정합니다. 기본은 날짜별: eclass-2026-11-13
+# (위 tag_strategy 는 녹화에만 적용됩니다.)
+tag_strategy_eclass = "daily"
+
 # 태그 앞에 붙는 접두사. 종류별로 릴리스를 나누고 싶을 때 바꾸세요.
 tag_prefix_eclass    = "eclass"
 tag_prefix_recording = "recordings"

@@ -159,8 +159,13 @@ fps = 5              # 반드시 같이 낮추세요
 
 ```toml
 [github]
-tag_strategy = "monthly"
+tag_strategy        = "monthly"   # 녹화
+tag_strategy_eclass = "daily"     # e-class 자료 -> eclass-2026-11-13
 ```
+
+e-class 자료는 기본으로 **날짜별** 릴리스(`eclass-년-월-일`)에 올라갑니다.
+같은 파일은 업로드 기록으로 걸러지므로 날마다 새로 받은 것만 그날 릴리스에 들어갑니다.
+아래 값은 두 키 모두에 쓸 수 있습니다.
 
 | 값 | 태그 예시 | 언제 |
 |---|---|---|
