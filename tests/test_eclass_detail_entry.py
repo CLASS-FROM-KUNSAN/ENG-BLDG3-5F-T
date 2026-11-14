@@ -372,3 +372,15 @@ def test_a_successful_entry_blames_the_selector_instead(
     joined = " ".join(crawler.stats.errors)
     assert "링크를 찾지 못했습니다" in joined, joined
     assert "상세 화면에 못 들어갔습니다" not in joined, joined
+
+
+def test_a_post_leaves_a_screenshot_of_the_detail_page(crawler, tmp_path, monkeypatch):
+    """폼 POST 로 들어간 상세 화면을 찍어야 합니다(목록 화면이 아니라)."""
+    monkeypatch.setattr(crawler, "_download_attachments",
+                        lambda d: C.Attachments())
+    out = _outdir(tmp_path)
+    crawler._open_post(C.Course("X", "과목가"), "notice", _row(), out, "key-shot")
+    md = next(out.glob("*.md"))
+    png = md.with_suffix(".png")
+    assert png.exists(), "게시글 스크린샷이 없습니다"
+    assert crawler.stats.shots == 1

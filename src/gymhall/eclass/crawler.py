@@ -29,7 +29,7 @@ from typing import Any
 from ..logging_setup import get as get_logger
 from ..paths import Layout, safe_name, unique_path
 from ..state import Store, sha256_file, sha256_text
-from . import anon, filedown
+from . import anon, filedown, snapshot
 from .browser import EclassBrowser
 from .urls import MENU_LABELS, MENU_LINK_TEXTS, RISKY_MENUS, Site
 
@@ -149,10 +149,19 @@ class Stats:
     boards_seen: int = 0                       # 들어간 게시판 수
     boards_empty: int = 0                      # 그중 0건이던 것
     menus_missing: dict[str, int] = field(default_factory=dict)
+    shots: int = 0                             # .md 옆에 남긴 스크린샷
+    # 첨부가 달릴 수 있는 글(게시판 상세·쪽지)만 셉니다. posts 에는
+    # 강의목록·과제·목록 같은 화면 글자도 들어가서, 그걸로 '첨부 0' 을
+    # 따지면 화면 하나만 바뀐 날도 경고가 뜹니다(2026-11-13: 글 1, 530 B).
+    entries: int = 0
+    files_known: int = 0                       # 이미 받아 둬서 이번엔 안 받은 첨부
+    shots_failed: int = 0                      # 찍으려다 못 찍은 것(익명화 실패 포함)
 
     def line(self) -> str:
         base = (f"과목 {self.courses}개 / 페이지 {self.pages} / 글 {self.posts} / "
-                f"첨부 {self.files} / 건너뜀 {self.skipped}")
+                f"첨부 {self.files} / 건너뜀 {self.skipped} / 스크린샷 {self.shots}")
+        if self.shots_failed:
+            base += f"(실패 {self.shots_failed})"
         return base + (f" / 오류 {len(self.errors)}" if self.errors else "")
 
     def suspicions(self) -> list[str]:
@@ -171,9 +180,9 @@ class Stats:
                 "한 곳도 글이 없는 것은 드문 일입니다. 주소나 목록 선택자가 "
                 "어긋났을 수 있습니다."
             )
-        if self.courses >= 2 and self.files == 0 and self.posts > 0:
+        if self.entries >= 3 and self.files == 0 and self.files_known == 0:
             out.append(
-                f"글 {self.posts}건을 저장했는데 첨부는 0개입니다. 첨부 링크를 "
+                f"게시글·쪽지 {self.entries}건을 저장했는데 첨부는 0개입니다. 첨부 링크를 "
                 "못 찾고 있을 수 있습니다(화면마다 fileDown / fileDownload 로 다릅니다)."
             )
         for menu, n in sorted(self.menus_missing.items()):
@@ -286,8 +295,10 @@ class Crawler:
         risky: dict[str, Any] | None = None,
         menu_id_overrides: dict[str, str] | None = None,
         message_boxes: Iterable[str] = ("RECEIVE",),
+        screenshots: bool = True,
     ) -> None:
         self.br = browser
+        self.screenshots = bool(screenshots)
         self.site = site
         self.layout = layout
         self.store = store
@@ -407,6 +418,20 @@ class Crawler:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def _snapshot(self, md: Path | None, *, senders: Iterable[str] | None = None) -> None:
+        """방금 쓴 `md` 옆에 지금 화면을 남깁니다.
+
+        `.md` 를 실제로 쓴 자리에서만 부릅니다. 내용이 그대로라 `.md` 를
+        건너뛴 실행에서는 그림도 건너뜁니다 — 그래야 그림과 글이 같은
+        시점의 것입니다.
+        """
+        if not self.screenshots or md is None:
+            return
+        if snapshot.take(self.br.page, md, senders=senders) is not None:
+            self.stats.shots += 1
+        else:
+            self.stats.shots_failed += 1
+
     def save_page_text(self, course: Course, key: str, *, name: str | None = None) -> Path | None:
         """현재 페이지의 본문을 마크다운으로 저장합니다.
 
@@ -447,6 +472,7 @@ class Crawler:
             f"- 출처: {self.br.page.url}\n\n---\n\n"
         )
         out.write_text(header + text + "\n", encoding="utf-8")
+        self._snapshot(out)
         self.store.mark_downloaded(state_key, path=str(out), digest=digest)
         self.stats.posts += 1
         log.info("저장: %s / %s", course.name, label)
@@ -633,6 +659,9 @@ class Crawler:
             f"- 주차 수: {len(weeks)}\n\n---\n\n"
         )
         out.write_text(header + body + "\n", encoding="utf-8")
+        # 학습목차는 세 주차씩 넘겨 가며 모읍니다. 그림은 마지막으로 보던
+        # 화면 하나뿐이고, 전 주차는 .md 에만 있습니다.
+        self._snapshot(out)
         self.store.mark_downloaded(state_key, path=str(out), digest=digest)
         self.stats.posts += 1
         log.info("저장: %s / 학습목차 (%d주차)", course.name, len(weeks))
@@ -673,6 +702,7 @@ class Crawler:
         else:
             md = out_dir / safe_name("과제.md")
             md.write_text(body + "\n", encoding="utf-8")
+            self._snapshot(md)
             self.store.mark_downloaded(state_key, path=str(md), digest=digest)
             self.stats.posts += 1
 
@@ -717,6 +747,51 @@ class Crawler:
             raise PageReadError(f"주차 목록이 리스트가 아닙니다: {type(blocks).__name__}")
         return blocks
 
+    def lesson_row_clickables(
+            self, limit: int = 12) -> tuple[int, list[dict[str, str]]] | None:
+        """강의 항목 **줄 안에서** 누를 수 있는 것들 (개수, 앞의 limit 개).
+        못 읽으면 None — 그때는 '없다' 로 치지 않습니다.
+
+        2026-11-13 실행에서 법정의무교육(영상 1개) 과목이 '교안 0개'
+        경고를 냈는데, 함께 찍은 덤프는 화면 전체에서 앞의 12개만
+        보여서 상단 메뉴만 나왔습니다. 정작 강의 줄에 무엇이 있는지는
+        안 나왔습니다. 그래서 범위를 강의 줄로 좁혀 봅니다.
+
+        줄 안에 누를 것이 **아무것도 없으면** 받을 파일도 없습니다(정상).
+        누를 것은 있는데 첨부 선택자가 하나도 못 잡았으면 그때가 링크
+        모양이 바뀐 것입니다. "교안" 이라는 글자로 가르지 않습니다.
+        """
+        try:
+            found = _eval_json(
+                self.br.page,
+                """() => {
+                     const sel = __SEL__;
+                     const out = [];
+                     for (const tr of document.querySelectorAll(sel)) {
+                       for (const el of tr.querySelectorAll('[onclick], a[href]')) {
+                         const oc = el.getAttribute('onclick') || '';
+                         const hr = el.getAttribute('href') || '';
+                         const deadHref = !hr || hr === '#' || hr.startsWith('javascript:void');
+                         if (!oc && deadHref) continue;
+                         out.push({
+                           tag: el.tagName,
+                           onclick: oc.slice(0, 120),
+                           href: deadHref ? '' : hr.slice(0, 120),
+                           text: (el.innerText || el.value || '').replace(/\\s+/g, ' ').trim().slice(0, 40)
+                         });
+                       }
+                     }
+                     return JSON.stringify({ total: out.length, items: out.slice(0, __LIMIT__) });
+                   }""",
+                sel=f"{LESSON_WEEK} table tbody tr",
+                limit=limit,
+            )
+        except PageReadError:
+            return None
+        if not isinstance(found, dict):
+            return None
+        return int(found.get("total") or 0), list(found.get("items") or [])
+
     def crawl_lecture_list(self, course: Course) -> None:
         weeks = self.read_lesson_weeks()
         out_dir = self._dir(course, "lecture_list")
@@ -736,6 +811,7 @@ class Crawler:
             else:
                 md = out_dir / safe_name("강의목록.md")
                 md.write_text(body + "\n", encoding="utf-8")
+                self._snapshot(md)
                 self.store.mark_downloaded(state_key, path=str(md), digest=digest)
                 self.stats.posts += 1
         else:
@@ -782,12 +858,22 @@ class Crawler:
             log.info("%s / 강의목록: 주차 %d개에 강의 항목이 하나도 "
                      "없습니다. 받을 교안이 없습니다(정상).",
                      course.name, len(weeks))
+        elif (rows_click := self.lesson_row_clickables()) is not None \
+                and rows_click[0] == 0:
+            # 항목은 있지만 그 줄들 안에 누를 것이 하나도 없습니다.
+            # 버튼이 없으니 받을 파일도 없습니다(영상만 있는 강의 등).
+            # 선택자 고장이면 줄 안의 버튼은 그대로 있으므로 아래
+            # 경고로 갑니다 — 이 둘은 섞이지 않습니다.
+            log.info("%s / 강의목록: 강의 항목 %d개에 누를 버튼이 하나도 "
+                     "없습니다. 받을 교안이 없습니다(정상).",
+                     course.name, items)
         else:
-            # 항목은 있는데 하나도 못 받았습니다. 교안 없는 강의일
-            # 수도 있고 선택자가 어긋난 것일 수도 있습니다.
+            # 항목 줄에 버튼은 있는데 첨부 선택자가 하나도 못 잡았습니다.
+            # 링크 모양이 바뀌었거나, 교안이 아닌 버튼(학습하기 등)만
+            # 있는 강의입니다.
             #
             # "교안" 이라는 글자로는 가르지 않습니다 — 그 표시가 바뀌면
-            # 진짜 고장이 조용해집니다. 대신 화면에 무엇이 있었는지를
+            # 진짜 고장이 조용해집니다. 대신 줄 안에 무엇이 있었는지를
             # 남겨 다음 실행 로그가 답을 주게 합니다.
             log.warning(
                 "%s / 강의목록: 강의 항목 %d개가 있는데 교안을 하나도 "
@@ -795,6 +881,18 @@ class Crawler:
                 "강의이거나, 첨부 링크 모양이 바뀐 것입니다.",
                 course.name, items, files.candidates,
             )
+            # 먼저 강의 줄 안의 버튼을 보여 줍니다. 화면 전체 덤프는
+            # 앞쪽이 상단 메뉴로 다 차서 정작 이 줄들이 안 나옵니다.
+            if rows_click is not None:
+                total, sample = rows_click
+                shown = "\n      ".join(
+                    f"<{c.get('tag', '').lower()}"
+                    + (f" onclick={c['onclick']!r}" if c.get("onclick") else "")
+                    + (f" href={c['href']!r}" if c.get("href") else "")
+                    + f"> {c.get('text', '')!r}"
+                    for c in sample
+                )
+                log.warning("  강의 줄 안의 버튼 %d개:\n      %s", total, shown)
             # 읽는 법:
             #   fileDown=0, onclick=0   페이지가 안 열렸거나 다른 화면
             #   fileDown=0, onclick>0   선택자 문제 — onclick 샘플에서
@@ -962,6 +1060,9 @@ class Crawler:
         )
         self.stats.posts += 1
         att = self._download_attachments(out_dir / safe_name(stem, max_len=60))
+        # 보낸이를 .md 와 같은 이름표로 바꾼 뒤에 찍습니다. 화면 글자를
+        # 고치므로 첨부를 다 받은 뒤에 합니다.
+        self._snapshot(md, senders=[row.get("sender", "")])
         self._finish_post(
             state_key, md, att,
             expected_file=bool(row.get("has_file")),
@@ -1149,7 +1250,11 @@ class Crawler:
             body = (f"# {course.name} - {label} (목록만)\n\n"
                     "> 상세 페이지 진입은 LMS 에 기록이 남을 수 있어 하지 않았습니다.\n\n"
                     + "\n".join(seen_titles) + "\n")
-            (out_dir / safe_name(f"{label}_목록.md")).write_text(body, encoding="utf-8")
+            listing = out_dir / safe_name(f"{label}_목록.md")
+            listing.write_text(body, encoding="utf-8")
+            # 목록 화면만 찍습니다(상세에는 들어가지 않으므로). 여러 장이면
+            # 마지막 장입니다.
+            self._snapshot(listing)
             self.stats.posts += 1
 
         if total_pages > 1:
@@ -1182,6 +1287,8 @@ class Crawler:
         첨부가 하나라도 실패했는데 글을 완료로 적으면, 다음 실행이
         그 글을 건너뛰어 실패한 첨부를 영영 다시 받지 않습니다.
         """
+        self.stats.entries += 1
+        self.stats.files_known += att.known
         missing = list(att.failed)
         # att.known 을 빼면 안 됩니다. 내용이 같은 첨부는 두 번째부터
         # saved 에서 빠지므로, 미완료로 남아 재시도되는 글은 매번
@@ -1247,6 +1354,7 @@ class Crawler:
             f"{body}\n",
             encoding="utf-8",
         )
+        self._snapshot(md)
         self.stats.posts += 1
 
         att = self._download_attachments(post_dir / safe_name(stem, max_len=60))

@@ -23,7 +23,6 @@ def _real_run() -> Stats:
 def test_the_real_degenerate_run_is_flagged():
     notes = " ".join(_real_run().suspicions())
     assert "게시판 27곳이 전부 0건" in notes
-    assert "첨부는 0개" in notes
     assert "'과목정보'" in notes
 
 
@@ -58,4 +57,31 @@ def test_a_menu_missing_in_only_some_courses_is_normal():
 def test_zero_attachments_alone_is_flagged_only_with_posts():
     s = Stats(courses=9, posts=0, files=0)
     s.boards_seen, s.boards_empty = 0, 0
+    assert s.suspicions() == []
+
+
+# --- '첨부 0' 은 첨부가 달릴 수 있는 글로만 따집니다 ---------------------
+def test_the_2026_11_13_run_is_not_flagged():
+    """글 1 은 화면 글자(.md 하나, 530 B)였습니다. 첨부가 있을 자리가 아닙니다.
+
+    수집 결과: 과목 9개 / 페이지 75 / 글 1 / 첨부 0 / 건너뜀 141
+    """
+    s = Stats(courses=9, pages=75, posts=1, files=0, skipped=141)
+    s.boards_seen, s.boards_empty = 36, 26
+    assert s.suspicions() == []
+
+
+def test_many_entries_and_no_attachment_is_flagged():
+    s = Stats(courses=9, posts=12, files=0)
+    s.entries = 8
+    s.boards_seen, s.boards_empty = 27, 10
+    notes = " ".join(s.suspicions())
+    assert "게시글·쪽지 8건" in notes and "첨부는 0개" in notes
+
+
+def test_attachments_already_downloaded_are_not_zero():
+    """같은 첨부는 두 번째부터 '이미 받음' 입니다. 0개로 치면 매일 경고가 뜹니다."""
+    s = Stats(courses=9, posts=8, files=0)
+    s.entries, s.files_known = 8, 5
+    s.boards_seen, s.boards_empty = 27, 10
     assert s.suspicions() == []
