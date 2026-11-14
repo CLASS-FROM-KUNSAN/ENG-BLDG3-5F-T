@@ -206,6 +206,27 @@ enabled = false
 
 ---
 
+## 강의실 PC 홈 백업
+
+```toml
+[backup.home]
+enabled = true          # 기본 false
+
+[backup.home.prune]
+enabled = true          # 기본 false — 켜면 올라간 파일을 로컬에서 지웁니다
+min_age_hours = 24
+```
+
+- `python -m gymhall backup home` 이 `%USERPROFILE%` 를 `home-2026-11-13` 릴리스에 올립니다.
+  홈 바로 아래 `AppData` 와 `.` 폴더, 정션, OneDrive 클라우드 전용 파일, `exclude_names` 는 빠집니다.
+- 올릴 때마다 매니페스트(어느 디렉터리의 어느 파일이 어느 묶음에 있는지)를 같은 릴리스에 올리고,
+  앞 매니페스트의 sha256 으로 사슬을 잇습니다. 매니페스트 하나에는 최대 5만 개까지 들어갑니다.
+- `python -m gymhall backup prune` 은 GitHub 의 사슬을 내려받아 확인한 뒤, 지금 파일의 해시가
+  사슬의 값과 같은 것만 지웁니다. 디렉터리는 남깁니다. 먼저 `--dry-run` 으로 목록을 보세요.
+- 상태는 `state/home_backup.sqlite` 에 있습니다(파일 수십만 개라 JSON 이 아닙니다).
+- 업로드/삭제 목록: `logs/home-chain.log`, `logs/home-prune.log`.
+  자세한 것은 [배포 문서](DEPLOYMENT.md) 를 보세요.
+
 ## 데이터 폴더 옮기기
 
 ```toml

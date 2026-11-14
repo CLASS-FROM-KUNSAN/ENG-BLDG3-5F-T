@@ -900,6 +900,196 @@ def cmd_config_check(args) -> int:
 
 
 # ---------------------------------------------------------------------------
+# backup (강의실 PC 홈 디렉터리)
+# ---------------------------------------------------------------------------
+def _home_uploader(cfg, *, dry_run: bool):
+    """홈 백업은 과목과 무관합니다. course_repos 가 있어도 기본 레포로 갑니다."""
+    from .release import ReleaseUploader
+
+    return ReleaseUploader(
+        owner=str(cfg.get("github.owner", "")),
+        repo=str(cfg.get("github.repo", "")),
+        retry_count=int(cfg.get("github.retry_count", 4)),
+        retry_backoff=float(cfg.get("github.retry_backoff", 2.0)),
+        split_size_mb=int(cfg.get("github.split_size_mb", 1900)),
+        draft=bool(cfg.get("github.draft", False)),
+        prerelease=bool(cfg.get("github.prerelease", False)),
+        dry_run=dry_run,
+    )
+
+
+def _home_state_path(layout: Layout) -> Path:
+    # Store(JSON) 가 아니라 SQLite 입니다. 홈 하나에 파일이 수십만 개라
+    # JSON 한 덩어리로는 저장할 때마다 수백 MB 를 다시 씁니다.
+    return layout.state / "home_backup.sqlite"
+
+
+def _home_root(cfg) -> Path:
+    raw = str(cfg.get("backup.home.root", "") or "").strip()
+    return Path(raw).expanduser() if raw else Path.home()
+
+
+def _check_home_root(home: Path) -> str | None:
+    """홈 백업/정리 대상이 사용자 홈 안인지. 아니면 이유를 돌려줍니다.
+
+    root 를 C:/Users 나 C:/ 로 적으면 AppData 가 '최상위' 가 아니게 되어
+    다른 계정의 AppData, Program Files 까지 훑고, 정리가 지울 수 있는
+    것은 다 지웁니다(검토에서 지적). 홈이거나 그 아래만 허용합니다.
+    """
+    if not home.is_dir():
+        return f"홈 디렉터리가 없습니다: {home}"
+    real = home.resolve()
+    user_home = Path.home().resolve()
+    if real != user_home and user_home not in real.parents:
+        return (f"backup.home.root 가 사용자 홈({user_home}) 밖입니다: {real}. "
+                "홈이거나 그 아래 폴더만 쓸 수 있습니다.")
+    return None
+
+
+def _home_identity(cfg, state) -> tuple[str, str]:
+    """(사슬의 machine, 에셋 이름 접두사). 둘 다 설치 ID 를 품습니다."""
+    from .release import machine_prefix
+
+    iid = state.install_id()
+    return f"{cfg.machine_label}#{iid}", f"{machine_prefix(cfg.machine_label)}{iid}_"
+
+
+# 백업이 정리(보통 몇 분)를 기다리는 최대 시간.
+HOME_LOCK_WAIT_SEC = 1800
+
+
+def _home_lock_path(layout: Layout) -> Path:
+    return layout.state / "home_backup.lock"
+
+
+def cmd_backup_home(args) -> int:
+    from .backup.homestate import HomeState
+    from .backup.lock import exclusive
+    from .backup.run import run_backup
+    from .release import tag_for
+
+    cfg, layout = _load(args)
+    if not cfg.get("backup.home.enabled", False):
+        log.info("홈 백업이 꺼져 있습니다 (backup.home.enabled = false).")
+        return 0
+    home = _home_root(cfg)
+    why = _check_home_root(home)
+    if why:
+        log.error("홈 백업: %s", why)
+        return 1
+
+    tag = tag_for("daily", str(cfg.get("backup.home.tag_prefix", "home")))
+    # 정리가 돌고 있으면 끝나기를 기다립니다(정리는 보통 몇 분).
+    with exclusive(_home_lock_path(layout), wait_sec=HOME_LOCK_WAIT_SEC) as got:
+        if not got:
+            detail = "다른 홈 백업/정리가 30분 넘게 끝나지 않아 이번 백업을 건너뜁니다."
+            log.error("홈 백업: %s", detail)
+            _actions_error("홈 백업 건너뜀", detail)
+            return 1
+        with HomeState.open(_home_state_path(layout)) as state:
+            machine, prefix = _home_identity(cfg, state)
+            result = run_backup(
+                home=home,
+                uploader=_home_uploader(cfg, dry_run=args.dry_run),
+                state=state,
+                layout=layout,
+                machine=machine,
+                prefix=prefix,
+                tag=tag,
+                bundle_mb=int(cfg.get("backup.home.bundle_mb", 1800)),
+                exclude_names=list(cfg.get("backup.home.exclude_names", [])),
+                dry_run=args.dry_run,
+            )
+    if args.dry_run:
+        return 0
+    if result.failed_bundles:
+        detail = f"묶음 {result.failed_bundles}개를 올리지 못했습니다. 다음 실행에서 다시 시도합니다."
+        log.error("홈 백업 일부 실패: %s", detail)
+        _actions_error("홈 백업 실패", detail)
+        return 1
+    if result.manifest_failed:
+        detail = "파일은 올렸지만 사슬(매니페스트)을 올리지 못했습니다. 정리는 일어나지 않습니다."
+        log.error("홈 백업: %s", detail)
+        _actions_error("홈 백업 사슬 실패", detail)
+        return 1
+    if not getattr(result, "ok", True):
+        detail = "홈 백업이 끝까지 가지 못했습니다(연결/권한 확인 실패 등). 로그를 확인하세요."
+        log.error("홈 백업: %s", detail)
+        _actions_error("홈 백업 실패", detail)
+        return 1
+    return 0
+
+
+def _prune_protect(cfg, args) -> list[Path]:
+    """절대 지우면 안 되는 곳: 이 프로그램 자신, 그걸 돌리는 Python, 데이터 폴더, 설정 파일.
+
+    Python 이 홈 안(~/anaconda3, ~/scoop, 홈 안의 venv)에 깔려 있으면 그것도
+    백업 대상이라 지워질 수 있습니다. 지우면 다음 날 예약 작업이 못 돕니다.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    cfg_path = (Path(args.config).expanduser().resolve() if args.config
+                else config_module.default_config_path())
+    out = [repo_root, Path(cfg.data_dir).resolve(), cfg_path]
+    for raw in {sys.prefix, sys.base_prefix, sys.exec_prefix}:
+        out.append(Path(raw).resolve())
+    out.append(Path(sys.executable).resolve().parent)
+    return out
+
+
+def cmd_backup_prune(args) -> int:
+    from .backup.homestate import HomeState
+    from .backup.lock import exclusive
+    from .backup.prune import run_prune
+
+    cfg, layout = _load(args)
+    if not cfg.get("backup.home.prune.enabled", False) and not args.dry_run:
+        log.info("홈 정리가 꺼져 있습니다 (backup.home.prune.enabled = false). "
+                 "--dry-run 으로 지울 목록만 볼 수 있습니다.")
+        return 0
+    home = _home_root(cfg)
+    why = _check_home_root(home)
+    if why:
+        log.error("홈 정리: %s", why)
+        return 1
+
+    # 백업이 돌고 있으면(첫 백업은 몇 시간) 오늘은 정리하지 않습니다.
+    with exclusive(_home_lock_path(layout), wait_sec=0) as got:
+        if not got:
+            log.warning("홈 백업이 아직 돌고 있어 오늘은 정리하지 않습니다.")
+            return 0
+        with HomeState.open(_home_state_path(layout)) as state:
+            machine, _prefix = _home_identity(cfg, state)
+            result = run_prune(
+                home=home,
+                # 정리는 사슬을 **읽어야** 합니다. dry-run 이어도 네트워크 읽기는 합니다.
+                uploader=_home_uploader(cfg, dry_run=False),
+                state=state,
+                layout=layout,
+                machine=machine,
+                min_age_hours=float(cfg.get("backup.home.prune.min_age_hours", 24)),
+                protect=_prune_protect(cfg, args),
+                dry_run=args.dry_run,
+            )
+    if not result.chain_ok:
+        detail = "GitHub 의 사슬을 확인하지 못해 아무것도 지우지 않았습니다."
+        log.error("홈 정리: %s", detail)
+        _actions_error("홈 정리 중단", detail)
+        return 1
+    if result.errors:
+        log.error("홈 정리 중 오류 %d건 — 로그를 확인하세요.", result.errors)
+        return 1
+    if getattr(result, "missing_remote", 0):
+        # 지우지 않았으니 안전하지만, GitHub 쪽 묶음이 없거나 검증이 안 된다는
+        # 뜻입니다. 조용히 넘기면 그 파일은 영원히 정리도 재업로드도 안 됩니다.
+        detail = (f"GitHub 에서 묶음을 확인하지 못한 파일 {result.missing_remote}개를 "
+                  "지우지 않았습니다. 릴리스를 확인하세요.")
+        log.error("홈 정리: %s", detail)
+        _actions_error("홈 정리 확인 실패", detail)
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gymhall",
@@ -986,6 +1176,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_transcribe_queue)
 
     tr.add_parser("warmup", help="모델 미리 내려받기").set_defaults(func=cmd_transcribe_warmup)
+
+    # --- backup ---
+    bk = sub.add_parser("backup", help="강의실 PC 홈 디렉터리 백업/정리").add_subparsers(
+        dest="sub", required=True)
+
+    p = bk.add_parser("home", help="홈 디렉터리를 home-날짜 릴리스에 올림")
+    p.add_argument("--dry-run", action="store_true", help="올릴 목록만 보여 줌")
+    p.set_defaults(func=cmd_backup_home)
+
+    p = bk.add_parser("prune", help="GitHub 사슬로 확인된 파일을 로컬에서 지움")
+    p.add_argument("--dry-run", action="store_true",
+                   help="사슬은 확인하되 지우지 않고 목록만 보여 줌")
+    p.set_defaults(func=cmd_backup_prune)
 
     # --- upload ---
     p = sub.add_parser("upload", help="임의 파일/폴더를 릴리스에 올림")
