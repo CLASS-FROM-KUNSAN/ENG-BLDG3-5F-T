@@ -640,6 +640,10 @@ class ReleaseUploader:
         )
         work = Path(tmp_dir or path.parent) / f".parts-{path.stem}"
         parts = split_file(path, work, self.chunk_bytes)
+        # 조각마다 해시를 남깁니다. 원본 해시만으로는 '같은 크기의 다른 조각' 을
+        # 가려낼 수 없습니다(홈 정리 검토에서 재현).
+        part_info = [{"name": f"{base}.part{p.index:03d}", "size": p.path.stat().st_size,
+                      "sha256": sha256_file(p.path)} for p in parts]
 
         manifest = {
             "original_name": path.name,
@@ -647,6 +651,7 @@ class ReleaseUploader:
             "sha256": digest,
             "part_count": len(parts),
             "part_prefix": base,
+            "parts": part_info,
             "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "restore": {
                 "windows": f'copy /b "{base}.part*" "{path.name}"',
@@ -684,7 +689,8 @@ class ReleaseUploader:
                 except OSError:
                     pass
 
-        return {"tag": tag, "assets": uploaded, "split": True, "sha256": digest}
+        return {"tag": tag, "assets": uploaded, "split": True, "sha256": digest,
+                "parts": part_info}
 
 
 # ---------------------------------------------------------------------------

@@ -100,6 +100,17 @@ jobs:
           if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
           Write-Host "register_tasks.ps1 문법 OK"
 
+      - name: PowerShell 스크립트 문법 검사 (Windows PowerShell 5.1)
+        # 강의실 PC 의 'powershell -File' 은 5.1 입니다. 5.1 은 BOM 없는 파일을
+        # cp949 로 읽어서, pwsh(7) 에서 멀쩡한 한글 문자열이 깨집니다.
+        shell: powershell
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "scripts/register_tasks.ps1"), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+          Write-Host "register_tasks.ps1 (5.1) OK"
+
       - name: VBScript 문법 검사
         shell: cmd
         # 인자 없이 실행하면 MsgBox 가 떠서 멈추므로, 구문 분석만 합니다.

@@ -38,6 +38,10 @@ from .scan import is_cloud_placeholder, is_reparse_point
 log = get_logger("backup")
 
 PRUNE_LOG = "home-prune.log"
+PRUNE_HOME_KEY = "prune_home"
+# 콘솔 로그와 PruneResult.paths 에 남기는 이름 수. 전부는 home-prune.log 에
+# 한 줄씩 바로 씁니다 — 66만 개를 메모리에 모으면 수백 MB 입니다.
+KEEP_PATHS = 200
 # 이만큼 pending 에서 뺄 때마다 commit 합니다. 끊겨도 다시 해시하지 않게.
 COMMIT_EVERY = 1000
 
@@ -152,9 +156,9 @@ def _make_fetch(uploader, fetched: list[str]):
     return fetch
 
 
-def _bundle_map(manifest: dict[str, Any]) -> dict[str, tuple[int, int, str]]:
-    """묶음 이름 -> (size, parts, sha256). 형식이 이상한 묶음은 빠집니다."""
-    out: dict[str, tuple[int, int, str]] = {}
+def _bundle_map(manifest: dict[str, Any]) -> dict[str, tuple[int, int, str, str]]:
+    """묶음 이름 -> (size, parts, sha256, 조각 sha256 들(쉼표)). 이상한 묶음은 빠집니다."""
+    out: dict[str, tuple[int, int, str, str]] = {}
     for b in manifest.get("bundles") or []:
         if not isinstance(b, dict):
             continue
@@ -163,7 +167,10 @@ def _bundle_map(manifest: dict[str, Any]) -> dict[str, tuple[int, int, str]]:
         if not isinstance(name, str) or not isinstance(size, int) or not isinstance(parts, int):
             continue
         sha = b.get("sha256") if isinstance(b.get("sha256"), str) else ""
-        out[name] = (size, parts, sha)
+        psha = b.get("part_sha256")
+        part_sha = (",".join(psha) if isinstance(psha, list)
+                    and all(isinstance(x, str) and "," not in x for x in psha) else "")
+        out[name] = (size, parts, sha, part_sha)
     return out
 
 
@@ -172,11 +179,12 @@ def _pending_rows(m: dict[str, Any]):
     bundles = _bundle_map(m)
     created = m.get("created_at") if isinstance(m.get("created_at"), str) else ""
     for e in entries_of(m):
-        size, parts, bsha = bundles.get(e.bundle, (_NO_BUNDLE, 0, ""))
+        size, parts, bsha, part_sha = bundles.get(e.bundle, (_NO_BUNDLE, 0, "", ""))
         yield PendingRow(
             path=e.path, size=e.size, mtime_ns=e.mtime_ns, sha256=e.sha256,
             bundle=e.bundle, member=e.member, tag=m["tag"], seq=m["seq"],
-            created_at=created, bundle_size=size, bundle_parts=parts, bundle_sha256=bsha)
+            created_at=created, bundle_size=size, bundle_parts=parts, bundle_sha256=bsha,
+            bundle_part_sha256=part_sha)
 
 
 def _verify(state: HomeState, uploader, machine: str,
@@ -192,6 +200,15 @@ def _verify(state: HomeState, uploader, machine: str,
     fetched: list[str] = []
     count = 0
     home_s = str(Path(home).resolve())
+    # pending 에 남은 행은 홈 기준 상대 경로입니다. 새로 받을 고리가 없으면
+    # 아래 visit 의 홈 비교가 한 번도 안 돌아서, root 를 바꾼 뒤의 정리가
+    # 옛 홈의 행을 새 홈에 대고 지웠습니다(검토에서 재현). 확인했던 홈을
+    # 상태에 남기고 매번 맞춥니다.
+    known_home = state.get_meta(PRUNE_HOME_KEY)
+    if known_home is not None and not _same_home(known_home, home_s):
+        raise ChainError(
+            f"정리 대기 목록은 다른 홈 기준입니다: {known_home!r} != {home_s!r}. "
+            "backup.home.root 를 바꿨다면 되돌리세요.")
 
     def visit(m: dict[str, Any]) -> None:
         # 고리를 하나씩 받아 바로 넣고 놓아 줍니다(매니페스트 하나에 수만 항목).
@@ -211,6 +228,8 @@ def _verify(state: HomeState, uploader, machine: str,
     walk_chain(head, _make_fetch(uploader, fetched), machine=machine,
                stop_at=state.verified(), visit=visit)
     state.add_verified(fetched)
+    if known_home is None:
+        state.set_meta(PRUNE_HOME_KEY, home_s)
     return head, head_seq, count
 
 
@@ -223,7 +242,8 @@ class _Remote:
     크기만 맞는지 보면, 확인한 뒤 같은 이름으로 다른 묶음이 올라온 경우를
     못 잡습니다(실제로 유일한 사본을 지운 적이 있습니다). 그래서 GitHub 가
     주는 sha256 digest 가 반드시 있어야 하고 매니페스트와 같아야 합니다.
-    분할 묶음은 parts.json 을 내려받아 원본 sha256 과 조각 구성을 맞춥니다.
+    분할 묶음은 조각마다 digest 를 사슬의 조각 해시와 맞추고, parts.json 의
+    원본 sha256 과 조각 구성도 맞춥니다.
     태그마다 이름 -> (크기, digest) 만, 묶음마다 결과(bool)만 둡니다.
     """
 
@@ -279,10 +299,17 @@ class _Remote:
         if (info.get("sha256") != row.bundle_sha256 or info.get("part_count") != parts
                 or info.get("part_prefix") != name or info.get("original_size") != size):
             return False
+        # 조각마다 GitHub digest 를 **사슬에 적힌** 조각 해시와 맞춥니다.
+        # parts.json 은 같은 업로더가 쓴 것이라 같은 이름으로 덮이면 같이
+        # 바뀝니다. 크기 합만 보면 같은 크기의 다른 조각을 못 가려냅니다.
+        part_sha = row.bundle_part_sha256.split(",") if row.bundle_part_sha256 else []
+        if len(part_sha) != parts or any(len(h) != 64 for h in part_sha):
+            return False             # 조각 해시가 없는 사슬: 확신이 없으니 지우지 않습니다
         total = 0
-        for i in range(1, parts + 1):
+        for i, want in enumerate(part_sha, start=1):
             a = assets.get(f"{name}.part{i:03d}")
-            if not self._has_digest(a) or not isinstance(a[0], int):
+            if (not self._has_digest(a) or not isinstance(a[0], int)
+                    or a[1] != f"sha256:{want}"):
                 return False
             total += a[0]
         return total == size
@@ -319,60 +346,97 @@ def _group(paths: list[str]) -> dict[str, list[str]]:
     return groups
 
 
-def _write_prune_log(layout: Layout, *, now: datetime, head: Link, seq: int,
-                     res: PruneResult) -> None:
-    path = layout.logs / PRUNE_LOG
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
-        f"== {now.isoformat(timespec='seconds')}  head seq {seq}  {head.tag}/{head.asset}"
-        f"  지움 {res.deleted}개 {res.bytes_freed}바이트"
-        f"  (바뀜 {res.changed}, 없음 {res.gone}, 최근 {res.too_new}, 보호 {res.protected},"
-        f" 원격없음 {res.missing_remote}, 오류 {res.errors}) =="
-    ]
-    for d, names in _group(res.paths).items():
-        lines.append(f"{d}/")
-        lines.extend(f"  {n}" for n in names)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write("\n".join(lines) + "\n")
+def _log_name(rel: str) -> str:
+    return rel if "/" in rel else f"(홈)/{rel}"
+
+
+class _PruneLog:
+    """지운 이름을 **지우는 즉시** home-prune.log 에 한 줄씩 씁니다.
+
+    예전에는 지운 경로를 전부 모아 두었다가 끝에 정렬해 썼습니다. 첫 정리는
+    66만 개쯤이라 수백 MB 를 잡습니다(검토에서 측정: 파일당 약 0.6 KB).
+    지운 것이 하나도 없으면 파일을 만들지 않습니다. 중간에 죽어도 그때까지
+    지운 이름은 이미 디스크에 있습니다.
+    """
+
+    def __init__(self, layout: Layout, *, now: datetime, head: Link, seq: int) -> None:
+        self.path = layout.logs / PRUNE_LOG
+        self.header = (f"== {now.isoformat(timespec='seconds')}  head seq {seq}"
+                       f"  {head.tag}/{head.asset} 시작 ==")
+        self.fh = None
+
+    def add(self, rel: str) -> None:
+        if self.fh is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.fh = self.path.open("a", encoding="utf-8")
+            self.fh.write(self.header + "\n")
+        self.fh.write(f"  {_log_name(rel)}\n")
+        self.fh.flush()
+
+    def close(self, res: PruneResult | None) -> None:
+        if self.fh is None:
+            return
+        try:
+            if res is not None:
+                self.fh.write(
+                    f"== 끝  지움 {res.deleted}개 {res.bytes_freed}바이트"
+                    f"  (바뀜 {res.changed}, 없음 {res.gone}, 최근 {res.too_new},"
+                    f" 보호 {res.protected}, 원격없음 {res.missing_remote},"
+                    f" 오류 {res.errors}) ==\n")
+            else:
+                self.fh.write("== 중간에 멈춤 ==\n")
+        finally:
+            self.fh.close()
+            self.fh = None
+
+
+def _keep_path(res: PruneResult, rel: str) -> None:
+    if len(res.paths) < KEEP_PATHS:
+        res.paths.append(rel)
+
+
+def _sig(st: os.stat_result) -> tuple[int, int]:
+    return st.st_size, st.st_mtime_ns
 
 
 def _judge(row: PendingRow, *, home_r: Path, guard: list[Path], remote: _Remote,
            now: datetime, min_age: timedelta,
-           res: PruneResult) -> tuple[str, Path | None, str]:
+           res: PruneResult) -> tuple[str, Path | None, str, tuple[int, int] | None]:
     """항목 하나를 판정합니다.
 
-    ('delete', 실제경로, 홈 기준 실제 상대경로) | ('drop', None, '') | ('keep', None, '').
+    ('delete', 실제경로, 홈 기준 실제 상대경로, 해시 직전의 (크기, mtime))
+    | ('drop', None, '', None) | ('keep', None, '', None).
     """
     rel = safe_rel(row.path)
     if rel is None or str(rel) != row.path:
         log.error("이상한 경로라 지우지 않고 목록에서 뺍니다: %r", row.path)
         res.errors += 1
-        return "drop", None, ""
+        return "drop", None, "", None
 
     if not remote.ok(row):
         res.missing_remote += 1
-        return "keep", None, ""
+        return "keep", None, "", None
 
     created = _parse_time(row.created_at)
     if created is None or now - created < min_age:
         res.too_new += 1
-        return "keep", None, ""      # 시간이 지나면 지울 수 있게 됩니다
+        return "keep", None, "", None      # 시간이 지나면 지울 수 있게 됩니다
 
     target = home_r.joinpath(*rel.parts)
     try:
         if not _passes_reparse(home_r, rel):
             log.warning("리parse 포인트를 거치는 경로라 건너뜁니다: %s", row.path)
             res.protected += 1
-            return "drop", None, ""
+            return "drop", None, "", None
         st = target.lstat()
         if not stat.S_ISREG(st.st_mode) or is_cloud_placeholder(st):
             res.protected += 1
-            return "drop", None, ""
+            return "drop", None, "", None
         real = target.resolve(strict=True)
         if not _inside(real, home_r) or real == home_r:
             log.error("홈 밖을 가리켜 지우지 않습니다: %s -> %s", row.path, real)
             res.errors += 1
-            return "drop", None, ""
+            return "drop", None, "", None
         # Win32 별칭: 'a.' / 'a ' / 8.3 짧은 이름은 다른 이름의 파일을 엽니다.
         # 실제 이름이 항목의 경로와 같아야만 그 파일입니다.
         real_rel = real.relative_to(home_r).as_posix()
@@ -380,21 +444,25 @@ def _judge(row: PendingRow, *, home_r: Path, guard: list[Path], remote: _Remote,
             log.error("항목 경로와 실제 파일 이름이 달라 지우지 않습니다: %s -> %s",
                       row.path, real_rel)
             res.errors += 1
-            return "drop", None, ""
+            return "drop", None, "", None
         if _protected(real, guard):
             res.protected += 1
-            return "drop", None, ""
+            return "drop", None, "", None
         if st.st_size != row.size or sha256_file(real) != row.sha256:
             res.changed += 1         # 새 내용은 다음 백업이 올립니다
-            return "drop", None, ""
+            return "drop", None, "", None
+        # 해시를 읽는 도중 바뀐 것도 잡습니다.
+        if _sig(real.stat()) != _sig(st):
+            res.changed += 1
+            return "drop", None, "", None
     except FileNotFoundError:
         res.gone += 1
-        return "drop", None, ""
+        return "drop", None, "", None
     except OSError as exc:
         log.warning("확인하지 못했습니다: %s (%s)", row.path, exc)
         res.errors += 1
-        return "keep", None, ""
-    return "delete", real, real_rel
+        return "keep", None, "", None
+    return "delete", real, real_rel, _sig(st)
 
 
 def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine: str,
@@ -436,19 +504,28 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
     remote = _Remote(uploader)
     min_age = timedelta(hours=float(min_age_hours))
     removed = 0
+    plog = _PruneLog(layout, now=now, head=head, seq=head_seq)
 
     try:
         for row in state.iter_pending():
-            verdict, real, real_rel = _judge(row, home_r=home_r, guard=guard, remote=remote,
-                                   now=now, min_age=min_age, res=res)
+            verdict, real, real_rel, sig = _judge(row, home_r=home_r, guard=guard,
+                                                  remote=remote, now=now, min_age=min_age,
+                                                  res=res)
             if verdict == "keep":
                 continue
             if verdict == "delete":
                 if dry_run:
                     res.would_delete += 1
-                    res.paths.append(real_rel)
+                    _keep_path(res, real_rel)
                     continue
                 try:
+                    # 해시를 본 뒤 지우기 직전까지 누가 저장했으면 지우지 않습니다.
+                    # (창은 아주 짧게 남습니다 — 핸들을 쥐고 지우는 방식은 아님)
+                    if _sig(real.lstat()) != sig:
+                        res.changed += 1
+                        state.remove_pending([row.path])
+                        removed += 1
+                        continue
                     _unlink(real)
                 except FileNotFoundError:
                     res.gone += 1
@@ -459,7 +536,8 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
                 else:
                     res.deleted += 1
                     res.bytes_freed += row.size
-                    res.paths.append(real_rel)      # 실제로 지운 이름
+                    _keep_path(res, real_rel)       # 실제로 지운 이름
+                    plog.add(real_rel)
                     log.debug("지움: %s", real)
             if dry_run:
                 continue
@@ -469,13 +547,12 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
             if removed % COMMIT_EVERY == 0:
                 state.commit()
     except BaseException:
-        # 중간에 죽어도 이미 지운 파일은 기록에 남깁니다. commit 안 된 pending
-        # 은 다음 실행이 'gone' 으로 정리합니다.
-        if not dry_run and res.paths:
-            try:
-                _write_prune_log(layout, now=now, head=head, seq=head_seq, res=res)
-            except OSError:
-                pass
+        # 이미 지운 이름은 한 줄씩 써 두었습니다. commit 안 된 pending 은
+        # 다음 실행이 'gone' 으로 정리합니다.
+        try:
+            plog.close(None)
+        except OSError:
+            pass
         raise
     finally:
         if dry_run:
@@ -484,12 +561,16 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
     if remote.failed_tags:
         res.errors += len(remote.failed_tags)
 
-    # --- 3) 기록 ---
+    # --- 3) 기록 (콘솔은 앞의 KEEP_PATHS 개만, 전부는 home-prune.log) ---
     for d, names in _group(res.paths).items():
         if dry_run:
             log.info("[dry-run] 지울 파일 %s/ (%d개): %s", d, len(names), ", ".join(names))
         else:
             log.info("지웠습니다 %s/ — %d개", d, len(names))
+    shown_of = res.would_delete if dry_run else res.deleted
+    if shown_of > len(res.paths):
+        log.info("  ... 외 %d개 (전체 목록: %s)", shown_of - len(res.paths),
+                 "dry-run 은 목록을 남기지 않습니다" if dry_run else PRUNE_LOG)
     log.info(
         "%s정리 결과: 지움 %d개(%d바이트), 지울 예정 %d개, 바뀜 %d, 없음 %d, 최근 %d, "
         "보호 %d, 원격 없음 %d, 오류 %d",
@@ -500,5 +581,5 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
         return res
 
     state.commit()
-    _write_prune_log(layout, now=now, head=head, seq=head_seq, res=res)
+    plog.close(res)
     return res

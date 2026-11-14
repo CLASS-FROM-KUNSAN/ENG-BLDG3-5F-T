@@ -248,3 +248,17 @@ def test_workflow_substitution_targets_exist(example_config_text):
         "워크플로가 찾는 문자열이 예시 파일에 없습니다: "
         f"{missing}\n.github/workflows/eclass-sync.yml 의 치환부도 같이 고치세요."
     )
+
+
+@pytest.mark.parametrize("value, needle", [
+    ('"*.pem"', "문자열 목록"),          # 문자열 하나 -> list() 가 글자로 쪼갬
+    ('["*.pem", "*"]', "모든 파일"),
+])
+def test_home_exclude_names_that_would_exclude_everything_are_rejected(tmp, value, needle):
+    """재검토 D: 'exclude_names = "*.pem"' 이면 아무것도 안 올리고 성공(exit 0)이었습니다."""
+    path = tmp / "ex.toml"
+    path.write_text('[github]\nowner="o"\nrepo="r"\n[eclass]\nenabled=false\n'
+                    f'[backup.home]\nexclude_names = {value}\n', encoding="utf-8")
+    with pytest.raises(cfgmod.ConfigError) as exc:
+        cfgmod.load(path)
+    assert needle in str(exc.value)

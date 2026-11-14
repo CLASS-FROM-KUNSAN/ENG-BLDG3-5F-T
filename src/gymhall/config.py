@@ -400,6 +400,15 @@ def validate(cfg: Config) -> None:
         errors.append("backup.home.bundle_mb 는 1900 이하로 두세요 (릴리스 에셋 상한 2GiB).")
     if not str(cfg.get("backup.home.tag_prefix", "home")).strip():
         errors.append("backup.home.tag_prefix 가 비어 있습니다")
+    # 문자열 하나로 적으면 list("*.pem") = ['*', '.', 'p', 'e', 'm'] 이 되고,
+    # '*' 가 모든 이름에 맞아서 아무것도 안 올리고 성공으로 끝납니다.
+    excl = cfg.get("backup.home.exclude_names", [])
+    if not isinstance(excl, list) or not all(isinstance(p, str) for p in excl):
+        errors.append('backup.home.exclude_names 는 문자열 목록이어야 합니다 '
+                      '(예: ["*.pem", "node_modules"])')
+    elif any(p.strip() in {"*", "**", "*.*"} for p in excl):
+        errors.append("backup.home.exclude_names 에 모든 파일에 맞는 패턴('*')이 있습니다. "
+                      "그러면 아무것도 백업되지 않습니다.")
 
     split_mb = cfg.get("github.split_size_mb", 1900)
     if isinstance(split_mb, (int, float)) and split_mb > 2000:
