@@ -54,14 +54,15 @@ def _args(**kw):
 
 
 def _backup_result(**kw):
-    base = dict(seq=0, uploaded_files=1, skipped_unchanged=0, failed_bundles=0,
-                unreadable=0, excluded=0, bytes=1, manifest_failed=False, links=1)
+    base = {"seq": 0, "uploaded_files": 1, "skipped_unchanged": 0, "failed_bundles": 0,
+            "unreadable": 0, "excluded": 0, "bytes": 1, "manifest_failed": False,
+            "links": 1}
     base.update(kw)
     return SimpleNamespace(**base)
 
 
 def _prune_result(**kw):
-    base = dict(chain_ok=True, deleted=1, errors=0, missing_remote=0)
+    base = {"chain_ok": True, "deleted": 1, "errors": 0, "missing_remote": 0}
     base.update(kw)
     return SimpleNamespace(**base)
 

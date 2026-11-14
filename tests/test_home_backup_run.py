@@ -802,7 +802,15 @@ def test_a_lone_surrogate_name_does_not_kill_the_run(env, monkeypatch, caplog):
         def __iter__(self):
             return iter([*self._it, *self._extra])
 
-    monkeypatch.setattr(scan_mod.os, "scandir", _It)
+    def _fake_scandir(folder="."):
+        # scan_mod.os 는 전역 os 입니다. 여기서 바꾸면 tempfile/shutil 의
+        # 정리(rmtree 는 fd 정수로 scandir 를 부릅니다)까지 가짜를 탑니다.
+        # 홈 폴더 말고는 진짜로 넘깁니다.
+        if isinstance(folder, (str, os.PathLike)) and Path(folder) == home:
+            return _It(folder)
+        return real(folder)
+
+    monkeypatch.setattr(scan_mod.os, "scandir", _fake_scandir)
     with caplog.at_level("INFO", logger="gymhall"):
         res = _run(env, FakeUploader())
     assert res.ok and res.uploaded_files == 1 and res.unreadable == 1
