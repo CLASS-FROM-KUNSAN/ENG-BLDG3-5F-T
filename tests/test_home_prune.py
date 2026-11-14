@@ -1050,24 +1050,84 @@ def test_home_change_with_no_new_links_deletes_nothing(env):
 
 
 def test_a_save_between_hash_and_delete_is_not_lost(env, monkeypatch):
-    """D3: 해시를 본 직후 저장된 내용은 사본이 어디에도 없습니다."""
+    """D3: 해시를 본 직후 저장된 내용은 사본이 어디에도 없습니다.
+
+    Windows 는 해시부터 지울 때까지 쓰기를 막으므로 저장 자체가 '사용 중'
+    으로 실패합니다(그 프로그램 안에 내용이 남음). 지운 것은 GitHub 에 있는
+    v1 입니다. 다른 OS 는 저장이 되고, 다시 본 크기·시각으로 잡아 남깁니다.
+    """
     home, layout, state, up, chain = env
     f = put(home, "doc.txt", b"v1")
     chain.publish(["doc.txt"])
     chain.anchor(state)
     real_sha = prune.sha256_file
+    blocked = []
 
     def sha_then_save(p):
         h = real_sha(p)
-        Path(p).write_bytes(b"v2-unsaved-edit")
+        try:
+            Path(p).write_bytes(b"v2-unsaved-edit")
+        except PermissionError:
+            blocked.append(p)            # 다른 프로그램의 저장이 막힌 것
+            return h
         st = os.stat(p)
         os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
         return h
 
     monkeypatch.setattr(prune, "sha256_file", sha_then_save)
     res = go(env)
-    assert res.deleted == 0 and res.changed == 1
-    assert f.read_bytes() == b"v2-unsaved-edit"
+    if os.name == "nt":
+        assert blocked, "Windows 에서는 확인~지우기 사이의 저장이 막혀야 합니다"
+        assert res.deleted == 1 and not f.exists()
+    else:
+        assert res.deleted == 0 and res.changed == 1
+        assert f.read_bytes() == b"v2-unsaved-edit"
+
+
+# --- Windows 실제 파일 시스템 -------------------------------------------------
+windows_only = pytest.mark.skipif(os.name != "nt", reason="Windows 공유 모드/NTFS 스트림")
+
+
+@windows_only
+def test_a_file_open_for_writing_is_not_deleted(env):
+    """다른 프로그램이 쓰기로 열고 있으면(저장 중일 수 있음) 지우지 않습니다."""
+    home, layout, state, up, chain = env
+    f = put(home, "open.docx", b"v1")
+    chain.publish(["open.docx"])
+    chain.anchor(state)
+    with open(f, "r+b"):                 # 편집기가 쓰기로 연 상태
+        res = go(env)
+    assert res.deleted == 0 and res.errors == 1 and f.exists()
+    res = go(env)                        # 닫힌 뒤에는 지웁니다(대기 목록에 남아 있음)
+    assert res.deleted == 1 and not f.exists()
+
+
+@windows_only
+def test_a_file_with_an_extra_ntfs_stream_is_not_deleted(env):
+    """대체 데이터 스트림은 백업되지 않으므로 지우면 그 내용이 사라집니다."""
+    home, layout, state, up, chain = env
+    f = put(home, "notes.txt", b"body")
+    with open(str(f) + ":secret", "wb") as fh:
+        fh.write(b"not backed up")
+    chain.publish(["notes.txt"])
+    chain.anchor(state)
+    res = go(env)
+    assert res.deleted == 0 and res.protected == 1 and f.exists()
+    with open(str(f) + ":secret", "rb") as fh:
+        assert fh.read() == b"not backed up"
+
+
+@windows_only
+def test_only_a_zone_identifier_stream_does_not_block_deletion(env):
+    """다운로드 출처 표시(Zone.Identifier)만 있으면 지워도 됩니다."""
+    home, layout, state, up, chain = env
+    f = put(home, "down.pdf", b"pdf")
+    with open(str(f) + ":Zone.Identifier", "w", encoding="ascii") as fh:
+        fh.write("[ZoneTransfer]\nZoneId=3\n")
+    chain.publish(["down.pdf"])
+    chain.anchor(state)
+    res = go(env)
+    assert res.deleted == 1 and not f.exists()
 
 
 def test_a_save_right_before_unlink_is_not_lost(env, monkeypatch):

@@ -31,6 +31,7 @@ from typing import Any
 from ..logging_setup import get as get_logger
 from ..paths import Layout
 from ..state import sha256_file
+from . import winfile
 from .chain import ChainError, Link, entries_of, walk_chain
 from .homestate import HomeState, PendingRow
 from .scan import is_cloud_placeholder, is_reparse_point
@@ -80,6 +81,27 @@ def _is_reparse(path: Path) -> bool:
 def _unlink(path: Path) -> None:
     """테스트가 '지우다 죽는' 상황을 흉내 낼 수 있게 한 곳에 둡니다."""
     path.unlink()
+
+
+def _delete_verified(real: Path, row: PendingRow, sig: tuple[int, int] | None) -> str:
+    """마지막으로 확인하고 지웁니다. 'deleted' | 'changed' | 'streams'.
+
+    Windows: 쓰기를 막고 쥔 뒤에 해시하고, 쥔 채로 지웁니다. 확인과 지우기
+    사이에 누가 저장할 틈이 없습니다(그쪽 저장이 '사용 중' 으로 실패).
+    다른 OS: 크기·수정 시각을 다시 보는 것까지만 합니다(짧은 틈이 남음).
+    """
+    if winfile.extra_streams(real):
+        return "streams"
+    with winfile.write_guard(real):
+        st = real.lstat()
+        if winfile.IS_WINDOWS:
+            # 판정 때의 해시는 쥐기 전이라 믿지 않습니다. 쥔 뒤에 다시 봅니다.
+            if st.st_size != row.size or sha256_file(real) != row.sha256:
+                return "changed"
+        elif sig is None or _sig(st) != sig:
+            return "changed"
+        _unlink(real)
+    return "deleted"
 
 
 def safe_rel(rel: Any) -> PurePosixPath | None:
@@ -400,8 +422,9 @@ def _sig(st: os.stat_result) -> tuple[int, int]:
 
 
 def _judge(row: PendingRow, *, home_r: Path, guard: list[Path], remote: _Remote,
-           now: datetime, min_age: timedelta,
-           res: PruneResult) -> tuple[str, Path | None, str, tuple[int, int] | None]:
+           now: datetime, min_age: timedelta, res: PruneResult,
+           defer_hash: bool = False,
+           ) -> tuple[str, Path | None, str, tuple[int, int] | None]:
     """항목 하나를 판정합니다.
 
     ('delete', 실제경로, 홈 기준 실제 상대경로, 해시 직전의 (크기, mtime))
@@ -448,11 +471,14 @@ def _judge(row: PendingRow, *, home_r: Path, guard: list[Path], remote: _Remote,
         if _protected(real, guard):
             res.protected += 1
             return "drop", None, "", None
-        if st.st_size != row.size or sha256_file(real) != row.sha256:
+        # defer_hash 면 해시는 _delete_verified 가 파일을 쥔 뒤에 봅니다
+        # (같은 파일을 두 번 읽지 않게).
+        if st.st_size != row.size or (not defer_hash
+                                      and sha256_file(real) != row.sha256):
             res.changed += 1         # 새 내용은 다음 백업이 올립니다
             return "drop", None, "", None
         # 해시를 읽는 도중 바뀐 것도 잡습니다.
-        if _sig(real.stat()) != _sig(st):
+        if not defer_hash and _sig(real.stat()) != _sig(st):
             res.changed += 1
             return "drop", None, "", None
     except FileNotFoundError:
@@ -505,12 +531,13 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
     min_age = timedelta(hours=float(min_age_hours))
     removed = 0
     plog = _PruneLog(layout, now=now, head=head, seq=head_seq)
+    defer_hash = winfile.IS_WINDOWS and not dry_run
 
     try:
         for row in state.iter_pending():
             verdict, real, real_rel, sig = _judge(row, home_r=home_r, guard=guard,
                                                   remote=remote, now=now, min_age=min_age,
-                                                  res=res)
+                                                  res=res, defer_hash=defer_hash)
             if verdict == "keep":
                 continue
             if verdict == "delete":
@@ -519,14 +546,17 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
                     _keep_path(res, real_rel)
                     continue
                 try:
-                    # 해시를 본 뒤 지우기 직전까지 누가 저장했으면 지우지 않습니다.
-                    # (창은 아주 짧게 남습니다 — 핸들을 쥐고 지우는 방식은 아님)
-                    if _sig(real.lstat()) != sig:
-                        res.changed += 1
+                    outcome = _delete_verified(real, row, sig)
+                    if outcome != "deleted":
+                        if outcome == "streams":
+                            log.info("NTFS 대체 스트림이 있어 지우지 않습니다"
+                                     "(백업되지 않는 내용): %s", row.path)
+                            res.protected += 1
+                        else:
+                            res.changed += 1     # 새 내용은 다음 백업이 올립니다
                         state.remove_pending([row.path])
                         removed += 1
                         continue
-                    _unlink(real)
                 except FileNotFoundError:
                     res.gone += 1
                 except OSError as exc:
