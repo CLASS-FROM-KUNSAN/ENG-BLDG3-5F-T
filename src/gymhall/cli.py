@@ -268,6 +268,7 @@ def cmd_eclass_sync(args) -> int:
             risky=cfg.section("eclass.risky"),
             menu_id_overrides=cfg.section("eclass.menu_ids"),
             message_boxes=cfg.get("eclass.message_boxes", ["RECEIVE"]),
+            screenshots=bool(cfg.get("eclass.screenshots", True)),
         )
         stats = crawler.run(
             list(cfg.get("eclass.courses", [])),

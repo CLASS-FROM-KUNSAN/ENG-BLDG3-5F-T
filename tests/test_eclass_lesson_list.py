@@ -263,6 +263,14 @@ def test_crawl_lecture_list_writes_markdown_with_every_week(lesson, tmp_path):
     assert text.count("\n## ") == 16, "주차 16개가 다 들어가지 않았습니다"
 
 
+def test_lecture_list_leaves_a_screenshot_next_to_the_md(lesson, tmp_path):
+    """실제 강의목록 화면. .md 옆에 같은 이름의 .png 가 있어야 합니다."""
+    lesson.crawl_lecture_list(C.Course("2026211605005", "과목가", "이교수"))
+    md = next(tmp_path.rglob("강의목록.md"))
+    png = md.with_suffix(".png")
+    assert png.exists() and png.read_bytes()[:4] == b"\x89PNG", "스크린샷이 없습니다"
+
+
 def test_filedown_actually_saves_the_pdf(lesson, tmp_path):
     """클릭이 아니라 주소로 직접 받아 파일이 디스크에 남아야 합니다."""
     SERVER_MODE["mode"] = "pdf"
@@ -535,6 +543,7 @@ def test_crawl_assignments_writes_every_block(assignment, tmp_path):
     md = next(tmp_path.rglob("과제.md"), None)
     assert md is not None, "과제.md 가 만들어지지 않았습니다"
     assert md.read_text(encoding="utf-8").count("\n## ") == 19
+    assert md.with_suffix(".png").exists(), "과제 화면 스크린샷이 없습니다"
 
 
 # --- 엔드포인트와 쿼리 인자를 못으로 박습니다 --------------------------
@@ -679,6 +688,36 @@ def test_a_broken_attachment_selector_still_warns(lesson, monkeypatch, caplog):
         "첨부 선택자가 통째로 고장났는데 조용히 '정상' 으로 분류했습니다"
     )
     assert any("첨부 후보 0개" in m for m in w), w
+
+
+def test_items_without_any_button_are_not_a_warning(lesson, caplog):
+    """2026-11-13 법정의무교육: 항목 1개, 줄 안에 누를 것이 없음(영상만).
+
+    받을 파일이 없는 것이 정상이므로 경고하지 않습니다. 선택자가 고장난
+    경우와는 섞이지 않습니다 — 그때는 줄 안에 버튼이 그대로 있습니다
+    (아래 test_items_without_any_handout_still_warn... 가 그 경우).
+    """
+    lesson.br.page.set_content(
+        '<div id="listBox"><dl class="element"><dt><h4>1. 1주차</h4></dt>'
+        '<dd><table><tbody><tr><td>1</td><td>성폭력 예방교육</td>'
+        '<td>2026-04-22</td><td>미처리</td><td></td></tr></tbody></table></dd>'
+        '</dl></div>'
+        '<a href="/Main.do?cmd=viewHome">홈</a>'
+        '<input type="image" onclick="searchSubmit();">'
+    )
+    with caplog.at_level("INFO", logger="gymhall"):
+        lesson.crawl_lecture_list(C.Course("CORS_x", "법정교육", "교수"))
+    assert _warnings(caplog) == [], _warnings(caplog)
+    assert any("누를 버튼이 하나도" in r.getMessage() for r in caplog.records)
+
+
+def test_the_warning_shows_the_buttons_inside_the_rows(lesson, monkeypatch, caplog):
+    """화면 전체 덤프는 상단 메뉴로 다 차서 강의 줄이 안 나왔습니다(2026-11-13)."""
+    monkeypatch.setattr(lesson, "_attachment_locators", lambda: None)
+    with caplog.at_level("INFO", logger="gymhall"):
+        lesson.crawl_lecture_list(C.Course("2026211605005", "과목가", "이교수"))
+    w = _warnings(caplog)
+    assert any("강의 줄 안의 버튼 14개" in m and "fileDown(" in m for m in w), w
 
 
 def test_handouts_found_means_no_diagnostic_noise(lesson, caplog):
