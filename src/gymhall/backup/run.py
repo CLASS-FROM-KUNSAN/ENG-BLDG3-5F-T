@@ -327,9 +327,9 @@ def run_backup(*, home: Path, uploader, state: HomeState, layout: Layout, machin
                 break
             # 이 묶음을 넣으면 상한을 넘으면, 먼저 지금 고리를 닫습니다.
             # 묶음 이름에 seq 가 들어가므로 올리기 전에 정해야 합니다.
-            if cur.entries and len(cur.entries) + len(plan) > max_entries:
-                if not close_link(work):
-                    return stop(manifest_failed=True)
+            if (cur.entries and len(cur.entries) + len(plan) > max_entries
+                    and not close_link(work)):
+                return stop(manifest_failed=True)
             name = bundle_asset(prefix, cur.seq, nonce, cur.next_n)
             cur.next_n += 1
             if exists(name):

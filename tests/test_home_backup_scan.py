@@ -372,5 +372,5 @@ def test_a_lone_surrogate_directory_is_not_descended(tmp_path, monkeypatch):
 def test_default_exclude_names_come_from_config():
     from gymhall.config import DEFAULTS
 
-    assert DEFAULT_EXCLUDE_NAMES == DEFAULTS["backup"]["home"]["exclude_names"]
+    assert DEFAULTS["backup"]["home"]["exclude_names"] == DEFAULT_EXCLUDE_NAMES
     assert DEFAULT_EXCLUDE_NAMES is not DEFAULTS["backup"]["home"]["exclude_names"]
