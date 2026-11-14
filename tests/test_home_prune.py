@@ -1339,3 +1339,32 @@ def test_old_split_chains_are_named_and_skip_the_parts_json_download(env, caplog
     assert res.deleted == 0 and f.exists()
     assert any("옛 분할 묶음" in m for m in caplog.messages), caplog.messages
     assert not any(n.endswith(".parts.json") for n in up.downloads), up.downloads
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows 삭제 방식")
+def test_the_name_is_gone_at_once_even_if_a_reader_shares_delete(env):
+    """5차 검토: 다른 프로그램(미디어 플레이어 등)이 '읽기+삭제 공유' 로 열고
+    있으면, 예전 방식은 그 프로그램이 닫을 때까지 이름이 남아 열지도 같은
+    이름으로 저장하지도 못했습니다. POSIX 방식으로 지워 이름이 바로 사라집니다."""
+    import ctypes
+    from ctypes import wintypes
+
+    home, layout, state, up, chain = env
+    f = put(home, "movie.mp4", b"frames")
+    chain.publish(["movie.mp4"])
+    chain.anchor(state)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                wintypes.HANDLE]
+    k32.CreateFileW.restype = wintypes.HANDLE
+    reader = k32.CreateFileW(str(f), 0x80000000, 0x1 | 0x4, None, 3, 0, None)
+    assert reader not in (None, ctypes.c_void_p(-1).value)
+    try:
+        res = go(env)
+        assert res.deleted == 1
+        assert not f.exists(), "이름이 '삭제 대기' 로 남았습니다"
+        f.write_bytes(b"new save")               # 같은 이름으로 바로 저장할 수 있어야
+        assert f.read_bytes() == b"new save"
+    finally:
+        k32.CloseHandle(wintypes.HANDLE(reader))

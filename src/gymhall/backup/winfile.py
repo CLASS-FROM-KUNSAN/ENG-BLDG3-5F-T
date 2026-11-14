@@ -53,6 +53,12 @@ if IS_WINDOWS:  # pragma: no cover - Windows 에서만
     _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
     _FILE_FLAG_SEQUENTIAL_SCAN = 0x08000000
     _FILE_DISPOSITION_INFO = 4
+    _FILE_DISPOSITION_INFO_EX = 21
+    _FILE_DISPOSITION_FLAG_DELETE = 0x1
+    _FILE_DISPOSITION_FLAG_POSIX_SEMANTICS = 0x2
+    # 확장 방식을 못 쓰는 볼륨/OS 가 돌려주는 오류: 잘못된 함수, 지원 안 함,
+    # 잘못된 인수, 잘못된 정보 클래스.
+    _EX_UNSUPPORTED = {1, 50, 87, 124}
     _INVALID_HANDLE = ctypes.c_void_p(-1).value
     _ERROR_HANDLE_EOF = 38
 
@@ -119,8 +125,25 @@ class DeleteHandle:
             h.update(block)
 
     def mark_delete(self) -> None:
-        """핸들을 닫을 때 지워지게 합니다. 실패하면 OSError(읽기 전용 속성 등)."""
-        flag = ctypes.c_ubyte(1)  # pragma: no cover - Windows 에서만
+        """핸들을 닫을 때 지워지게 합니다. 실패하면 OSError(읽기 전용 속성 등).
+
+        POSIX 방식으로 지웁니다: 핸들을 닫는 순간 이름이 바로 사라집니다.
+        예전 방식(class 4)은 다른 프로그램이 삭제 공유로 열고 있으면 그
+        프로그램이 닫을 때까지 이름이 '삭제 대기' 로 남아, 열지도 같은 이름으로
+        저장하지도 못했습니다(5차 검토 재현). path.unlink(DeleteFileW)가 Win10
+        부터 하던 것과 같습니다. 지원하지 않는 볼륨(FAT 등)에서는 예전 방식.
+        읽기 전용 속성은 무시하지 않습니다(그런 파일은 지우지 않음).
+        """
+        flags = ctypes.c_ulong(  # pragma: no cover - Windows 에서만
+            _FILE_DISPOSITION_FLAG_DELETE | _FILE_DISPOSITION_FLAG_POSIX_SEMANTICS)
+        if _k32.SetFileInformationByHandle(self._handle, _FILE_DISPOSITION_INFO_EX,
+                                           ctypes.byref(flags), ctypes.sizeof(flags)):
+            self.marked = True
+            return
+        err = ctypes.get_last_error()
+        if err not in _EX_UNSUPPORTED:
+            raise OSError(None, ctypes.FormatError(err).strip(), str(self.path), err)
+        flag = ctypes.c_ubyte(1)
         if not _k32.SetFileInformationByHandle(self._handle, _FILE_DISPOSITION_INFO,
                                                ctypes.byref(flag), 1):
             raise _last_error(self.path)
