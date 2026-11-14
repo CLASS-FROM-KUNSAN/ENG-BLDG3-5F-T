@@ -1166,3 +1166,106 @@ def test_prune_does_not_keep_every_deleted_path_in_memory(env, monkeypatch):
     text = (layout.logs / "home-prune.log").read_text(encoding="utf-8")
     assert all(r in text for r in rels), text
     assert "== 끝  지움 10개" in text
+
+
+# ---------------------------------------------------------------------------
+# 3차 검토(2026-11-14)
+# ---------------------------------------------------------------------------
+def test_state_without_a_home_record_is_rechecked_from_scratch(env):
+    """홈 기록이 생기기 전의 상태 파일 + root 변경 = 예전과 같은 D1 구멍.
+
+    대기 목록이 어느 홈 기준인지 모르면 믿지 않고 사슬을 처음부터 다시
+    확인합니다. 사슬의 홈이 지금 홈과 다르므로 아무것도 지우지 않습니다.
+    """
+    home, layout, state, up, chain = env
+    sub = home / "A"
+    a = put(sub, "x.txt", b"data")
+    chain.home = sub
+    chain.publish(["x.txt"])
+    chain.anchor(state)
+    r1 = run_prune(home=sub, uploader=up, state=state, layout=layout, machine=MACHINE,
+                   min_age_hours=10_000, protect=[], dry_run=False, now=NOW)
+    assert r1.too_new == 1
+    state.conn.execute("DELETE FROM meta WHERE key = 'prune_home'")   # 옛 상태 파일
+    state.commit()
+
+    b = put(home, "x.txt", b"data")                                   # 백업된 적 없음
+    r2 = run_prune(home=home, uploader=up, state=state, layout=layout, machine=MACHINE,
+                   min_age_hours=24, protect=[], dry_run=False, now=NOW)
+    assert not r2.chain_ok and r2.deleted == 0
+    assert a.exists() and b.exists()
+    assert pending(state) == {"x.txt"}, "실패했으니 비운 것도 되돌아가야 합니다"
+
+
+def test_state_without_a_home_record_still_prunes_the_same_home(env):
+    """같은 홈이면 다시 확인한 뒤 정상으로 지웁니다(업그레이드 후 첫 정리)."""
+    home, layout, state, up, chain = env
+    f = put(home, "x.txt", b"data")
+    chain.publish(["x.txt"])
+    chain.anchor(state)
+    run_prune(home=home, uploader=up, state=state, layout=layout, machine=MACHINE,
+              min_age_hours=10_000, protect=[], dry_run=False, now=NOW)
+    state.conn.execute("DELETE FROM meta WHERE key = 'prune_home'")
+    state.commit()
+    res = go(env)
+    assert res.chain_ok and res.deleted == 1 and not f.exists()
+    assert state.get_meta(prune.PRUNE_HOME_KEY) is not None
+
+
+def test_prune_log_is_closed_even_if_the_last_commit_fails(env, monkeypatch):
+    """Windows 는 열린 핸들이 파일을 잠급니다."""
+    import sqlite3
+
+    home, layout, state, up, chain = env
+    put(home, "x.txt", b"data")
+    chain.publish(["x.txt"])
+    chain.anchor(state)
+    logs = []
+    real_init = prune._PruneLog.__init__
+
+    def init(self, *a, **k):
+        real_init(self, *a, **k)
+        logs.append(self)
+
+    monkeypatch.setattr(prune._PruneLog, "__init__", init)
+    calls = {"n": 0}
+    real_commit = HomeState.commit
+
+    def commit(self):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise sqlite3.OperationalError("database is locked")
+        return real_commit(self)
+
+    monkeypatch.setattr(HomeState, "commit", commit)
+    with pytest.raises(sqlite3.OperationalError):
+        go(env)
+    assert logs and logs[0].fh is None
+
+
+def test_a_log_write_failure_does_not_stop_pruning(env, monkeypatch):
+    home, layout, state, up, chain = env
+    for r in ("a.txt", "b.txt"):
+        put(home, r, r.encode())
+    chain.publish(["a.txt", "b.txt"])
+    chain.anchor(state)
+
+    def broken(self, rel):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(prune._PruneLog, "add", broken)
+    res = go(env)
+    assert res.deleted == 2
+
+
+def test_old_split_chains_are_named_and_skip_the_parts_json_download(env, caplog):
+    """조각 해시가 없는 옛 분할 묶음: '없음' 과 다른 말로, 받을 것도 받지 않고."""
+    home, layout, state, up, chain = env
+    f = put(home, "big.bin", b"x" * 10)
+    chain.publish(["big.bin"], parts=2, part_hashes=False)
+    chain.anchor(state)
+    with caplog.at_level("WARNING", logger="gymhall"):
+        res = go(env)
+    assert res.deleted == 0 and f.exists()
+    assert any("옛 분할 묶음" in m for m in caplog.messages), caplog.messages
+    assert not any(n.endswith(".parts.json") for n in up.downloads), up.downloads

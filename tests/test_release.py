@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -986,3 +987,26 @@ def test_download_asset_without_id_is_an_error():
     with pytest.raises(ReleaseError):
         up.download_asset({"name": "x"})
     assert session.calls == []
+
+
+def test_a_disk_full_split_leaves_no_parts_behind(tmp_path, monkeypatch):
+    """3차 검토: 쪼개다 실패하면 이미 쓴 조각이 남아 꽉 찬 디스크를 더 채웠습니다."""
+    from gymhall import release as rel
+
+    src = tmp_path / "big.zip"
+    src.write_bytes(b"x" * 3000)
+    work = tmp_path / "w"
+    calls = {"n": 0}
+    real_open = Path.open
+
+    def flaky(self, mode="r", *a, **k):
+        if "wb" in mode and ".part" in self.name:
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError(28, "No space left on device")
+        return real_open(self, mode, *a, **k)
+
+    monkeypatch.setattr(Path, "open", flaky)
+    with pytest.raises(OSError):
+        rel.split_file(src, work, 1000)
+    assert list(work.iterdir()) == []

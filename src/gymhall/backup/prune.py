@@ -231,6 +231,15 @@ def _verify(state: HomeState, uploader, machine: str,
         raise ChainError(
             f"정리 대기 목록은 다른 홈 기준입니다: {known_home!r} != {home_s!r}. "
             "backup.home.root 를 바꿨다면 되돌리세요.")
+    stop_at = state.verified()
+    if known_home is None and (stop_at or state.pending_count()):
+        # 홈 기록이 생기기 전의 상태 파일. 대기 목록이 어느 홈 기준인지 알 수
+        # 없으니 믿지 않습니다 — 비우고 사슬을 처음부터 다시 확인합니다(고리마다
+        # 홈을 맞춤). 이 구멍으로 백업된 적 없는 파일을 지웠습니다(재검토 재현).
+        # 실패하면 호출자가 rollback 하므로 비운 것도 되돌아갑니다.
+        log.info("정리 상태에 홈 기록이 없어 사슬을 처음부터 다시 확인합니다.")
+        state.clear_pending_and_verified()
+        stop_at = set()
 
     def visit(m: dict[str, Any]) -> None:
         # 고리를 하나씩 받아 바로 넣고 놓아 줍니다(매니페스트 하나에 수만 항목).
@@ -248,7 +257,7 @@ def _verify(state: HomeState, uploader, machine: str,
         count += 1
 
     walk_chain(head, _make_fetch(uploader, fetched), machine=machine,
-               stop_at=state.verified(), visit=visit)
+               stop_at=stop_at, visit=visit)
     state.add_verified(fetched)
     if known_home is None:
         state.set_meta(PRUNE_HOME_KEY, home_s)
@@ -274,6 +283,8 @@ class _Remote:
         self.cache: dict[str, dict[str, tuple[Any, Any]] | None] = {}
         self.verdicts: dict[tuple[str, str], bool] = {}
         self.failed_tags: set[str] = set()
+        # 조각 해시가 생기기 전의 분할 묶음. '없음' 과 구분해 알립니다.
+        self.legacy_split: set[tuple[str, str]] = set()
 
     def _assets(self, tag: str) -> dict[str, tuple[Any, Any]] | None:
         if tag not in self.cache:
@@ -315,18 +326,20 @@ class _Remote:
             a = assets.get(name)
             return (self._has_digest(a) and a[0] == size
                     and a[1] == f"sha256:{row.bundle_sha256}")
+        # 조각마다 GitHub digest 를 **사슬에 적힌** 조각 해시와 맞춥니다.
+        # parts.json 은 같은 업로더가 쓴 것이라 같은 이름으로 덮이면 같이
+        # 바뀝니다. 크기 합만 보면 같은 크기의 다른 조각을 못 가려냅니다.
+        # parts.json 을 내려받기 전에 봅니다(옛 사슬이면 매번 받을 필요 없음).
+        part_sha = row.bundle_part_sha256.split(",") if row.bundle_part_sha256 else []
+        if len(part_sha) != parts or any(len(h) != 64 for h in part_sha):
+            self.legacy_split.add((row.tag, row.bundle))
+            return False             # 조각 해시가 없는 사슬: 확신이 없으니 지우지 않습니다
         info = self._parts_json(row.tag, name)
         if info is None:
             return False
         if (info.get("sha256") != row.bundle_sha256 or info.get("part_count") != parts
                 or info.get("part_prefix") != name or info.get("original_size") != size):
             return False
-        # 조각마다 GitHub digest 를 **사슬에 적힌** 조각 해시와 맞춥니다.
-        # parts.json 은 같은 업로더가 쓴 것이라 같은 이름으로 덮이면 같이
-        # 바뀝니다. 크기 합만 보면 같은 크기의 다른 조각을 못 가려냅니다.
-        part_sha = row.bundle_part_sha256.split(",") if row.bundle_part_sha256 else []
-        if len(part_sha) != parts or any(len(h) != 64 for h in part_sha):
-            return False             # 조각 해시가 없는 사슬: 확신이 없으니 지우지 않습니다
         total = 0
         for i, want in enumerate(part_sha, start=1):
             a = assets.get(f"{name}.part{i:03d}")
@@ -340,7 +353,11 @@ class _Remote:
         key = (row.tag, row.bundle)
         if key not in self.verdicts:
             self.verdicts[key] = self._check(row)
-            if not self.verdicts[key]:
+            if not self.verdicts[key] and key in self.legacy_split:
+                log.warning("조각별 해시가 없는 옛 분할 묶음이라 지우지 않습니다"
+                            "(이 묶음의 파일은 정리되지 않습니다): %s/%s",
+                            row.tag, row.bundle)
+            elif not self.verdicts[key]:
                 log.warning("GitHub 에서 묶음을 확인하지 못했습니다(지우지 않음): %s/%s",
                             row.tag, row.bundle)
         return self.verdicts[key]
@@ -567,7 +584,12 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
                     res.deleted += 1
                     res.bytes_freed += row.size
                     _keep_path(res, real_rel)       # 실제로 지운 이름
-                    plog.add(real_rel)
+                    try:
+                        plog.add(real_rel)
+                    except OSError as exc:
+                        # 이미 지웠습니다. 기록 실패로 정리를 멈추지 않습니다.
+                        log.warning("home-prune.log 에 쓰지 못했습니다: %s (%s)",
+                                    real_rel, exc)
                     log.debug("지움: %s", real)
             if dry_run:
                 continue
@@ -610,6 +632,8 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
     if dry_run:
         return res
 
-    state.commit()
-    plog.close(res)
+    try:
+        state.commit()
+    finally:
+        plog.close(res)              # commit 이 실패해도 로그 파일 핸들은 닫습니다
     return res

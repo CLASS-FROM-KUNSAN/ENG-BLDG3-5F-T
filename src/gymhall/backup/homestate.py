@@ -216,6 +216,11 @@ class HomeState:
             (astuple(r) for r in rows),
         )
 
+    def clear_pending_and_verified(self) -> None:
+        """commit 은 호출자가 합니다."""
+        self.conn.execute("DELETE FROM pending")
+        self.conn.execute("DELETE FROM verified")
+
     def remove_pending(self, paths: Iterable[str]) -> None:
         self.conn.executemany("DELETE FROM pending WHERE path = ?", ((p,) for p in paths))
 

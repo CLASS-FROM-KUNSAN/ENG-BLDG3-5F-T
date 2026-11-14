@@ -118,18 +118,27 @@ def split_file(src: Path, out_dir: Path, chunk_bytes: int) -> list[Part]:
     size = src.stat().st_size
     total = max(1, -(-size // chunk_bytes))  # ceil
     parts: list[Part] = []
-    with src.open("rb") as fh:
-        for idx in range(1, total + 1):
-            part_path = out_dir / f"{src.name}.part{idx:03d}"
-            written = 0
-            with part_path.open("wb") as out:
-                while written < chunk_bytes:
-                    block = fh.read(min(8 * 1024 * 1024, chunk_bytes - written))
-                    if not block:
-                        break
-                    out.write(block)
-                    written += len(block)
-            parts.append(Part(part_path, idx, total))
+    part_path: Path | None = None
+    try:
+        with src.open("rb") as fh:
+            for idx in range(1, total + 1):
+                part_path = out_dir / f"{src.name}.part{idx:03d}"
+                written = 0
+                with part_path.open("wb") as out:
+                    while written < chunk_bytes:
+                        block = fh.read(min(8 * 1024 * 1024, chunk_bytes - written))
+                        if not block:
+                            break
+                        out.write(block)
+                        written += len(block)
+                parts.append(Part(part_path, idx, total))
+    except BaseException:
+        # 쪼개다 디스크가 꽉 차면, 이미 쓴 조각이 남아 남은 공간을 더 줄입니다.
+        # 호출자(홈 백업)는 이 묶음만 실패로 세고 계속하므로 여기서 치웁니다.
+        for p in [*(x.path for x in parts), part_path]:
+            if p is not None:
+                p.unlink(missing_ok=True)
+        raise
     log.info("분할: %s -> %d 조각", src.name, total)
     return parts
 
