@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS pending (
     created_at    TEXT NOT NULL,
     bundle_size   INTEGER NOT NULL,
     bundle_parts  INTEGER NOT NULL,
-    bundle_sha256 TEXT NOT NULL
+    bundle_sha256 TEXT NOT NULL,
+    bundle_part_sha256 TEXT NOT NULL DEFAULT ''
 ) WITHOUT ROWID;
 """
 
@@ -83,6 +84,9 @@ class PendingRow:
     bundle_size: int
     bundle_parts: int
     bundle_sha256: str
+    # 분할 묶음의 조각별 sha256, 쉼표로 이음. 사슬(매니페스트)에서 온 값이라
+    # 같은 이름으로 덮인 조각을 GitHub digest 로 가려낼 수 있습니다.
+    bundle_part_sha256: str = ""
 
 
 _PENDING_COLS = ", ".join(f.name for f in fields(PendingRow))
@@ -104,6 +108,10 @@ class HomeState:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.executescript(_SCHEMA)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(pending)")}
+        if "bundle_part_sha256" not in cols:      # 이 칸 이전에 만든 상태 파일
+            conn.execute("ALTER TABLE pending ADD COLUMN "
+                         "bundle_part_sha256 TEXT NOT NULL DEFAULT ''")
         conn.commit()
         return cls(conn)
 
@@ -123,6 +131,17 @@ class HomeState:
 
     def rollback(self) -> None:
         self.conn.rollback()
+
+    # -- meta ------------------------------------------------------------
+    def get_meta(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return None if row is None else str(row[0])
+
+    def set_meta(self, key: str, value: str) -> None:
+        """commit 은 호출자가 합니다(정리의 트랜잭션에 묶이도록)."""
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
 
     # -- 설치 ID ---------------------------------------------------------
     def install_id(self) -> str:
@@ -192,7 +211,7 @@ class HomeState:
         updates = ", ".join(f"{c}=excluded.{c}" for c in
                             (f.name for f in fields(PendingRow)) if c != "path")
         self.conn.executemany(
-            f"INSERT INTO pending ({_PENDING_COLS}) VALUES ({', '.join('?' * 12)}) "
+            f"INSERT INTO pending ({_PENDING_COLS}) VALUES ({', '.join('?' * len(fields(PendingRow)))}) "
             f"ON CONFLICT(path) DO UPDATE SET {updates} WHERE excluded.seq >= pending.seq",
             (astuple(r) for r in rows),
         )

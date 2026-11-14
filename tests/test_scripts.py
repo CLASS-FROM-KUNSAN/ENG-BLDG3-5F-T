@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import codecs
 import re
 from pathlib import Path
 
@@ -17,7 +18,7 @@ BATS = sorted(SCRIPTS.glob("*.bat"))
 
 
 def read(name: str) -> str:
-    return (SCRIPTS / name).read_text(encoding="utf-8")
+    return (SCRIPTS / name).read_text(encoding="utf-8-sig")
 
 
 # ---------------------------------------------------------------------------
@@ -134,3 +135,18 @@ def test_every_markdown_link_to_a_repo_file_resolves():
                 continue
             bad.append(f"{md.relative_to(root)} -> {target}")
     assert not bad, "깨진 문서 링크:\n  " + "\n  ".join(bad)
+
+
+# ---------------------------------------------------------------------------
+# 한글이 든 .ps1 은 UTF-8 BOM 이 있어야 합니다.
+#   Windows PowerShell 5.1(강의실 PC 의 'powershell -File') 은 BOM 없는 파일을
+#   cp949 로 읽습니다. register_tasks.ps1 이 162줄에서 '문자열 끝이 없습니다'
+#   로 멈춰 예약 작업을 아예 못 만들었습니다(재검토에서 재현). CI 의 pwsh(7)
+#   는 UTF-8 로 읽어서 통과했습니다.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("path", sorted(SCRIPTS.glob("*.ps1")), ids=lambda p: p.name)
+def test_non_ascii_powershell_scripts_have_a_utf8_bom(path: Path):
+    data = path.read_bytes()
+    if all(b < 128 for b in data):
+        return
+    assert data.startswith(codecs.BOM_UTF8), f"{path.name}: 한글이 있는데 UTF-8 BOM 이 없습니다"

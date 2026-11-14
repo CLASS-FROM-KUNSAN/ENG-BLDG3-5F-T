@@ -95,7 +95,7 @@ class Chain:
                 tag: str = TAG, created_at: str = OLD, machine: str = MACHINE,
                 upload_bundle: bool = True, bundle_size: int | None = None,
                 parts: int = 0, seq: int | None = None, home: str | None = None,
-                bundle_sha: str | None = None) -> dict:
+                bundle_sha: str | None = None, part_hashes: bool = True) -> dict:
         seq = self.seq + 1 if seq is None else seq
         bname = f"{machine}-home-{seq:06d}-000.zip"
         if entries is None:
@@ -105,6 +105,7 @@ class Chain:
                 entries.append(Entry(r, len(data), 0, sha(data), bname, r))
         zsize = 1000 + seq
         zsha = sha(bname.encode()) if bundle_sha is None else bundle_sha  # 가짜 zip 해시
+        part_sha = [sha(f"{bname}{i}".encode()) for i in range(1, parts + 1)]
         if upload_bundle:
             if parts:
                 info = {"original_name": bname, "original_size": zsize, "sha256": zsha,
@@ -114,7 +115,7 @@ class Chain:
                 for i in range(1, parts + 1):
                     sz = each if i < parts else zsize - each * (parts - 1)
                     self.up.add_asset(tag, f"{bname}.part{i:03d}", size=sz,
-                                      sha256=sha(f"{bname}{i}".encode()))
+                                      sha256=part_sha[i - 1])
             else:
                 self.up.add_asset(tag, bname, size=zsize if bundle_size is None else bundle_size,
                                   sha256=zsha)
@@ -122,7 +123,8 @@ class Chain:
             machine=machine, seq=seq, prev=self.head, tag=tag,
             home=str(self.home.resolve()) if home is None else home,
             created_at=created_at,
-            bundles=[{"asset": bname, "size": zsize, "sha256": zsha, "parts": parts}],
+            bundles=[{"asset": bname, "size": zsize, "sha256": zsha, "parts": parts,
+                      **({"part_sha256": part_sha} if parts and part_hashes else {})}],
             entries=entries)
         data = canonical_bytes(m)
         mname = f"{machine}-home-chain-{seq:06d}.json"
@@ -348,9 +350,37 @@ def test_split_bundle_needs_every_part(env):
     assert res.missing_remote == 1 and f.exists()
 
     up.add_asset(TAG, f"{bname}.part002", size=500,      # 1000 = 500 + 500
-                 sha256="2" * 64)
+                 sha256=sha(f"{bname}2".encode()))         # 사슬에 적힌 그 조각
     res = go(env)
     assert res.deleted == 1 and not f.exists()
+
+
+def test_a_same_size_part_with_other_bytes_keeps_the_file(env):
+    """검토 재현: 크기만 같은 다른 조각으로 바뀌어도 예전에는 지웠습니다.
+
+    parts.json 은 그대로 두고 조각 하나만 바꿉니다. 사슬에 적힌 조각
+    해시와 GitHub digest 가 다르면 지우지 않습니다.
+    """
+    home, layout, state, up, chain = env
+    f = put(home, "big.bin", b"x" * 10)
+    chain.publish(["big.bin"], parts=2)
+    chain.anchor(state)
+    bname = f"{MACHINE}-home-000000-000.zip"
+    up.remove_asset(TAG, f"{bname}.part001")
+    up.add_asset(TAG, f"{bname}.part001", size=500, sha256="f" * 64)
+    res = go(env)
+    assert res.deleted == 0 and res.missing_remote == 1 and f.exists()
+
+
+def test_a_chain_without_part_hashes_never_deletes_split_files(env):
+    """조각 해시가 없는 사슬(이 수정 전 형식)은 확신이 없으니 지우지 않습니다."""
+    home, layout, state, up, chain = env
+    f = put(home, "big.bin", b"x" * 10)
+    m = chain.publish(["big.bin"], parts=2, part_hashes=False)
+    assert "part_sha256" not in m["bundles"][0]
+    chain.anchor(state)
+    res = go(env)
+    assert res.deleted == 0 and res.missing_remote == 1 and f.exists()
 
 
 def test_split_bundle_parts_must_add_up_to_bundle_size(env):
@@ -991,3 +1021,88 @@ def test_crash_mid_deletion_is_harmless_next_run(env, monkeypatch):
     assert len(unlinked) == len(set(unlinked)) == 7     # 두 번 지운 것은 없습니다
     assert pending(state) == set()
     assert all(not (home / n).exists() for n in names)
+
+
+# ---------------------------------------------------------------------------
+# 재검토(2026-11-14)에서 재현된 것들 — 이제는 지우지 않아야 합니다
+# ---------------------------------------------------------------------------
+def test_home_change_with_no_new_links_deletes_nothing(env):
+    """D1: 새 고리가 없으면 홈 비교가 한 번도 안 돌던 구멍.
+
+    home/A 로 확인만 하고(너무 최근이라 대기), root 를 home 으로 바꾼 뒤
+    다시 돌리면 예전에는 home/x.txt(백업된 적 없음)를 지웠습니다.
+    """
+    home, layout, state, up, chain = env
+    sub = home / "A"
+    a = put(sub, "x.txt", b"data")
+    chain.home = sub
+    chain.publish(["x.txt"])
+    chain.anchor(state)
+    r1 = run_prune(home=sub, uploader=up, state=state, layout=layout, machine=MACHINE,
+                   min_age_hours=10_000, protect=[], dry_run=False, now=NOW)
+    assert r1.too_new == 1 and r1.deleted == 0
+
+    b = put(home, "x.txt", b"data")
+    r2 = run_prune(home=home, uploader=up, state=state, layout=layout, machine=MACHINE,
+                   min_age_hours=24, protect=[], dry_run=False, now=NOW)
+    assert not r2.chain_ok and r2.deleted == 0
+    assert a.exists() and b.exists()
+
+
+def test_a_save_between_hash_and_delete_is_not_lost(env, monkeypatch):
+    """D3: 해시를 본 직후 저장된 내용은 사본이 어디에도 없습니다."""
+    home, layout, state, up, chain = env
+    f = put(home, "doc.txt", b"v1")
+    chain.publish(["doc.txt"])
+    chain.anchor(state)
+    real_sha = prune.sha256_file
+
+    def sha_then_save(p):
+        h = real_sha(p)
+        Path(p).write_bytes(b"v2-unsaved-edit")
+        st = os.stat(p)
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+        return h
+
+    monkeypatch.setattr(prune, "sha256_file", sha_then_save)
+    res = go(env)
+    assert res.deleted == 0 and res.changed == 1
+    assert f.read_bytes() == b"v2-unsaved-edit"
+
+
+def test_a_save_right_before_unlink_is_not_lost(env, monkeypatch):
+    """D3: 판정이 끝난 뒤 지우기 직전에 저장돼도 지우지 않습니다."""
+    home, layout, state, up, chain = env
+    f = put(home, "doc.txt", b"v1")
+    chain.publish(["doc.txt"])
+    chain.anchor(state)
+    real_judge = prune._judge
+
+    def judge_then_save(row, **kw):
+        out = real_judge(row, **kw)
+        if out[0] == "delete":
+            f.write_bytes(b"v2-unsaved-edit")
+            st = os.stat(f)
+            os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+        return out
+
+    monkeypatch.setattr(prune, "_judge", judge_then_save)
+    res = go(env)
+    assert res.deleted == 0 and res.changed == 1
+    assert f.read_bytes() == b"v2-unsaved-edit"
+
+
+def test_prune_does_not_keep_every_deleted_path_in_memory(env, monkeypatch):
+    """B: 지운 이름은 바로 로그로. 메모리에는 앞의 KEEP_PATHS 개만."""
+    home, layout, state, up, chain = env
+    monkeypatch.setattr(prune, "KEEP_PATHS", 3)
+    rels = [f"d/f{i:02d}.txt" for i in range(10)]
+    for r in rels:
+        put(home, r, r.encode())
+    chain.publish(rels)
+    chain.anchor(state)
+    res = go(env)
+    assert res.deleted == 10 and len(res.paths) == 3
+    text = (layout.logs / "home-prune.log").read_text(encoding="utf-8")
+    assert all(r in text for r in rels), text
+    assert "== 끝  지움 10개" in text

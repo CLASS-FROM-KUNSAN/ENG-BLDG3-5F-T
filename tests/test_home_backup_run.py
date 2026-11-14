@@ -71,7 +71,10 @@ class FakeUploader:
         if self.split_over and len(data) > self.split_over:
             assets = [{"name": f"{name}.part{i:03d}", "size": 1} for i in (1, 2)]
             assets.append({"name": f"{name}.parts.json", "size": 1})
-            return {"tag": tag, "assets": assets, "split": True, "sha256": digest}
+            parts = [{"name": f"{name}.part{i:03d}", "size": 1,
+                      "sha256": f"{i:x}" * 64} for i in (1, 2)]
+            return {"tag": tag, "assets": assets, "split": True, "sha256": digest,
+                    "parts": parts}
         return {"tag": tag, "assets": [{"name": name, "size": len(data)}],
                 "split": False, "sha256": digest}
 
@@ -828,3 +831,77 @@ def test_gymhall_log_lists_at_most_20_folders_per_link(env, caplog):
     assert any("외 5개 폴더" in m for m in caplog.messages)
     text = (layout.logs / CHAIN_LOG).read_text(encoding="utf-8")
     assert all(f"f{i:02d}/" in text for i in range(25)), "체인 로그에는 전부 있어야 합니다"
+
+
+# ---------------------------------------------------------------------------
+# 재검토(2026-11-14)에서 재현된 것들
+# ---------------------------------------------------------------------------
+def _two_bundles(home):
+    _w(home / "a/1.bin", b"a" * (MiB // 2 + 1))
+    _w(home / "b/2.bin", b"b" * (MiB // 2 + 1))
+
+
+def test_disk_full_while_zipping_fails_one_bundle_not_the_run(env, monkeypatch):
+    """A: 묶음을 쓰다 디스크가 꽉 차면(OSError) 예전에는 실행 전체가 죽었고,
+    이미 올린 묶음은 사슬에 안 붙은 채 매일 같은 자리에서 다시 죽었습니다."""
+    import errno
+
+    import gymhall.backup.run as run_mod
+
+    home, _, store = env
+    _two_bundles(home)
+    real = run_mod.write_bundle
+
+    def full(home_, plan, zpath):
+        if zpath.name.endswith("-002.zip"):
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(home_, plan, zpath)
+
+    monkeypatch.setattr(run_mod, "write_bundle", full)
+    up = FakeUploader()
+    res = _run(env, up, bundle_mb=1)
+    assert res.failed_bundles == 1 and res.seq == 0 and not res.ok
+    m = parse_manifest(up.fetch(_head(store)), expect=_head(store))
+    assert [e.path for e in entries_of(m)] == ["a/1.bin"]
+    assert _paths(store) == {"a/1.bin"}, "올라간 묶음은 사슬과 상태에 남아야 합니다"
+
+
+def test_disk_full_while_splitting_fails_one_bundle_not_the_run(env):
+    """A: 2GB 를 넘는 묶음은 조각을 쓰느라 원본의 두 배가 필요합니다."""
+    import errno
+
+    home, _, store = env
+    _two_bundles(home)
+
+    class Full(FakeUploader):
+        def upload(self, path, tag, **kw):
+            if Path(path).name.endswith("-002.zip"):
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return super().upload(path, tag, **kw)
+
+    up = Full()
+    res = _run(env, up, bundle_mb=1)
+    assert res.failed_bundles == 1 and res.seq == 0 and not res.ok
+    m = parse_manifest(up.fetch(_head(store)), expect=_head(store))
+    assert [e.path for e in entries_of(m)] == ["a/1.bin"]
+
+
+def test_an_existing_split_part_name_is_not_overwritten(env):
+    """D2: 분할되면 실제 에셋은 name.partNNN 입니다. zip 이름만 보면 지나갑니다."""
+    home, _, store = env
+    _w(home / "a.txt")
+    up = FakeUploader()
+    up.assets[("home-2026-11-13", "pc1_home-000000-n1-001.zip.part001")] = b"other pc"
+    res = _run(env, up)
+    assert res.failed_bundles == 1 and not res.ok
+    assert up.assets[("home-2026-11-13", "pc1_home-000000-n1-001.zip.part001")] == b"other pc"
+
+
+def test_split_bundles_carry_each_part_hash_into_the_chain(env):
+    """D2: 정리가 조각마다 GitHub digest 와 맞출 수 있게 사슬에 적습니다."""
+    home, _, store = env
+    _w(home / "x.bin", os.urandom(200_000))
+    up = FakeUploader(split_over=1000)
+    _run(env, up)
+    m = parse_manifest(up.fetch(_head(store)), expect=_head(store))
+    assert m["bundles"][0]["part_sha256"] == ["1" * 64, "2" * 64]

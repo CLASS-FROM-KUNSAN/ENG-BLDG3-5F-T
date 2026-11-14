@@ -299,16 +299,22 @@ def run_backup(*, home: Path, uploader, state: HomeState, layout: Layout, machin
 
     def exists(name: str) -> bool:
         """같은 이름이 이미 있으면 올리지 않습니다. 업로더는 같은 이름을 지우고
-        교체하므로, 그게 이미 사슬에 붙은 것이면 정리가 유일한 사본을 지웁니다."""
-        try:
-            found = uploader.find_asset(tag, name)
-        except ReleaseError as exc:
-            log.error("에셋 목록을 확인하지 못해 올리지 않습니다: %s -> %s", name, exc)
-            return True
-        if found:
-            log.error("같은 이름의 에셋이 이미 있습니다. 덮어쓰지 않고 실패로 셉니다: %s/%s",
-                      tag, name)
-            return True
+        교체하므로, 그게 이미 사슬에 붙은 것이면 정리가 유일한 사본을 지웁니다.
+
+        분할되면 실제 에셋은 name.partNNN / name.parts.json 입니다. zip 이름만
+        보면 분할 묶음끼리는 이 확인을 지나갑니다(검토에서 지적). 첫 조각과
+        parts.json 까지 봅니다 — 조각 수가 달라도 첫 조각은 항상 있습니다.
+        """
+        for candidate in (name, f"{name}.part001", f"{name}.parts.json"):
+            try:
+                found = uploader.find_asset(tag, candidate)
+            except ReleaseError as exc:
+                log.error("에셋 목록을 확인하지 못해 올리지 않습니다: %s -> %s", candidate, exc)
+                return True
+            if found:
+                log.error("같은 이름의 에셋이 이미 있습니다. 덮어쓰지 않고 실패로 셉니다: %s/%s",
+                          tag, candidate)
+                return True
         return False
 
     def stop(**kw) -> BackupResult:
@@ -338,7 +344,18 @@ def run_backup(*, home: Path, uploader, state: HomeState, layout: Layout, machin
                 consecutive += 1
                 continue
             zpath = work / name
-            out = write_bundle(home, plan, zpath)
+            try:
+                out = write_bundle(home, plan, zpath)
+            except OSError as exc:
+                # 디스크가 꽉 찬 경우 등. 예전에는 여기서 실행 전체가 죽었고,
+                # 이미 올린 묶음은 사슬에 안 붙은 채 매일 같은 자리에서 다시
+                # 죽었습니다(검토에서 재현). 이 묶음만 실패로 세고 계속합니다.
+                zpath.unlink(missing_ok=True)
+                cur.failed += 1
+                failed_total += 1
+                consecutive += 1
+                log.error("묶음을 만들지 못했습니다: %s (%d개 파일) -> %s", name, len(plan), exc)
+                continue
             for path, reason in out.unreadable:
                 unreadable.add(path, reason)
             if not out.packed:
@@ -348,7 +365,8 @@ def run_backup(*, home: Path, uploader, state: HomeState, layout: Layout, machin
             try:
                 # 분할 조각도 이 실행의 임시 폴더에 둡니다(업로더가 끝나면 지웁니다).
                 res = uploader.upload(zpath, tag, tmp_dir=work)
-            except ReleaseError as exc:
+            except (ReleaseError, OSError) as exc:
+                # OSError: 분할 조각을 쓰다 디스크가 꽉 찬 경우(원본의 두 배가 필요).
                 zpath.unlink(missing_ok=True)
                 cur.failed += 1
                 failed_total += 1
@@ -358,12 +376,15 @@ def run_backup(*, home: Path, uploader, state: HomeState, layout: Layout, machin
             consecutive = 0
             zsha = str(res.get("sha256") or "") or sha256_file(zpath)
             zpath.unlink(missing_ok=True)
-            parts = 0
+            bundle: dict = {"asset": name, "size": zsize, "sha256": zsha, "parts": 0}
             if res.get("split"):
-                parts = sum(1 for a in res.get("assets", [])
-                            if ".part" in str(a.get("name", ""))
-                            and not str(a.get("name", "")).endswith(".parts.json"))
-            cur.bundles.append({"asset": name, "size": zsize, "sha256": zsha, "parts": parts})
+                part_info = list(res.get("parts") or [])
+                bundle["parts"] = len(part_info)
+                # 조각별 해시를 사슬에 넣습니다. 정리는 parts.json(덮일 수 있음)
+                # 이 아니라 이 값과 GitHub digest 를 맞춥니다.
+                bundle["part_sha256"] = [str(p.get("sha256", "")) for p in part_info]
+            parts = bundle["parts"]
+            cur.bundles.append(bundle)
             # 캐시에는 스캔 때 본 크기/시각을 둡니다. 다음 스캔과 같은 기준으로
             # 비교해야 합니다(읽는 도중 파일이 자랐다면 다음에 다시 올라갑니다).
             scanned = {path: size for path, size, _ in plan}
