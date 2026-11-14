@@ -370,14 +370,19 @@ def _positive(cfg: Config, key: str, errors: list[str], allow_zero: bool = False
 # 이름 몇 개를 넣어 보고 전부 맞으면 '모든 파일' 패턴입니다. 글자 목록으로
 # 막으면 '?*' / '[!~]*' 같은 것이 빠져나갑니다(재검토). 스캔과 같은 규칙
 # (소문자, fnmatchcase)으로 봅니다.
+# '확장자 있는 이름 전부' 도 사실상 전부입니다('*.*' — 4차 검토).
 _EXCLUDE_PROBES = ("a", "x.txt", "documents", "b c.pdf", "과제.hwp", "1")
+_EXCLUDE_PROBES_EXT = ("x.txt", "b c.pdf", "과제.hwp", "report.final.docx", "a.b")
 
 
 def _matches_everything(pattern: str) -> bool:
     import fnmatch
 
     pat = str(pattern).strip().lower()
-    return bool(pat) and all(fnmatch.fnmatchcase(n, pat) for n in _EXCLUDE_PROBES)
+    if not pat:
+        return False
+    return any(all(fnmatch.fnmatchcase(n, pat) for n in probes)
+               for probes in (_EXCLUDE_PROBES, _EXCLUDE_PROBES_EXT))
 
 
 def validate(cfg: Config) -> None:

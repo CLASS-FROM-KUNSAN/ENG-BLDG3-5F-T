@@ -137,7 +137,10 @@ def split_file(src: Path, out_dir: Path, chunk_bytes: int) -> list[Part]:
         # 호출자(홈 백업)는 이 묶음만 실패로 세고 계속하므로 여기서 치웁니다.
         for p in [*(x.path for x in parts), part_path]:
             if p is not None:
-                p.unlink(missing_ok=True)
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass             # 원래 오류를 가리지 않습니다
         raise
     log.info("분할: %s -> %d 조각", src.name, total)
     return parts

@@ -1074,7 +1074,18 @@ def test_a_save_between_hash_and_delete_is_not_lost(env, monkeypatch):
         os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
         return h
 
-    monkeypatch.setattr(prune, "sha256_file", sha_then_save)
+    real_held = prune._hash_held
+
+    def held_then_save(held):
+        h = real_held(held)
+        try:
+            f.write_bytes(b"v2-unsaved-edit")
+        except PermissionError:
+            blocked.append(f)
+        return h
+
+    monkeypatch.setattr(prune, "sha256_file", sha_then_save)      # 다른 OS
+    monkeypatch.setattr(prune, "_hash_held", held_then_save)      # Windows
     res = go(env)
     if os.name == "nt":
         assert blocked, "Windows 에서는 확인~지우기 사이의 저장이 막혀야 합니다"
@@ -1082,6 +1093,65 @@ def test_a_save_between_hash_and_delete_is_not_lost(env, monkeypatch):
     else:
         assert res.deleted == 0 and res.changed == 1
         assert f.read_bytes() == b"v2-unsaved-edit"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows 공유 모드")
+def test_a_rename_and_write_save_between_hash_and_delete_is_not_lost(env, monkeypatch):
+    """4차 검토 재현: '이름 바꾸고 새로 쓰기' 저장(Vim/Emacs/Word).
+
+    쓰기만 막고 경로로 지우던 때는, 다른 프로그램이 doc.txt 를 doc.txt~ 로
+    치우고 새 내용을 doc.txt 에 쓰면 그 새 파일이 지워졌습니다. 이제 쥔
+    동안은 이름 바꾸기도 막히고, 지우기는 쥔 핸들로만 합니다.
+    """
+    home, layout, state, up, chain = env
+    f = put(home, "doc.txt", b"v1")
+    chain.publish(["doc.txt"])
+    chain.anchor(state)
+    real_held = prune._hash_held
+    tried = []
+
+    def held_then_swap(held):
+        h = real_held(held)
+        try:
+            os.rename(f, f.with_name("doc.txt~"))
+            f.write_bytes(b"v2-unsaved-edit")
+            tried.append("swapped")
+        except OSError:
+            tried.append("blocked")
+        return h
+
+    monkeypatch.setattr(prune, "_hash_held", held_then_swap)
+    res = go(env)
+    assert tried == ["blocked"]
+    assert res.deleted == 1 and not f.exists()       # v1(GitHub 에 있음)만 지움
+
+
+@pytest.mark.skipif(os.name != "nt", reason="NTFS 스트림")
+def test_no_stream_can_be_added_while_held(env, monkeypatch):
+    """4차 검토: 쓰기만 막던 핸들로는 쥔 동안 새 스트림(':late')을 붙일 수
+    있었고, 그 내용은 백업 없이 같이 지워졌습니다. 삭제 권한으로 쥐면 새
+    스트림 만들기도 막힙니다. (그래도 스트림 확인은 쥔 뒤에 한 번 더 합니다.)"""
+    home, layout, state, up, chain = env
+    f = put(home, "notes.txt", b"body")
+    chain.publish(["notes.txt"])
+    chain.anchor(state)
+    real_held = prune._hash_held
+    tried = []
+
+    def held_then_stream(held):
+        h = real_held(held)
+        try:
+            with open(str(f) + ":late", "wb") as fh:
+                fh.write(b"not backed up")
+            tried.append("added")
+        except PermissionError:
+            tried.append("blocked")
+        return h
+
+    monkeypatch.setattr(prune, "_hash_held", held_then_stream)
+    res = go(env)
+    assert tried == ["blocked"]
+    assert res.deleted == 1 and not f.exists()
 
 
 # --- Windows 실제 파일 시스템 -------------------------------------------------

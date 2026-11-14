@@ -78,29 +78,52 @@ def _is_reparse(path: Path) -> bool:
     return stat.S_ISLNK(st.st_mode) or is_reparse_point(st)
 
 
+# 지금 쥐고 있는 삭제 핸들(Windows). _unlink 는 경로만 받지만(테스트가 바꿔
+# 끼우는 자리), 쥔 파일이면 경로가 아니라 이 핸들로 지웁니다.
+_HELD: winfile.DeleteHandle | None = None
+
+
 def _unlink(path: Path) -> None:
     """테스트가 '지우다 죽는' 상황을 흉내 낼 수 있게 한 곳에 둡니다."""
-    path.unlink()
+    if _HELD is not None and _HELD.path == path:
+        _HELD.mark_delete()          # 경로를 다시 쓰지 않습니다(바꿔치기 방지)
+    else:
+        path.unlink()
+
+
+def _hash_held(held: winfile.DeleteHandle) -> str:
+    """쥔 핸들로 해시합니다. 테스트가 '해시 직후 저장' 을 흉내 내는 자리."""
+    return held.sha256()
 
 
 def _delete_verified(real: Path, row: PendingRow, sig: tuple[int, int] | None) -> str:
     """마지막으로 확인하고 지웁니다. 'deleted' | 'changed' | 'streams'.
 
-    Windows: 쓰기를 막고 쥔 뒤에 해시하고, 쥔 채로 지웁니다. 확인과 지우기
-    사이에 누가 저장할 틈이 없습니다(그쪽 저장이 '사용 중' 으로 실패).
+    Windows: 읽기만 공유하는 삭제 핸들 하나로 쥐고, 그 핸들로 해시하고, 그
+    핸들에 삭제를 표시합니다. 그동안 아무도 쓰거나 이름을 바꾸거나 지우지
+    못합니다(그쪽이 '사용 중' 으로 실패). 경로로 다시 열지 않으므로 다른
+    파일로 바꿔치기된 것을 지울 수 없습니다.
     다른 OS: 크기·수정 시각을 다시 보는 것까지만 합니다(짧은 틈이 남음).
     """
-    if winfile.extra_streams(real):
-        return "streams"
-    with winfile.write_guard(real):
-        st = real.lstat()
-        if winfile.IS_WINDOWS:
-            # 판정 때의 해시는 쥐기 전이라 믿지 않습니다. 쥔 뒤에 다시 봅니다.
-            if st.st_size != row.size or sha256_file(real) != row.sha256:
+    global _HELD
+    with winfile.open_for_delete(real) as held:
+        if held is None:
+            if winfile.extra_streams(real):
+                return "streams"
+            if sig is None or _sig(real.lstat()) != sig:
                 return "changed"
-        elif sig is None or _sig(st) != sig:
+            _unlink(real)
+            return "deleted"
+        if held.size() != row.size or _hash_held(held) != row.sha256:
             return "changed"
-        _unlink(real)
+        # 스트림은 쥔 뒤에 봅니다(쥐기 전에 보면 그 사이 붙은 것을 놓침).
+        if winfile.extra_streams(real):
+            return "streams"
+        _HELD = held
+        try:
+            _unlink(real)
+        finally:
+            _HELD = None
     return "deleted"
 
 
@@ -549,6 +572,7 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
     removed = 0
     plog = _PruneLog(layout, now=now, head=head, seq=head_seq)
     defer_hash = winfile.IS_WINDOWS and not dry_run
+    log_broken = False
 
     try:
         for row in state.iter_pending():
@@ -584,12 +608,15 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
                     res.deleted += 1
                     res.bytes_freed += row.size
                     _keep_path(res, real_rel)       # 실제로 지운 이름
-                    try:
-                        plog.add(real_rel)
-                    except OSError as exc:
-                        # 이미 지웠습니다. 기록 실패로 정리를 멈추지 않습니다.
-                        log.warning("home-prune.log 에 쓰지 못했습니다: %s (%s)",
-                                    real_rel, exc)
+                    if not log_broken:
+                        try:
+                            plog.add(real_rel)
+                        except OSError as exc:
+                            # 이미 지웠습니다. 기록 실패로 정리를 멈추지 않습니다.
+                            # 한 번만 알리고 그만 씁니다(66만 줄 경고 방지).
+                            log_broken = True
+                            log.warning("home-prune.log 에 쓰지 못해 이번 정리의 목록 "
+                                        "기록을 멈춥니다: %s", exc)
                     log.debug("지움: %s", real)
             if dry_run:
                 continue

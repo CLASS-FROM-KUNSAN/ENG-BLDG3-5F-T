@@ -256,6 +256,9 @@ def test_workflow_substitution_targets_exist(example_config_text):
     ('["?*"]', "모든 파일"),             # 3차 검토: 글자 목록으로는 빠져나감
     ('["*?"]', "모든 파일"),
     ('["[!~]*"]', "모든 파일"),
+    ('["*.*"]', "모든 파일"),            # 4차 검토: 확장자 있는 이름 전부
+    ('["?*.*"]', "모든 파일"),
+    ('["*.?*"]', "모든 파일"),
 ])
 def test_home_exclude_names_that_would_exclude_everything_are_rejected(tmp, value, needle):
     """재검토 D: 'exclude_names = "*.pem"' 이면 아무것도 안 올리고 성공(exit 0)이었습니다."""
