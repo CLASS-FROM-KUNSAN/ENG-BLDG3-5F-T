@@ -12,6 +12,8 @@
       RecordSchedule  - 로그온 시 시작해 시간표대로 녹화
       RecordWatch     - 로그온 시 시작해 지정 프로그램 감지
       TranscribeQueue - 밤마다 밀린 전사 처리
+      HomeBackup      - 매일 홈 폴더를 GitHub 릴리스에 백업 (config.toml 의 backup.home.enabled)
+      HomePrune       - 매일 백업이 확인된 홈 파일 정리 (config.toml 의 backup.home.prune.enabled)
 
     중요:
       화면 캡처는 로그온된 세션이 있어야 합니다. 그래서 모든 작업을
@@ -21,11 +23,18 @@
 
 .PARAMETER Remove
     등록된 작업을 모두 지웁니다.
+
+.PARAMETER SkipHome
+    HomeBackup / HomePrune 작업을 등록하지 않습니다.
+    등록해도 config.toml 에서 켜지 않으면 아무것도 하지 않습니다.
 #>
 param(
     [switch]$Remove,
     [int]$EclassIntervalHours = 3,
     [string]$TranscribeTime = "02:40",
+    [string]$HomeBackupTime = "03:13",
+    [string]$HomePruneTime = "05:43",
+    [switch]$SkipHome,
     [switch]$SkipWatch,
     [switch]$SkipSchedule
 )
@@ -47,7 +56,7 @@ function Assert-Admin {
 }
 
 function Remove-All {
-    foreach ($name in @("EclassSync","RecordSchedule","RecordWatch","TranscribeQueue")) {
+    foreach ($name in @("EclassSync","RecordSchedule","RecordWatch","TranscribeQueue","HomeBackup","HomePrune")) {
         if (Get-ScheduledTask -TaskPath "$Folder\" -TaskName $name -ErrorAction SilentlyContinue) {
             Unregister-ScheduledTask -TaskPath "$Folder\" -TaskName $name -Confirm:$false
             Write-Host "  삭제: $Folder\$name"
@@ -124,6 +133,19 @@ if (-not $SkipWatch) {
 $t = New-ScheduledTaskTrigger -Daily -At $TranscribeTime
 Register-One "TranscribeQueue" (New-HiddenAction "transcribe_run.bat" @()) $t `
     "밀린 음성 전사를 매일 $TranscribeTime 에 처리합니다."
+
+# --- 홈 백업 / 정리 ---
+# 정리는 백업보다 늦게 돕니다. 지우는 것은 GitHub 에 올라간 사슬이
+# 확인된 파일뿐이고, 둘 다 config.toml 에서 켜야 실제로 일합니다.
+if (-not $SkipHome) {
+    $t = New-ScheduledTaskTrigger -Daily -At $HomeBackupTime
+    Register-One "HomeBackup" (New-HiddenAction "home_backup.bat" @()) $t `
+        "홈 폴더를 매일 $HomeBackupTime 에 GitHub 릴리스로 백업합니다(backup.home.enabled)."
+
+    $t = New-ScheduledTaskTrigger -Daily -At $HomePruneTime
+    Register-One "HomePrune" (New-HiddenAction "home_prune.bat" @()) $t `
+        "백업이 확인된 홈 파일을 매일 $HomePruneTime 에 정리합니다(backup.home.prune.enabled)."
+}
 
 Write-Host ""
 Write-Host "완료. 작업 스케줄러에서 '$Folder' 폴더를 확인하세요." -ForegroundColor Green

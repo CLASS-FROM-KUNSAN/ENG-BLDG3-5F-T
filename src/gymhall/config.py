@@ -205,6 +205,37 @@ DEFAULTS: dict[str, Any] = {
             "chunk_minutes": 10,
         },
     },
+    # 강의실 PC 의 홈 디렉터리 백업. 기본은 꺼져 있습니다 — Actions 러너가
+    # 예시 설정으로 돌 때 러너의 홈을 올리면 안 됩니다.
+    "backup": {
+        "home": {
+            "enabled": False,
+            "root": "",              # 비우면 %USERPROFILE%
+            "tag_prefix": "home",    # 릴리스 home-2026-11-13
+            "bundle_mb": 1800,
+            "exclude_names": [
+                "ntuser.*",
+                "usrclass.dat*",
+                "PaceKeyChain",
+                ".env",
+                ".env.*",
+                "*.pem",
+                "*.key",
+                "*.pfx",
+                "*.p12",
+                "id_rsa*",
+                "id_ecdsa*",
+                "id_ed25519*",
+                "id_dsa*",
+                "*.kdbx",
+                "config.toml",
+            ],
+            "prune": {
+                "enabled": False,
+                "min_age_hours": 24,
+            },
+        },
+    },
 }
 
 
@@ -362,6 +393,13 @@ def validate(cfg: Config) -> None:
     _positive(cfg, "recording.segment_minutes", errors, allow_zero=True)
     _positive(cfg, "eclass.request_delay_sec", errors, allow_zero=True)
     _positive(cfg, "transcribe.realtime.chunk_sec", errors)
+    _positive(cfg, "backup.home.bundle_mb", errors)
+    _positive(cfg, "backup.home.prune.min_age_hours", errors, allow_zero=True)
+    bundle_mb = cfg.get("backup.home.bundle_mb", 1800)
+    if isinstance(bundle_mb, (int, float)) and bundle_mb > 1900:
+        errors.append("backup.home.bundle_mb 는 1900 이하로 두세요 (릴리스 에셋 상한 2GiB).")
+    if not str(cfg.get("backup.home.tag_prefix", "home")).strip():
+        errors.append("backup.home.tag_prefix 가 비어 있습니다")
 
     split_mb = cfg.get("github.split_size_mb", 1900)
     if isinstance(split_mb, (int, float)) and split_mb > 2000:
@@ -449,6 +487,19 @@ def warnings_for(cfg: Config) -> list[str]:
         notes.append(
             "segment_minutes = 0 이라 녹화가 한 파일로 저장됩니다. "
             "2GiB 를 넘으면 릴리스 업로드 시 분할되고, 중간에 뻗으면 전부 잃습니다."
+        )
+
+    if cfg.get("backup.home.enabled") and cfg.get("backup.home.exclude_names") == []:
+        notes.append(
+            "backup.home.exclude_names 가 비어 있습니다. 레지스트리(NTUSER.DAT), "
+            "개인 키(*.pem, id_rsa) 등도 올라갑니다."
+        )
+
+    if cfg.get("backup.home.prune.enabled"):
+        hours = cfg.get("backup.home.prune.min_age_hours", 24)
+        notes.append(
+            "홈 정리가 켜져 있습니다. GitHub 사슬로 확인된 파일은 로컬에서 지워집니다 "
+            f"(올린 뒤 {hours}시간 이후)."
         )
 
     if cfg.get("github.delete_local_after_upload"):

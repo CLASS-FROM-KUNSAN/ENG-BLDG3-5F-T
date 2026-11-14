@@ -896,3 +896,93 @@ def test_a_422_we_cannot_recover_from_is_still_an_error():
     up = _up(script)
     with pytest.raises(ReleaseError, match="보이지 않습니다"):
         up.ensure_repo(create_missing=True)
+
+
+# ---------------------------------------------------------------------------
+# 읽기 전용: get_release / find_asset / download_asset (홈 정리가 씁니다)
+# ---------------------------------------------------------------------------
+class _BytesResponse(FakeResponse):
+    def __init__(self, status: int, content: bytes):
+        super().__init__(status, {})
+        self.content = content
+        self.text = "error" if status >= 400 else ""
+
+
+def test_get_release_never_creates():
+    up, session = make_uploader([lambda n: FakeResponse(404)])
+    assert up.get_release("home-2026-11-13") is None
+    assert [c["method"] for c in session.calls] == ["GET"], "조회만 해야 합니다"
+    assert session.calls[0]["url"].endswith("/releases/tags/home-2026-11-13")
+
+
+def test_get_release_returns_and_caches_found_release():
+    rel = {"id": 7, "tag_name": "t", "upload_url": "https://u/assets{?name}"}
+    up, session = make_uploader([lambda n: FakeResponse(200, rel)])
+    assert up.get_release("t") == rel
+    assert up.get_release("t") == rel
+    assert len(session.calls) == 1
+
+
+def test_get_release_in_dry_run_touches_no_network():
+    up, session = make_uploader(dry_run=True)
+    assert up.get_release("t") is None
+    assert session.calls == []
+
+
+def test_find_asset_by_name():
+    rel = {"id": 7, "tag_name": "t"}
+    assets = [{"id": 1, "name": "a.zip"}, {"id": 2, "name": "pc_home-chain-000000.json"}]
+    up, _ = make_uploader([lambda n: FakeResponse(200, rel),
+                           lambda n: FakeResponse(200, assets)])
+    assert up.find_asset("t", "pc_home-chain-000000.json") == assets[1]
+
+
+def test_find_asset_missing_release_or_name_is_none():
+    up, _ = make_uploader([lambda n: FakeResponse(404)])
+    assert up.find_asset("nope", "a.zip") is None
+
+    rel = {"id": 7, "tag_name": "t"}
+    up2, session = make_uploader([lambda n: FakeResponse(200, rel),
+                                  lambda n: FakeResponse(200, [{"id": 1, "name": "a.zip"}]),
+                                  lambda n: FakeResponse(200, [{"id": 1, "name": "a.zip"}])])
+    assert up2.find_asset("t", "b.zip") is None
+    # 캐시에 없으면 한 번 새로 받아 봅니다.
+    assert sum(1 for c in session.calls if "/assets" in c["url"]) == 2
+
+
+def test_download_asset_returns_raw_bytes_with_octet_stream_accept():
+    payload = b'{"kind":"gymhall-home-chain"}\x00\xff'
+    up, session = make_uploader([lambda n: _BytesResponse(200, payload)])
+    got = up.download_asset({"id": 42, "name": "m.json"})
+    assert got == payload
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"].endswith("/releases/assets/42")
+    assert call["kw"]["headers"]["Accept"] == "application/octet-stream"
+    assert call["kw"].get("allow_redirects") is True
+
+
+def test_download_asset_empty_body_is_empty_bytes_not_dict():
+    """빈 본문을 {} 로 바꾸면 0바이트 에셋이 '정상' 으로 보입니다."""
+    up, _ = make_uploader([lambda n: _BytesResponse(200, b"")])
+    assert up.download_asset({"id": 1}) == b""
+
+
+def test_download_asset_404_is_an_error():
+    up, _ = make_uploader([lambda n: _BytesResponse(404, b"")])
+    with pytest.raises(ReleaseError):
+        up.download_asset({"id": 9, "name": "gone.json"})
+
+
+def test_download_asset_retries_server_errors():
+    up, session = make_uploader([lambda n: _BytesResponse(502, b""),
+                                 lambda n: _BytesResponse(200, b"ok")], retry_count=2)
+    assert up.download_asset({"id": 3}) == b"ok"
+    assert len(session.calls) == 2
+
+
+def test_download_asset_without_id_is_an_error():
+    up, session = make_uploader()
+    with pytest.raises(ReleaseError):
+        up.download_asset({"name": "x"})
+    assert session.calls == []

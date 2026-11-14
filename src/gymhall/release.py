@@ -211,8 +211,12 @@ class ReleaseUploader:
         return self._session
 
     def _request(self, method: str, url: str, *,
-                 data_factory: Callable[[], Any] | None = None, **kwargs) -> Any:
+                 data_factory: Callable[[], Any] | None = None, raw: bool = False,
+                 **kwargs) -> Any:
         """재시도 포함 요청.
+
+        raw 면 JSON 으로 풀지 않고 응답 바이트를 그대로 돌려줍니다(에셋 내려받기).
+        빈 본문도 b"" 그대로입니다 — {} 로 바꾸면 '0바이트 에셋' 이 안 보입니다.
 
         data_factory 를 주면 '시도마다' 새로 호출해 본문을 만듭니다.
         파일 객체를 data= 로 한 번만 넘기면, 첫 시도에서 핸들이 끝까지
@@ -259,6 +263,8 @@ class ReleaseUploader:
                 continue
             if not resp.ok:
                 raise ReleaseError(f"GitHub {method} {url} -> {resp.status_code}: {resp.text[:400]}")
+            if raw:
+                return bytes(resp.content or b"")
             if not resp.content:
                 return {}
             try:
@@ -475,6 +481,60 @@ class ReleaseUploader:
 
         self._asset_cache[rid] = assets
         return assets
+
+    # -- 읽기 전용 -----------------------------------------------------
+    def get_release(self, tag: str) -> dict[str, Any] | None:
+        """릴리스를 조회만 합니다. 없으면 None — 만들지 않습니다.
+
+        정리(prune)는 사슬을 확인하러 가는 길에 릴리스를 만들면 안 됩니다.
+        빈 릴리스가 생기면 '있긴 한데 에셋이 없다' 로 보여 원인을 흐립니다.
+        dry-run 은 네트워크를 건드리지 않으므로 항상 None 입니다.
+        """
+        if self.dry_run:
+            return None
+        if tag in self._release_cache:
+            return self._release_cache[tag]
+        found = self._request("GET", f"{API}/repos/{self.owner}/{self.repo}/releases/tags/{tag}")
+        if not found or not isinstance(found, dict):
+            return None
+        self._release_cache[tag] = found
+        return found
+
+    def find_asset(self, tag: str, name: str) -> dict[str, Any] | None:
+        """tag 릴리스에서 이름이 name 인 에셋. 릴리스나 에셋이 없으면 None.
+
+        목록은 캐시를 씁니다. 캐시에 없으면 한 번 새로 받아 봅니다 —
+        같은 실행 안에서 다른 PC 가 올린 것을 못 보는 일을 줄입니다.
+        """
+        release = self.get_release(tag)
+        if not release:
+            return None
+        for refresh in (False, True):
+            for asset in self.list_assets(release, refresh=refresh):
+                if asset.get("name") == name:
+                    return asset
+        return None
+
+    def download_asset(self, asset: dict[str, Any]) -> bytes:
+        """에셋 바이트를 내려받습니다.
+
+        Accept: application/octet-stream 으로 요청하면 GitHub 가 저장소
+        주소로 리다이렉트합니다(requests 가 따라가며, 호스트가 바뀌면
+        Authorization 헤더는 떼어 냅니다). 없으면(404) ReleaseError —
+        None 을 돌려주면 호출부가 '빈 매니페스트' 로 오인할 수 있습니다.
+        """
+        asset_id = asset.get("id") if isinstance(asset, dict) else None
+        if not asset_id:
+            raise ReleaseError(f"에셋 id 가 없습니다: {asset!r}")
+        url = f"{API}/repos/{self.owner}/{self.repo}/releases/assets/{asset_id}"
+        data = self._request(
+            "GET", url, raw=True,
+            headers={"Accept": "application/octet-stream"},
+            allow_redirects=True, timeout=300,
+        )
+        if data is None:
+            raise ReleaseError(f"에셋을 찾지 못했습니다(404): {asset.get('name', asset_id)}")
+        return data
 
     def _remember_asset(self, release: dict[str, Any], asset: dict[str, Any]) -> None:
         rid = release.get("id")
