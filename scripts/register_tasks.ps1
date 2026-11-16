@@ -14,6 +14,7 @@
       TranscribeQueue - 밤마다 밀린 전사 처리
       HomeBackup      - 매일 홈 폴더를 GitHub 릴리스에 백업 (config.toml 의 backup.home.enabled)
       HomePrune       - 매일 백업이 확인된 홈 파일 정리 (config.toml 의 backup.home.prune.enabled)
+      TerminalAudio   - (선택) -AudioAt 을 주면 매일 그 시각에 소리만 녹음
 
     중요:
       화면 캡처는 로그온된 세션이 있어야 합니다. 그래서 모든 작업을
@@ -27,6 +28,12 @@
 .PARAMETER SkipHome
     HomeBackup / HomePrune 작업을 등록하지 않습니다.
     등록해도 config.toml 에서 켜지 않으면 아무것도 하지 않습니다.
+
+.PARAMETER AudioAt
+    "09:00" 처럼 주면 매일 그 시각에 record_audio.bat(FFmpeg/SoX 터미널
+    녹음기)을 창 없이 돌립니다. 길이와 장치는 config.toml 의
+    [recording.terminal] 을 따르고, -AudioArgs 로 덮어쓸 수 있습니다.
+      -AudioAt 09:00 -AudioArgs "-t","3000","-f","mp3"
 #>
 param(
     [switch]$Remove,
@@ -36,7 +43,9 @@ param(
     [string]$HomePruneTime = "05:43",
     [switch]$SkipHome,
     [switch]$SkipWatch,
-    [switch]$SkipSchedule
+    [switch]$SkipSchedule,
+    [string]$AudioAt = "",
+    [string[]]$AudioArgs = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -56,7 +65,7 @@ function Assert-Admin {
 }
 
 function Remove-All {
-    foreach ($name in @("EclassSync","RecordSchedule","RecordWatch","TranscribeQueue","HomeBackup","HomePrune")) {
+    foreach ($name in @("EclassSync","RecordSchedule","RecordWatch","TranscribeQueue","HomeBackup","HomePrune","TerminalAudio")) {
         if (Get-ScheduledTask -TaskPath "$Folder\" -TaskName $name -ErrorAction SilentlyContinue) {
             Unregister-ScheduledTask -TaskPath "$Folder\" -TaskName $name -Confirm:$false
             Write-Host "  삭제: $Folder\$name"
@@ -145,6 +154,13 @@ if (-not $SkipHome) {
     $t = New-ScheduledTaskTrigger -Daily -At $HomePruneTime
     Register-One "HomePrune" (New-HiddenAction "home_prune.bat" @()) $t `
         "백업이 확인된 홈 파일을 매일 $HomePruneTime 에 정리합니다(backup.home.prune.enabled)."
+}
+
+# --- 터미널 녹음 (선택) ---
+if ($AudioAt) {
+    $t = New-ScheduledTaskTrigger -Daily -At $AudioAt
+    Register-One "TerminalAudio" (New-HiddenAction "record_audio.bat" $AudioArgs) $t `
+        "매일 $AudioAt 에 소리만 녹음합니다(FFmpeg/SoX, [recording.terminal])."
 }
 
 Write-Host ""

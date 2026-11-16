@@ -1,0 +1,335 @@
+"""터미널 녹음기: FFmpeg · SoX · arecord 를 그대로 불러 소리만 받습니다.
+
+`record start` 는 Windows 전용입니다(gdigrab + WASAPI 루프백). 이 모듈은
+그 바깥을 맡습니다 — macOS·Linux 에서 소리만 받거나, Windows 에서도
+화면 없이 예약 녹음만 하고 싶을 때입니다. 셋 다 명령줄 도구라 cron 이나
+작업 스케줄러에 그대로 걸 수 있습니다.
+
+  도구      지원 OS                  핵심 기능                     쓸 만한 때
+  ffmpeg   Windows / macOS / Linux   -t 로 정확한 길이, mp3 인코딩   예약 시간제 녹음
+  sox      Windows / macOS / Linux   silence 효과로 소리 감지 녹음   소리 날 때만 기록
+  arecord  Linux                     설치 불필요, 초경량             서버·라즈베리파이 상시 녹음
+
+명령을 만드는 함수(build_*)는 순수 함수입니다. 실행하지 않고 리스트만
+돌려주므로 어느 OS 에서든 테스트할 수 있고, `--print` 로 사람이 그대로
+복사해 쓸 수도 있습니다.
+
+**시스템 소리(스피커로 나가는 소리)는 OS 마다 사정이 다릅니다.**
+  - Linux(PulseAudio/PipeWire): `@DEFAULT_MONITOR@` 로 바로 잡힙니다.
+  - macOS: OS 가 내주지 않습니다. BlackHole 같은 가상 장치를 깔고
+    그 장치 번호를 device 에 적어야 합니다.
+  - Windows: ffmpeg/sox 의 입력은 루프백을 모릅니다. 시스템 소리는
+    `record start`(WASAPI 루프백)를 쓰세요. 여기서는 막고 그렇게 안내합니다.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+from ..logging_setup import get as get_logger
+from ..paths import safe_name, unique_path
+
+log = get_logger("recorder.terminal")
+
+BACKENDS = ("auto", "ffmpeg", "sox", "arecord")
+SOURCES = ("mic", "system")
+FORMATS = ("wav", "mp3", "flac")
+
+# PulseAudio·PipeWire(pipewire-pulse) 모두 알아듣는 '기본 출력의 모니터'.
+PULSE_MONITOR = "@DEFAULT_MONITOR@"
+
+
+class TerminalAudioError(Exception):
+    """사용자가 고칠 수 있는 문제. 메시지를 그대로 보여 줍니다."""
+
+
+@dataclass
+class Plan:
+    """무엇을 어떻게 받을지. 설정과 명령줄 인자를 합친 결과입니다."""
+
+    backend: str = "auto"
+    source: str = "mic"
+    device: str = ""
+    seconds: float = 3600.0
+    fmt: str = "wav"
+    vad: bool = False
+    vad_threshold: str = "3%"
+    vad_start_sec: float = 0.1
+    vad_stop_sec: float = 3.0
+    samplerate: int = 44100
+    channels: int = 2
+
+
+def platform_key(name: str | None = None) -> str:
+    """'windows' / 'macos' / 'linux'. 테스트에서 바꿔 끼울 수 있게 인자를 받습니다."""
+    name = name or sys.platform
+    if name.startswith("win"):
+        return "windows"
+    if name == "darwin":
+        return "macos"
+    return "linux"
+
+
+def _secs(value: float) -> str:
+    """60.0 -> '60', 1.5 -> '1.5'. 명령줄에 군더더기 소수점을 남기지 않습니다."""
+    value = float(value)
+    return str(int(value)) if value.is_integer() else f"{value:g}"
+
+
+def output_name(pattern: str, fmt: str, now: datetime | None = None) -> str:
+    """'record_%Y%m%d_%H%M%S' -> 'record_20261116_090000.wav'.
+
+    날짜·시각이 이름에 들어가므로 cron 이 매일 같은 명령을 불러도
+    덮어쓰지 않고 쌓입니다. 셸의 $(date +...) 와 같은 일을 하지만
+    Windows 배치 파일에서도 똑같이 동작합니다.
+    """
+    now = now or datetime.now()
+    stem = safe_name(now.strftime(pattern or "record_%Y%m%d_%H%M%S"), fallback="record")
+    return f"{stem}.{fmt}"
+
+
+# ---------------------------------------------------------------------------
+# 명령 만들기 (순수 함수)
+# ---------------------------------------------------------------------------
+def _ffmpeg_input(plan: Plan, plat: str) -> list[str]:
+    if plat == "windows":
+        if plan.source == "system":
+            raise TerminalAudioError(
+                "Windows 에서 ffmpeg 는 스피커 소리(루프백)를 직접 받지 못합니다.\n"
+                "  시스템 소리는  python -m gymhall record start  를 쓰세요(WASAPI 루프백, 설치 불필요)."
+            )
+        if not plan.device:
+            raise TerminalAudioError(
+                "Windows 의 ffmpeg(dshow)는 장치 이름이 필요합니다.\n"
+                "  ffmpeg -hide_banner -list_devices true -f dshow -i dummy\n"
+                "  로 이름을 확인해 --device 또는 [recording.terminal] device 에 적으세요."
+            )
+        return ["-f", "dshow", "-i", f"audio={plan.device}"]
+
+    if plat == "macos":
+        if plan.source == "system" and not plan.device:
+            raise TerminalAudioError(
+                "macOS 는 스피커 소리를 내주지 않습니다. BlackHole 같은 가상 장치를 설치하고\n"
+                "  ffmpeg -f avfoundation -list_devices true -i \"\"\n"
+                "  로 그 장치 번호를 확인해 --device 에 적으세요(예: --device 2)."
+            )
+        index = plan.device or "0"
+        # avfoundation 은 "영상:소리" 입니다. 앞을 비우면 소리만 받습니다.
+        return ["-f", "avfoundation", "-i", index if index.startswith(":") else f":{index}"]
+
+    device = plan.device or (PULSE_MONITOR if plan.source == "system" else "default")
+    return ["-f", "pulse", "-i", device]
+
+
+def build_ffmpeg(plan: Plan, out: Path, *, plat: str | None = None, exe: str = "ffmpeg") -> list[str]:
+    """ffmpeg -f <드라이버> -i <장치> -t <초> <파일>.
+
+    -t 로 길이를 정확히 끊어 스스로 끝납니다. 확장자가 mp3 면
+    libmp3lame 으로 인코딩합니다.
+    """
+    plat = platform_key(plat)
+    codec = {"mp3": ["-c:a", "libmp3lame", "-q:a", "4"],
+             "flac": ["-c:a", "flac"],
+             "wav": ["-c:a", "pcm_s16le"]}[plan.fmt]
+    return [
+        exe, "-hide_banner", "-loglevel", "warning", "-nostdin",
+        *_ffmpeg_input(plan, plat),
+        "-t", _secs(plan.seconds),
+        "-ac", str(plan.channels), "-ar", str(plan.samplerate),
+        *codec, str(out),
+    ]
+
+
+def _sox_input(plan: Plan, plat: str) -> list[str]:
+    if plat == "windows" and plan.source == "system":
+        raise TerminalAudioError(
+            "Windows 에서 SoX 는 스피커 소리(루프백)를 받지 못합니다.\n"
+            "  시스템 소리는  python -m gymhall record start  를 쓰세요."
+        )
+    if plat == "macos" and plan.source == "system" and not plan.device:
+        raise TerminalAudioError(
+            "macOS 는 스피커 소리를 내주지 않습니다. BlackHole 같은 가상 장치를 깔고 "
+            "그 이름을 --device 에 적으세요(예: --device BlackHole)."
+        )
+    device = plan.device or (PULSE_MONITOR if plat == "linux" and plan.source == "system" else "")
+    if not device:
+        return ["-d"]  # 기본 입력 장치. `rec` 명령이 하는 일과 같습니다.
+    driver = {"windows": "waveaudio", "macos": "coreaudio"}.get(plat)
+    if driver is None:
+        driver = "alsa" if device.startswith(("hw:", "plughw:")) else "pulseaudio"
+    return ["-t", driver, device]
+
+
+def build_sox(plan: Plan, out: Path, *, plat: str | None = None, exe: str = "sox") -> list[str]:
+    """sox <입력> <파일> [silence ...] [trim 0 <초>].
+
+    vad 가 켜져 있으면 README 예시와 같은 줄을 만듭니다.
+
+        rec out.wav silence 1 0.1 3% 1 3.0 3%
+
+    앞의 `1 0.1 3%` 는 '3% 이상 소리가 0.1초 이어지면 시작',
+    뒤의 `1 3.0 3%` 는 '3% 아래로 3초 이어지면 끝' 입니다.
+    아무 소리도 안 나면 영원히 기다리므로 trim 으로 상한을 둡니다.
+    """
+    plat = platform_key(plat)
+    if plan.fmt == "mp3":
+        raise TerminalAudioError(
+            "SoX 는 배포판에 따라 mp3 를 쓰지 못합니다. --format wav 또는 flac 을 쓰세요."
+        )
+    cmd = [exe, "-q", *_sox_input(plan, plat),
+           "-c", str(plan.channels), "-r", str(plan.samplerate), str(out)]
+    if plan.vad:
+        cmd += ["silence",
+                "1", _secs(plan.vad_start_sec), plan.vad_threshold,
+                "1", _secs(plan.vad_stop_sec), plan.vad_threshold]
+    if plan.seconds > 0:
+        cmd += ["trim", "0", _secs(plan.seconds)]
+    return cmd
+
+
+def build_arecord(plan: Plan, out: Path, *, plat: str | None = None, exe: str = "arecord") -> list[str]:
+    """arecord -f cd -d <초> [-D 장치] <파일>.
+
+    ALSA 의 기본 도구라 설치가 필요 없습니다. 대신 리눅스 전용이고,
+    wav 만 쓰며, 시스템 소리는 ALSA 루프백 장치를 직접 줘야 합니다.
+    """
+    plat = platform_key(plat)
+    if plat != "linux":
+        raise TerminalAudioError("arecord 는 리눅스(ALSA) 전용입니다. ffmpeg 나 sox 를 쓰세요.")
+    if plan.fmt != "wav":
+        raise TerminalAudioError("arecord 는 wav 만 씁니다. --format wav 로 두세요.")
+    if plan.source == "system" and not plan.device:
+        raise TerminalAudioError(
+            "arecord 는 스피커 소리를 바로 잡지 못합니다. snd-aloop 같은 루프백 장치를\n"
+            "  --device 에 주거나(arecord -L 로 확인), ffmpeg/sox 백엔드를 쓰세요."
+        )
+    # -f cd = 16bit 44.1kHz 스테레오. 다른 값을 고르면 S16_LE 로 직접 지정합니다.
+    if plan.samplerate == 44100 and plan.channels == 2:
+        fmt = ["-f", "cd"]
+    else:
+        fmt = ["-f", "S16_LE", "-r", str(plan.samplerate), "-c", str(plan.channels)]
+    cmd = [exe, "-q", *fmt]
+    if plan.seconds > 0:
+        # arecord 의 -d 는 정수 초만 받습니다. 모자라지 않게 올림합니다.
+        cmd += ["-d", str(max(1, int(-(-float(plan.seconds) // 1))))]
+    if plan.device:
+        cmd += ["-D", plan.device]
+    return [*cmd, str(out)]
+
+
+BUILDERS = {"ffmpeg": build_ffmpeg, "sox": build_sox, "arecord": build_arecord}
+
+
+# ---------------------------------------------------------------------------
+# 도구 찾기
+# ---------------------------------------------------------------------------
+def find_tool(name: str) -> str | None:
+    if name == "ffmpeg":
+        from .ffmpeg_util import FFmpegMissing, find_ffmpeg
+
+        try:
+            return find_ffmpeg()
+        except FFmpegMissing:
+            return None
+    env = os.environ.get(name.upper())
+    if env and (shutil.which(env) or Path(env).exists()):
+        return shutil.which(env) or env
+    return shutil.which(name)
+
+
+def available() -> dict[str, str | None]:
+    return {name: find_tool(name) for name in ("ffmpeg", "sox", "arecord")}
+
+
+def choose_backend(plan: Plan, found: dict[str, str | None], *, plat: str | None = None) -> str:
+    """auto 를 실제 도구로 바꿉니다.
+
+    소리 감지(vad)는 SoX 만 할 수 있으니 SoX 로 갑니다. 그 밖에는
+    ffmpeg → sox → arecord 순입니다. ffmpeg 는 이 프로젝트가 이미
+    설치하고 있으므로 대개 여기서 끝납니다.
+    """
+    plat = platform_key(plat)
+    if plan.backend != "auto":
+        return plan.backend
+    if plan.vad:
+        if found.get("sox"):
+            return "sox"
+        raise TerminalAudioError(
+            "소리 감지 녹음(--vad)은 SoX 가 필요합니다.\n"
+            "  Windows: https://sourceforge.net/projects/sox/  (설치 후 PATH 추가)\n"
+            "  macOS  : brew install sox\n"
+            "  Linux  : sudo apt install sox libsox-fmt-pulse"
+        )
+    order = ["ffmpeg", "sox"] + (["arecord"] if plat == "linux" else [])
+    for name in order:
+        if found.get(name):
+            return name
+    raise TerminalAudioError(
+        f"녹음 도구를 찾지 못했습니다({', '.join(order)} 중 하나가 필요합니다). "
+        "scripts/setup.bat 이 ffmpeg 를 받아 줍니다."
+    )
+
+
+def build(plan: Plan, out: Path, *, plat: str | None = None,
+          found: dict[str, str | None] | None = None) -> tuple[str, list[str]]:
+    """(쓰는 백엔드, 명령) 을 돌려줍니다. 실행은 하지 않습니다."""
+    if plan.vad and plan.backend not in ("auto", "sox"):
+        raise TerminalAudioError("소리 감지 녹음(--vad)은 sox 백엔드에서만 됩니다.")
+    found = available() if found is None else found
+    backend = choose_backend(plan, found, plat=plat)
+    exe = found.get(backend) or backend
+    return backend, BUILDERS[backend](plan, out, plat=plat, exe=exe)
+
+
+# ---------------------------------------------------------------------------
+# 실행
+# ---------------------------------------------------------------------------
+def record_once(plan: Plan, out_dir: Path, *, pattern: str = "record_%Y%m%d_%H%M%S",
+                found: dict[str, str | None] | None = None) -> Path | None:
+    """한 파일을 녹음합니다. 받은 파일 경로, 아무것도 안 남았으면 None."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = unique_path(out_dir / output_name(pattern, plan.fmt))
+    backend, cmd = build(plan, out, found=found)
+
+    log.info("[%s] 녹음 시작 -> %s", backend, out)
+    log.debug("실행: %s", subprocess.list2cmdline(cmd))
+    # 소리 감지 녹음은 첫 소리가 언제 날지 모릅니다. 상한(trim)이 걸려
+    # 있어도 '기다리는 시간' 은 그 밖이라 시간 제한을 두지 않습니다.
+    timeout = None if plan.vad or plan.seconds <= 0 else float(plan.seconds) + 60
+    started = time.monotonic()
+    try:
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, timeout=timeout)
+        code = proc.returncode
+    except subprocess.TimeoutExpired:
+        log.error("[%s] %.0f초가 지나도 끝나지 않아 멈췄습니다.", backend, timeout or 0)
+        code = -1
+    except KeyboardInterrupt:
+        # 같은 콘솔의 자식도 Ctrl+C 를 받아 파일을 닫고 끝납니다.
+        log.info("[%s] 사용자가 멈췄습니다. 받은 데까지 저장합니다.", backend)
+        code = 0
+        if not out.exists() or out.stat().st_size == 0:
+            raise
+    elapsed = time.monotonic() - started
+
+    if not out.exists() or out.stat().st_size == 0:
+        log.error("[%s] 파일이 만들어지지 않았습니다(code %s). 장치 이름을 확인하세요.", backend, code)
+        return None
+    if code not in (0, None):
+        log.warning("[%s] 종료 코드 %s. 받은 파일은 남겨 둡니다: %s", backend, code, out)
+    log.info("[%s] 녹음 종료: %.1f초, %s (%d KB)",
+             backend, elapsed, out.name, out.stat().st_size // 1024)
+    return out
+
+
+def default_out_dir(recordings_root: Path, now: datetime | None = None) -> Path:
+    """<data>/recordings/<날짜>/terminal. 기존 세션 폴더와 섞이지 않게 둡니다."""
+    now = now or datetime.now()
+    return Path(recordings_root) / f"{now:%Y-%m-%d}" / safe_name("terminal")
