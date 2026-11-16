@@ -367,6 +367,24 @@ def _positive(cfg: Config, key: str, errors: list[str], allow_zero: bool = False
         errors.append(f"{key} 는 {'0 이상' if allow_zero else '0보다 큰 값'}이어야 합니다 (현재: {value})")
 
 
+# 이름 몇 개를 넣어 보고 전부 맞으면 '모든 파일' 패턴입니다. 글자 목록으로
+# 막으면 '?*' / '[!~]*' 같은 것이 빠져나갑니다(재검토). 스캔과 같은 규칙
+# (소문자, fnmatchcase)으로 봅니다.
+# '확장자 있는 이름 전부' 도 사실상 전부입니다('*.*' — 4차 검토).
+_EXCLUDE_PROBES = ("a", "x.txt", "documents", "b c.pdf", "과제.hwp", "1")
+_EXCLUDE_PROBES_EXT = ("x.txt", "b c.pdf", "과제.hwp", "report.final.docx", "a.b")
+
+
+def _matches_everything(pattern: str) -> bool:
+    import fnmatch
+
+    pat = str(pattern).strip().lower()
+    if not pat:
+        return False
+    return any(all(fnmatch.fnmatchcase(n, pat) for n in probes)
+               for probes in (_EXCLUDE_PROBES, _EXCLUDE_PROBES_EXT))
+
+
 def validate(cfg: Config) -> None:
     """잘못된 설정을 한 번에 모아서 알려줍니다."""
     errors: list[str] = []
@@ -406,7 +424,7 @@ def validate(cfg: Config) -> None:
     if not isinstance(excl, list) or not all(isinstance(p, str) for p in excl):
         errors.append('backup.home.exclude_names 는 문자열 목록이어야 합니다 '
                       '(예: ["*.pem", "node_modules"])')
-    elif any(p.strip() in {"*", "**", "*.*"} for p in excl):
+    elif any(_matches_everything(p) for p in excl):
         errors.append("backup.home.exclude_names 에 모든 파일에 맞는 패턴('*')이 있습니다. "
                       "그러면 아무것도 백업되지 않습니다.")
 

@@ -31,6 +31,7 @@ from typing import Any
 from ..logging_setup import get as get_logger
 from ..paths import Layout
 from ..state import sha256_file
+from . import winfile
 from .chain import ChainError, Link, entries_of, walk_chain
 from .homestate import HomeState, PendingRow
 from .scan import is_cloud_placeholder, is_reparse_point
@@ -77,9 +78,53 @@ def _is_reparse(path: Path) -> bool:
     return stat.S_ISLNK(st.st_mode) or is_reparse_point(st)
 
 
+# 지금 쥐고 있는 삭제 핸들(Windows). _unlink 는 경로만 받지만(테스트가 바꿔
+# 끼우는 자리), 쥔 파일이면 경로가 아니라 이 핸들로 지웁니다.
+_HELD: winfile.DeleteHandle | None = None
+
+
 def _unlink(path: Path) -> None:
     """테스트가 '지우다 죽는' 상황을 흉내 낼 수 있게 한 곳에 둡니다."""
-    path.unlink()
+    if _HELD is not None and _HELD.path == path:
+        _HELD.mark_delete()          # 경로를 다시 쓰지 않습니다(바꿔치기 방지)
+    else:
+        path.unlink()
+
+
+def _hash_held(held: winfile.DeleteHandle) -> str:
+    """쥔 핸들로 해시합니다. 테스트가 '해시 직후 저장' 을 흉내 내는 자리."""
+    return held.sha256()
+
+
+def _delete_verified(real: Path, row: PendingRow, sig: tuple[int, int] | None) -> str:
+    """마지막으로 확인하고 지웁니다. 'deleted' | 'changed' | 'streams'.
+
+    Windows: 읽기만 공유하는 삭제 핸들 하나로 쥐고, 그 핸들로 해시하고, 그
+    핸들에 삭제를 표시합니다. 그동안 아무도 쓰거나 이름을 바꾸거나 지우지
+    못합니다(그쪽이 '사용 중' 으로 실패). 경로로 다시 열지 않으므로 다른
+    파일로 바꿔치기된 것을 지울 수 없습니다.
+    다른 OS: 크기·수정 시각을 다시 보는 것까지만 합니다(짧은 틈이 남음).
+    """
+    global _HELD
+    with winfile.open_for_delete(real) as held:
+        if held is None:
+            if winfile.extra_streams(real):
+                return "streams"
+            if sig is None or _sig(real.lstat()) != sig:
+                return "changed"
+            _unlink(real)
+            return "deleted"
+        if held.size() != row.size or _hash_held(held) != row.sha256:
+            return "changed"
+        # 스트림은 쥔 뒤에 봅니다(쥐기 전에 보면 그 사이 붙은 것을 놓침).
+        if winfile.extra_streams(real):
+            return "streams"
+        _HELD = held
+        try:
+            _unlink(real)
+        finally:
+            _HELD = None
+    return "deleted"
 
 
 def safe_rel(rel: Any) -> PurePosixPath | None:
@@ -209,6 +254,15 @@ def _verify(state: HomeState, uploader, machine: str,
         raise ChainError(
             f"정리 대기 목록은 다른 홈 기준입니다: {known_home!r} != {home_s!r}. "
             "backup.home.root 를 바꿨다면 되돌리세요.")
+    stop_at = state.verified()
+    if known_home is None and (stop_at or state.pending_count()):
+        # 홈 기록이 생기기 전의 상태 파일. 대기 목록이 어느 홈 기준인지 알 수
+        # 없으니 믿지 않습니다 — 비우고 사슬을 처음부터 다시 확인합니다(고리마다
+        # 홈을 맞춤). 이 구멍으로 백업된 적 없는 파일을 지웠습니다(재검토 재현).
+        # 실패하면 호출자가 rollback 하므로 비운 것도 되돌아갑니다.
+        log.info("정리 상태에 홈 기록이 없어 사슬을 처음부터 다시 확인합니다.")
+        state.clear_pending_and_verified()
+        stop_at = set()
 
     def visit(m: dict[str, Any]) -> None:
         # 고리를 하나씩 받아 바로 넣고 놓아 줍니다(매니페스트 하나에 수만 항목).
@@ -226,7 +280,7 @@ def _verify(state: HomeState, uploader, machine: str,
         count += 1
 
     walk_chain(head, _make_fetch(uploader, fetched), machine=machine,
-               stop_at=state.verified(), visit=visit)
+               stop_at=stop_at, visit=visit)
     state.add_verified(fetched)
     if known_home is None:
         state.set_meta(PRUNE_HOME_KEY, home_s)
@@ -252,6 +306,8 @@ class _Remote:
         self.cache: dict[str, dict[str, tuple[Any, Any]] | None] = {}
         self.verdicts: dict[tuple[str, str], bool] = {}
         self.failed_tags: set[str] = set()
+        # 조각 해시가 생기기 전의 분할 묶음. '없음' 과 구분해 알립니다.
+        self.legacy_split: set[tuple[str, str]] = set()
 
     def _assets(self, tag: str) -> dict[str, tuple[Any, Any]] | None:
         if tag not in self.cache:
@@ -293,18 +349,20 @@ class _Remote:
             a = assets.get(name)
             return (self._has_digest(a) and a[0] == size
                     and a[1] == f"sha256:{row.bundle_sha256}")
+        # 조각마다 GitHub digest 를 **사슬에 적힌** 조각 해시와 맞춥니다.
+        # parts.json 은 같은 업로더가 쓴 것이라 같은 이름으로 덮이면 같이
+        # 바뀝니다. 크기 합만 보면 같은 크기의 다른 조각을 못 가려냅니다.
+        # parts.json 을 내려받기 전에 봅니다(옛 사슬이면 매번 받을 필요 없음).
+        part_sha = row.bundle_part_sha256.split(",") if row.bundle_part_sha256 else []
+        if len(part_sha) != parts or any(len(h) != 64 for h in part_sha):
+            self.legacy_split.add((row.tag, row.bundle))
+            return False             # 조각 해시가 없는 사슬: 확신이 없으니 지우지 않습니다
         info = self._parts_json(row.tag, name)
         if info is None:
             return False
         if (info.get("sha256") != row.bundle_sha256 or info.get("part_count") != parts
                 or info.get("part_prefix") != name or info.get("original_size") != size):
             return False
-        # 조각마다 GitHub digest 를 **사슬에 적힌** 조각 해시와 맞춥니다.
-        # parts.json 은 같은 업로더가 쓴 것이라 같은 이름으로 덮이면 같이
-        # 바뀝니다. 크기 합만 보면 같은 크기의 다른 조각을 못 가려냅니다.
-        part_sha = row.bundle_part_sha256.split(",") if row.bundle_part_sha256 else []
-        if len(part_sha) != parts or any(len(h) != 64 for h in part_sha):
-            return False             # 조각 해시가 없는 사슬: 확신이 없으니 지우지 않습니다
         total = 0
         for i, want in enumerate(part_sha, start=1):
             a = assets.get(f"{name}.part{i:03d}")
@@ -318,7 +376,11 @@ class _Remote:
         key = (row.tag, row.bundle)
         if key not in self.verdicts:
             self.verdicts[key] = self._check(row)
-            if not self.verdicts[key]:
+            if not self.verdicts[key] and key in self.legacy_split:
+                log.warning("조각별 해시가 없는 옛 분할 묶음이라 지우지 않습니다"
+                            "(이 묶음의 파일은 정리되지 않습니다): %s/%s",
+                            row.tag, row.bundle)
+            elif not self.verdicts[key]:
                 log.warning("GitHub 에서 묶음을 확인하지 못했습니다(지우지 않음): %s/%s",
                             row.tag, row.bundle)
         return self.verdicts[key]
@@ -400,8 +462,9 @@ def _sig(st: os.stat_result) -> tuple[int, int]:
 
 
 def _judge(row: PendingRow, *, home_r: Path, guard: list[Path], remote: _Remote,
-           now: datetime, min_age: timedelta,
-           res: PruneResult) -> tuple[str, Path | None, str, tuple[int, int] | None]:
+           now: datetime, min_age: timedelta, res: PruneResult,
+           defer_hash: bool = False,
+           ) -> tuple[str, Path | None, str, tuple[int, int] | None]:
     """항목 하나를 판정합니다.
 
     ('delete', 실제경로, 홈 기준 실제 상대경로, 해시 직전의 (크기, mtime))
@@ -448,11 +511,14 @@ def _judge(row: PendingRow, *, home_r: Path, guard: list[Path], remote: _Remote,
         if _protected(real, guard):
             res.protected += 1
             return "drop", None, "", None
-        if st.st_size != row.size or sha256_file(real) != row.sha256:
+        # defer_hash 면 해시는 _delete_verified 가 파일을 쥔 뒤에 봅니다
+        # (같은 파일을 두 번 읽지 않게).
+        if st.st_size != row.size or (not defer_hash
+                                      and sha256_file(real) != row.sha256):
             res.changed += 1         # 새 내용은 다음 백업이 올립니다
             return "drop", None, "", None
         # 해시를 읽는 도중 바뀐 것도 잡습니다.
-        if _sig(real.stat()) != _sig(st):
+        if not defer_hash and _sig(real.stat()) != _sig(st):
             res.changed += 1
             return "drop", None, "", None
     except FileNotFoundError:
@@ -505,12 +571,14 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
     min_age = timedelta(hours=float(min_age_hours))
     removed = 0
     plog = _PruneLog(layout, now=now, head=head, seq=head_seq)
+    defer_hash = winfile.IS_WINDOWS and not dry_run
+    log_broken = False
 
     try:
         for row in state.iter_pending():
             verdict, real, real_rel, sig = _judge(row, home_r=home_r, guard=guard,
                                                   remote=remote, now=now, min_age=min_age,
-                                                  res=res)
+                                                  res=res, defer_hash=defer_hash)
             if verdict == "keep":
                 continue
             if verdict == "delete":
@@ -519,14 +587,17 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
                     _keep_path(res, real_rel)
                     continue
                 try:
-                    # 해시를 본 뒤 지우기 직전까지 누가 저장했으면 지우지 않습니다.
-                    # (창은 아주 짧게 남습니다 — 핸들을 쥐고 지우는 방식은 아님)
-                    if _sig(real.lstat()) != sig:
-                        res.changed += 1
+                    outcome = _delete_verified(real, row, sig)
+                    if outcome != "deleted":
+                        if outcome == "streams":
+                            log.info("NTFS 대체 스트림이 있어 지우지 않습니다"
+                                     "(백업되지 않는 내용): %s", row.path)
+                            res.protected += 1
+                        else:
+                            res.changed += 1     # 새 내용은 다음 백업이 올립니다
                         state.remove_pending([row.path])
                         removed += 1
                         continue
-                    _unlink(real)
                 except FileNotFoundError:
                     res.gone += 1
                 except OSError as exc:
@@ -537,7 +608,15 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
                     res.deleted += 1
                     res.bytes_freed += row.size
                     _keep_path(res, real_rel)       # 실제로 지운 이름
-                    plog.add(real_rel)
+                    if not log_broken:
+                        try:
+                            plog.add(real_rel)
+                        except OSError as exc:
+                            # 이미 지웠습니다. 기록 실패로 정리를 멈추지 않습니다.
+                            # 한 번만 알리고 그만 씁니다(66만 줄 경고 방지).
+                            log_broken = True
+                            log.warning("home-prune.log 에 쓰지 못해 이번 정리의 목록 "
+                                        "기록을 멈춥니다: %s", exc)
                     log.debug("지움: %s", real)
             if dry_run:
                 continue
@@ -580,6 +659,8 @@ def run_prune(*, home: Path, uploader, state: HomeState, layout: Layout, machine
     if dry_run:
         return res
 
-    state.commit()
-    plog.close(res)
+    try:
+        state.commit()
+    finally:
+        plog.close(res)              # commit 이 실패해도 로그 파일 핸들은 닫습니다
     return res

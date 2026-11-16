@@ -1050,24 +1050,154 @@ def test_home_change_with_no_new_links_deletes_nothing(env):
 
 
 def test_a_save_between_hash_and_delete_is_not_lost(env, monkeypatch):
-    """D3: 해시를 본 직후 저장된 내용은 사본이 어디에도 없습니다."""
+    """D3: 해시를 본 직후 저장된 내용은 사본이 어디에도 없습니다.
+
+    Windows 는 해시부터 지울 때까지 쓰기를 막으므로 저장 자체가 '사용 중'
+    으로 실패합니다(그 프로그램 안에 내용이 남음). 지운 것은 GitHub 에 있는
+    v1 입니다. 다른 OS 는 저장이 되고, 다시 본 크기·시각으로 잡아 남깁니다.
+    """
     home, layout, state, up, chain = env
     f = put(home, "doc.txt", b"v1")
     chain.publish(["doc.txt"])
     chain.anchor(state)
     real_sha = prune.sha256_file
+    blocked = []
 
     def sha_then_save(p):
         h = real_sha(p)
-        Path(p).write_bytes(b"v2-unsaved-edit")
+        try:
+            Path(p).write_bytes(b"v2-unsaved-edit")
+        except PermissionError:
+            blocked.append(p)            # 다른 프로그램의 저장이 막힌 것
+            return h
         st = os.stat(p)
         os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
         return h
 
-    monkeypatch.setattr(prune, "sha256_file", sha_then_save)
+    real_held = prune._hash_held
+
+    def held_then_save(held):
+        h = real_held(held)
+        try:
+            f.write_bytes(b"v2-unsaved-edit")
+        except PermissionError:
+            blocked.append(f)
+        return h
+
+    monkeypatch.setattr(prune, "sha256_file", sha_then_save)      # 다른 OS
+    monkeypatch.setattr(prune, "_hash_held", held_then_save)      # Windows
     res = go(env)
-    assert res.deleted == 0 and res.changed == 1
-    assert f.read_bytes() == b"v2-unsaved-edit"
+    if os.name == "nt":
+        assert blocked, "Windows 에서는 확인~지우기 사이의 저장이 막혀야 합니다"
+        assert res.deleted == 1 and not f.exists()
+    else:
+        assert res.deleted == 0 and res.changed == 1
+        assert f.read_bytes() == b"v2-unsaved-edit"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows 공유 모드")
+def test_a_rename_and_write_save_between_hash_and_delete_is_not_lost(env, monkeypatch):
+    """4차 검토 재현: '이름 바꾸고 새로 쓰기' 저장(Vim/Emacs/Word).
+
+    쓰기만 막고 경로로 지우던 때는, 다른 프로그램이 doc.txt 를 doc.txt~ 로
+    치우고 새 내용을 doc.txt 에 쓰면 그 새 파일이 지워졌습니다. 이제 쥔
+    동안은 이름 바꾸기도 막히고, 지우기는 쥔 핸들로만 합니다.
+    """
+    home, layout, state, up, chain = env
+    f = put(home, "doc.txt", b"v1")
+    chain.publish(["doc.txt"])
+    chain.anchor(state)
+    real_held = prune._hash_held
+    tried = []
+
+    def held_then_swap(held):
+        h = real_held(held)
+        try:
+            os.rename(f, f.with_name("doc.txt~"))
+            f.write_bytes(b"v2-unsaved-edit")
+            tried.append("swapped")
+        except OSError:
+            tried.append("blocked")
+        return h
+
+    monkeypatch.setattr(prune, "_hash_held", held_then_swap)
+    res = go(env)
+    assert tried == ["blocked"]
+    assert res.deleted == 1 and not f.exists()       # v1(GitHub 에 있음)만 지움
+
+
+@pytest.mark.skipif(os.name != "nt", reason="NTFS 스트림")
+def test_no_stream_can_be_added_while_held(env, monkeypatch):
+    """4차 검토: 쓰기만 막던 핸들로는 쥔 동안 새 스트림(':late')을 붙일 수
+    있었고, 그 내용은 백업 없이 같이 지워졌습니다. 삭제 권한으로 쥐면 새
+    스트림 만들기도 막힙니다. (그래도 스트림 확인은 쥔 뒤에 한 번 더 합니다.)"""
+    home, layout, state, up, chain = env
+    f = put(home, "notes.txt", b"body")
+    chain.publish(["notes.txt"])
+    chain.anchor(state)
+    real_held = prune._hash_held
+    tried = []
+
+    def held_then_stream(held):
+        h = real_held(held)
+        try:
+            with open(str(f) + ":late", "wb") as fh:
+                fh.write(b"not backed up")
+            tried.append("added")
+        except PermissionError:
+            tried.append("blocked")
+        return h
+
+    monkeypatch.setattr(prune, "_hash_held", held_then_stream)
+    res = go(env)
+    assert tried == ["blocked"]
+    assert res.deleted == 1 and not f.exists()
+
+
+# --- Windows 실제 파일 시스템 -------------------------------------------------
+windows_only = pytest.mark.skipif(os.name != "nt", reason="Windows 공유 모드/NTFS 스트림")
+
+
+@windows_only
+def test_a_file_open_for_writing_is_not_deleted(env):
+    """다른 프로그램이 쓰기로 열고 있으면(저장 중일 수 있음) 지우지 않습니다."""
+    home, layout, state, up, chain = env
+    f = put(home, "open.docx", b"v1")
+    chain.publish(["open.docx"])
+    chain.anchor(state)
+    with open(f, "r+b"):                 # 편집기가 쓰기로 연 상태
+        res = go(env)
+    assert res.deleted == 0 and res.errors == 1 and f.exists()
+    res = go(env)                        # 닫힌 뒤에는 지웁니다(대기 목록에 남아 있음)
+    assert res.deleted == 1 and not f.exists()
+
+
+@windows_only
+def test_a_file_with_an_extra_ntfs_stream_is_not_deleted(env):
+    """대체 데이터 스트림은 백업되지 않으므로 지우면 그 내용이 사라집니다."""
+    home, layout, state, up, chain = env
+    f = put(home, "notes.txt", b"body")
+    with open(str(f) + ":secret", "wb") as fh:
+        fh.write(b"not backed up")
+    chain.publish(["notes.txt"])
+    chain.anchor(state)
+    res = go(env)
+    assert res.deleted == 0 and res.protected == 1 and f.exists()
+    with open(str(f) + ":secret", "rb") as fh:
+        assert fh.read() == b"not backed up"
+
+
+@windows_only
+def test_only_a_zone_identifier_stream_does_not_block_deletion(env):
+    """다운로드 출처 표시(Zone.Identifier)만 있으면 지워도 됩니다."""
+    home, layout, state, up, chain = env
+    f = put(home, "down.pdf", b"pdf")
+    with open(str(f) + ":Zone.Identifier", "w", encoding="ascii") as fh:
+        fh.write("[ZoneTransfer]\nZoneId=3\n")
+    chain.publish(["down.pdf"])
+    chain.anchor(state)
+    res = go(env)
+    assert res.deleted == 1 and not f.exists()
 
 
 def test_a_save_right_before_unlink_is_not_lost(env, monkeypatch):
@@ -1106,3 +1236,135 @@ def test_prune_does_not_keep_every_deleted_path_in_memory(env, monkeypatch):
     text = (layout.logs / "home-prune.log").read_text(encoding="utf-8")
     assert all(r in text for r in rels), text
     assert "== 끝  지움 10개" in text
+
+
+# ---------------------------------------------------------------------------
+# 3차 검토(2026-11-14)
+# ---------------------------------------------------------------------------
+def test_state_without_a_home_record_is_rechecked_from_scratch(env):
+    """홈 기록이 생기기 전의 상태 파일 + root 변경 = 예전과 같은 D1 구멍.
+
+    대기 목록이 어느 홈 기준인지 모르면 믿지 않고 사슬을 처음부터 다시
+    확인합니다. 사슬의 홈이 지금 홈과 다르므로 아무것도 지우지 않습니다.
+    """
+    home, layout, state, up, chain = env
+    sub = home / "A"
+    a = put(sub, "x.txt", b"data")
+    chain.home = sub
+    chain.publish(["x.txt"])
+    chain.anchor(state)
+    r1 = run_prune(home=sub, uploader=up, state=state, layout=layout, machine=MACHINE,
+                   min_age_hours=10_000, protect=[], dry_run=False, now=NOW)
+    assert r1.too_new == 1
+    state.conn.execute("DELETE FROM meta WHERE key = 'prune_home'")   # 옛 상태 파일
+    state.commit()
+
+    b = put(home, "x.txt", b"data")                                   # 백업된 적 없음
+    r2 = run_prune(home=home, uploader=up, state=state, layout=layout, machine=MACHINE,
+                   min_age_hours=24, protect=[], dry_run=False, now=NOW)
+    assert not r2.chain_ok and r2.deleted == 0
+    assert a.exists() and b.exists()
+    assert pending(state) == {"x.txt"}, "실패했으니 비운 것도 되돌아가야 합니다"
+
+
+def test_state_without_a_home_record_still_prunes_the_same_home(env):
+    """같은 홈이면 다시 확인한 뒤 정상으로 지웁니다(업그레이드 후 첫 정리)."""
+    home, layout, state, up, chain = env
+    f = put(home, "x.txt", b"data")
+    chain.publish(["x.txt"])
+    chain.anchor(state)
+    run_prune(home=home, uploader=up, state=state, layout=layout, machine=MACHINE,
+              min_age_hours=10_000, protect=[], dry_run=False, now=NOW)
+    state.conn.execute("DELETE FROM meta WHERE key = 'prune_home'")
+    state.commit()
+    res = go(env)
+    assert res.chain_ok and res.deleted == 1 and not f.exists()
+    assert state.get_meta(prune.PRUNE_HOME_KEY) is not None
+
+
+def test_prune_log_is_closed_even_if_the_last_commit_fails(env, monkeypatch):
+    """Windows 는 열린 핸들이 파일을 잠급니다."""
+    import sqlite3
+
+    home, layout, state, up, chain = env
+    put(home, "x.txt", b"data")
+    chain.publish(["x.txt"])
+    chain.anchor(state)
+    logs = []
+    real_init = prune._PruneLog.__init__
+
+    def init(self, *a, **k):
+        real_init(self, *a, **k)
+        logs.append(self)
+
+    monkeypatch.setattr(prune._PruneLog, "__init__", init)
+    calls = {"n": 0}
+    real_commit = HomeState.commit
+
+    def commit(self):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise sqlite3.OperationalError("database is locked")
+        return real_commit(self)
+
+    monkeypatch.setattr(HomeState, "commit", commit)
+    with pytest.raises(sqlite3.OperationalError):
+        go(env)
+    assert logs and logs[0].fh is None
+
+
+def test_a_log_write_failure_does_not_stop_pruning(env, monkeypatch):
+    home, layout, state, up, chain = env
+    for r in ("a.txt", "b.txt"):
+        put(home, r, r.encode())
+    chain.publish(["a.txt", "b.txt"])
+    chain.anchor(state)
+
+    def broken(self, rel):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(prune._PruneLog, "add", broken)
+    res = go(env)
+    assert res.deleted == 2
+
+
+def test_old_split_chains_are_named_and_skip_the_parts_json_download(env, caplog):
+    """조각 해시가 없는 옛 분할 묶음: '없음' 과 다른 말로, 받을 것도 받지 않고."""
+    home, layout, state, up, chain = env
+    f = put(home, "big.bin", b"x" * 10)
+    chain.publish(["big.bin"], parts=2, part_hashes=False)
+    chain.anchor(state)
+    with caplog.at_level("WARNING", logger="gymhall"):
+        res = go(env)
+    assert res.deleted == 0 and f.exists()
+    assert any("옛 분할 묶음" in m for m in caplog.messages), caplog.messages
+    assert not any(n.endswith(".parts.json") for n in up.downloads), up.downloads
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows 삭제 방식")
+def test_the_name_is_gone_at_once_even_if_a_reader_shares_delete(env):
+    """5차 검토: 다른 프로그램(미디어 플레이어 등)이 '읽기+삭제 공유' 로 열고
+    있으면, 예전 방식은 그 프로그램이 닫을 때까지 이름이 남아 열지도 같은
+    이름으로 저장하지도 못했습니다. POSIX 방식으로 지워 이름이 바로 사라집니다."""
+    import ctypes
+    from ctypes import wintypes
+
+    home, layout, state, up, chain = env
+    f = put(home, "movie.mp4", b"frames")
+    chain.publish(["movie.mp4"])
+    chain.anchor(state)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                wintypes.HANDLE]
+    k32.CreateFileW.restype = wintypes.HANDLE
+    reader = k32.CreateFileW(str(f), 0x80000000, 0x1 | 0x4, None, 3, 0, None)
+    assert reader not in (None, ctypes.c_void_p(-1).value)
+    try:
+        res = go(env)
+        assert res.deleted == 1
+        assert not f.exists(), "이름이 '삭제 대기' 로 남았습니다"
+        f.write_bytes(b"new save")               # 같은 이름으로 바로 저장할 수 있어야
+        assert f.read_bytes() == b"new save"
+    finally:
+        k32.CloseHandle(wintypes.HANDLE(reader))
