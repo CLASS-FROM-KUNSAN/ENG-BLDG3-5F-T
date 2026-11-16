@@ -1363,6 +1363,32 @@ def cmd_stream_cleanup(args) -> int:
 
 
 # ---------------------------------------------------------------------------
+# activity — 활동 기록 (PDF 폼 필드 값). 지금은 하드웨어/OS 게이트 점검만.
+# ---------------------------------------------------------------------------
+def cmd_activity_gate(args) -> int:
+    from .activity import gate as gate_mod
+
+    cfg, _ = _load(args)
+    gate_cfg = cfg.section("activity.gate")
+    print("활동 기록 — 하드웨어/OS 무결성 게이트")
+    print("=" * 62)
+    print(f"  전용 기기(machine_is_private): {bool(cfg.get('activity.machine_is_private'))}")
+    res = gate_mod.check_gate(gate_cfg)
+    for code, detail in res.details.items():
+        failed = f"gate_fail:{code}" in res.failures
+        print(f"  {'[X]' if failed else '[O]'} {code:<14} {detail}")
+    if "gate_fail:attestation_not_implemented" in res.failures:
+        print("  [X] attestation    require_attestation=true 인데 미구현 → fail-closed")
+    print("\n" + "=" * 62)
+    if res.ok:
+        print("통과 — 이 기기에서는 봉인 저장이 허용됩니다.")
+    else:
+        print("실패 — 저장이 거부됩니다. 위 [X] 를 해결하고 다시 검사하세요.")
+        print("  (예: TPM 2.0 기기, Secure Boot·HVCI 켜기, 관리자 아닌 창에서 실행)")
+    return 0 if res.ok else 1
+
+
+# ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gymhall",
@@ -1435,6 +1461,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true",
                    help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
     p.set_defaults(func=cmd_record_watch)
+
+    # --- activity (활동 기록) ---
+    ac = sub.add_parser(
+        "activity", help="활동 기록 — PDF 폼 필드 값 (지금은 게이트 점검만)"
+    ).add_subparsers(dest="sub", required=True)
+    ac.add_parser("gate", help="하드웨어/OS 무결성 게이트 점검(저장 가능 여부)").set_defaults(
+        func=cmd_activity_gate)
 
     # --- stream (실시간 송출) ---
     st = sub.add_parser(

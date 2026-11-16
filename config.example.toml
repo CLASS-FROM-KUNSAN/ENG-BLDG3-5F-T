@@ -650,6 +650,71 @@ comment_on_rollback = false
 
 
 # =====================================================================
+#  2-2. 활동 기록 — PDF 폼 "필드 값"(키 입력 아님)
+#
+#   python -m gymhall activity gate      이 기기가 봉인 저장을 허용받는지 점검
+#
+# 녹음/녹화와 같은 타임라인에, PDF 폼에 입력한 값을 전사처럼 봉인 저장합니다.
+# 키 입력을 가로채지 않습니다 — 어댑터가 커밋된 "필드 값"만 읽습니다.
+# **전용 기기에서만**, 자격증명 필드는 스펙 플래그로 제외, 하드웨어/OS 게이트를
+# 통과해야만 저장. 기본 전부 꺼짐. 자세한 내용: docs/ACTIVITY.md
+#
+# 책임 고지: 이 기능은 당신 전용 기기에서만 쓰세요. 기기를 공유하면 타인의
+# 입력까지 담길 수 있습니다. public 저장소에 올리지 마세요.
+# =====================================================================
+[activity]
+enabled = false
+# 전용 기기(당신만 그 키보드를 만짐)여야 내용 캡처가 돕니다. false 면 어댑터 비활성.
+machine_is_private = false
+# 수집 창을 [[recording.timetable]] 수업 시간에 묶음
+follow_timetable = true
+timetable_slots = []
+# 필드 값을 언제 읽나(키 후킹 아님): field_commit(blur/change/Enter) | document_save | field_debounce
+keys_level = "field_commit"
+debounce_ms = 800
+# 웹 어댑터 허용 오리진(당신 PDF 사이트만)
+origins = []
+# 데스크톱 어댑터 프로세스 스코프
+process_allowlist = ["Acrobat.exe"]
+upload = "sealed_only"     # off | sealed_only
+pause_hotkey = "Ctrl+Alt+P"
+
+# 안 쓰는 어댑터는 기능이 아니라 공격면이라 기본 꺼짐. 쓰는 것만 켜세요.
+[activity.adapters]
+pdfjs = false          # 브라우저 PDF.js (Firefox 내장 등). 오리진 스코프
+acrobat_web = false    # acrobat.adobe.com 등. 오리진 스코프
+acrobat_js = false     # 데스크톱 Acrobat, 저장 시 필드 값 덤프. 전용 기기만
+acrobat_uia = false    # 데스크톱 Acrobat, UIA. 최후 폴백. 전용 기기만
+
+# 정책 엔진 — 자격증명/민감 필드 제외 + 저장 전 레드액션
+[activity.policy]
+drop_password = true       # /Ff bit13 · type=password · IsPassword. 끌 수 없음
+exclude_signature = true   # /FT /Sig
+exclude_richtext = false
+name_blacklist = ["*ssn*", "*card*", "*cvv*", "*주민*", "*계좌*", "*password*", "*secret*"]
+redact_patterns = true     # 저장 전 카드·주민번호 가림(완벽 아님)
+
+# 하드웨어/OS 게이트 — 하나라도 실패하면 저장 거부(fail-closed)
+[activity.gate]
+require_tpm2 = true
+require_secure_boot = true
+require_vbs_hvci = true
+require_not_elevated = true
+require_no_debugger = true
+require_attestation = false   # EK/quote. 켜면 미구현이라 fail-closed
+# true(기본): 게이트 실패 시 복호도 막음(대칭). false: 읽기는 경고 후 허용
+read_enforces_gate = true
+
+# 저장·봉인
+[activity.store]
+public_key = ""            # 봉인할 공개키. 비면 저장 안 됨
+key_storage = "tpm"        # 추출 불가. TPM 없으면 저장 안 됨
+require_hello = true
+recovery_key = false       # 복구 불가 수용(기기 죽으면 영구 복구 불가)
+retention_days = 0
+
+
+# =====================================================================
 #  3. 음성 전사 (STT)
 # =====================================================================
 [transcribe]
