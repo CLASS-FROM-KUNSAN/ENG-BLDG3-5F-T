@@ -327,6 +327,54 @@ DEFAULTS: dict[str, Any] = {
             },
         },
     },
+    # 활동 기록 — PDF 폼 **필드 값**(키 입력 아님)을 봉인 저장. 전용 기기 전용.
+    # 기본 전부 꺼짐. 자세한 내용은 docs/ACTIVITY.md.
+    "activity": {
+        "enabled": False,
+        "machine_is_private": False,     # 전용 기기 아니면 내용 캡처 0
+        "follow_timetable": True,
+        "timetable_slots": [],
+        "keys_level": "field_commit",    # field_commit | document_save | field_debounce
+        "debounce_ms": 800,
+        # 캡처 지점(어댑터). 안 쓰는 경로는 기능이 아니라 공격면이라 기본 꺼짐.
+        "adapters": {
+            "pdfjs": False,
+            "acrobat_web": False,
+            "acrobat_js": False,
+            "acrobat_uia": False,
+        },
+        "origins": [],                   # 당신 PDF 오리진만(웹 어댑터)
+        "process_allowlist": ["Acrobat.exe"],  # 데스크톱 어댑터 프로세스 스코프
+        # 정책 엔진 — 자격증명/민감 필드 제외 + 저장 전 레드액션
+        "policy": {
+            "drop_password": True,       # /Ff bit13 · type=password · IsPassword. 고정
+            "exclude_signature": True,   # /FT /Sig
+            "exclude_richtext": False,
+            "name_blacklist": ["*ssn*", "*card*", "*cvv*", "*주민*", "*계좌*",
+                               "*password*", "*secret*"],
+            "redact_patterns": True,     # 저장 전 카드·주민번호 가림(완벽 아님)
+        },
+        # 하드웨어/OS 게이트 — 하나라도 실패하면 저장 거부(fail-closed)
+        "gate": {
+            "require_tpm2": True,
+            "require_secure_boot": True,
+            "require_vbs_hvci": True,
+            "require_not_elevated": True,
+            "require_no_debugger": True,
+            "require_attestation": False,  # EK/quote. 켜면 미구현이라 fail-closed
+            "read_enforces_gate": True,    # 대칭 차단. False 면 읽기는 경고 후 허용
+        },
+        # 저장·봉인
+        "store": {
+            "public_key": "",
+            "key_storage": "tpm",        # 추출 불가. TPM 없으면 저장 안 됨
+            "require_hello": True,
+            "recovery_key": False,       # 복구 불가 수용
+            "retention_days": 0,
+        },
+        "upload": "sealed_only",         # off | sealed_only
+        "pause_hotkey": "Ctrl+Alt+P",
+    },
 }
 
 
@@ -532,10 +580,35 @@ def _validate_stream(cfg: Config, errors: list[str]) -> None:
         errors.append("funnel 의 https_port 는 443, 8443, 10000 중 하나여야 합니다 (Tailscale 제한)")
 
 
+def _validate_activity(cfg: Config, errors: list[str]) -> None:
+    _choice(cfg, "activity.keys_level",
+            {"field_commit", "document_save", "field_debounce"}, errors)
+    _choice(cfg, "activity.upload", {"off", "sealed_only"}, errors)
+    _choice(cfg, "activity.store.key_storage", {"tpm"}, errors)
+    _positive(cfg, "activity.debounce_ms", errors)
+    _positive(cfg, "activity.store.retention_days", errors, allow_zero=True)
+
+    for key in ("activity.origins", "activity.timetable_slots",
+                "activity.process_allowlist", "activity.policy.name_blacklist"):
+        value = cfg.get(key, [])
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            errors.append(f"{key} 는 문자열 목록이어야 합니다")
+
+    # 비밀번호 제외는 끌 수 없습니다 — 최소 수집 원칙의 핵심.
+    if not cfg.get("activity.policy.drop_password", True):
+        errors.append(
+            "activity.policy.drop_password 는 끌 수 없습니다(True 고정). "
+            "비밀번호 필드는 담지 않는 것이 이 기능의 전제입니다."
+        )
+    # 전용 기기 전제가 깨진 상태에서 복구키까지 없으면 데이터는 영구 복구 불가.
+    # (수용한 선택이지만, 켜진 채 recovery_key=false 는 경고로 남깁니다 → warnings_for)
+
+
 def validate(cfg: Config) -> None:
     """잘못된 설정을 한 번에 모아서 알려줍니다."""
     errors: list[str] = []
     _validate_stream(cfg, errors)
+    _validate_activity(cfg, errors)
 
     _choice(cfg, "github.tag_strategy", _VALID_TAG_STRATEGIES, errors)
     _choice(cfg, "github.tag_strategy_eclass", _VALID_TAG_STRATEGIES, errors)
@@ -670,6 +743,31 @@ def warnings_for(cfg: Config) -> list[str]:
         notes.append(
             "container = 'mp4' 입니다. 녹화 도중 전원이 꺼지면 파일 전체가 재생 불가가 됩니다. mkv 를 권합니다."
         )
+
+    if cfg.get("activity.enabled"):
+        if not cfg.get("activity.machine_is_private"):
+            notes.append(
+                "activity.enabled = true 인데 machine_is_private = false 입니다. "
+                "전용 기기가 아니면 필드 값 내용 캡처는 돌지 않습니다(어댑터는 비활성)."
+            )
+        adapters = cfg.section("activity.adapters")
+        desktop_on = adapters.get("acrobat_js") or adapters.get("acrobat_uia")
+        if desktop_on and not cfg.get("activity.machine_is_private"):
+            notes.append(
+                "데스크톱 Acrobat 어댑터(acrobat_js/uia)는 전용 기기(machine_is_private=true)에서만 켜집니다. "
+                "공용 기기에서는 다른 사람이 채운 폼 값까지 담길 수 있어 꺼 둡니다."
+            )
+        if not str(cfg.get("activity.store.public_key", "")).strip():
+            notes.append("activity.store.public_key 가 비어 있습니다. 봉인할 공개키를 넣기 전엔 저장되지 않습니다.")
+        if not cfg.get("activity.store.recovery_key"):
+            notes.append(
+                "activity.store.recovery_key = false 입니다. 기기가 죽으면 활동 로그는 영구 복구 불가입니다(수용한 선택)."
+            )
+        if not cfg.get("activity.gate.read_enforces_gate", True):
+            notes.append(
+                "activity.gate.read_enforces_gate = false 입니다. 게이트 실패(Secure Boot 꺼짐 등) 상태에서도 "
+                "복호가 경고만 하고 허용됩니다 — 오염 가능한 OS 에 평문이 노출될 수 있습니다."
+            )
 
     if cfg.get("recording.segment_minutes", 0) == 0:
         notes.append(
