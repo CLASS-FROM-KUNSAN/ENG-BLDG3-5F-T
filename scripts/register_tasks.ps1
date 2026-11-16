@@ -15,6 +15,7 @@
       HomeBackup      - 매일 홈 폴더를 GitHub 릴리스에 백업 (config.toml 의 backup.home.enabled)
       HomePrune       - 매일 백업이 확인된 홈 파일 정리 (config.toml 의 backup.home.prune.enabled)
       TerminalAudio   - (선택) -AudioAt 을 주면 매일 그 시각에 소리만 녹음
+      StreamSchedule  - (선택) -Stream 을 주면 로그온 시 시작해 시간표대로 실시간 송출
 
     중요:
       화면 캡처는 로그온된 세션이 있어야 합니다. 그래서 모든 작업을
@@ -34,6 +35,10 @@
     녹음기)을 창 없이 돌립니다. 길이와 장치는 config.toml 의
     [recording.terminal] 을 따르고, -AudioArgs 로 덮어쓸 수 있습니다.
       -AudioAt 09:00 -AudioArgs "-t","3000","-f","mp3"
+
+.PARAMETER Stream
+    로그온 시 stream_schedule.bat 을 창 없이 띄워, config.toml 의 시간표대로
+    수업마다 Tailscale 실시간 송출을 하고 링크를 이슈로 올립니다([stream]).
 #>
 param(
     [switch]$Remove,
@@ -45,7 +50,8 @@ param(
     [switch]$SkipWatch,
     [switch]$SkipSchedule,
     [string]$AudioAt = "",
-    [string[]]$AudioArgs = @()
+    [string[]]$AudioArgs = @(),
+    [switch]$Stream
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,7 +71,7 @@ function Assert-Admin {
 }
 
 function Remove-All {
-    foreach ($name in @("EclassSync","RecordSchedule","RecordWatch","TranscribeQueue","HomeBackup","HomePrune","TerminalAudio")) {
+    foreach ($name in @("EclassSync","RecordSchedule","RecordWatch","TranscribeQueue","HomeBackup","HomePrune","TerminalAudio","StreamSchedule")) {
         if (Get-ScheduledTask -TaskPath "$Folder\" -TaskName $name -ErrorAction SilentlyContinue) {
             Unregister-ScheduledTask -TaskPath "$Folder\" -TaskName $name -Confirm:$false
             Write-Host "  삭제: $Folder\$name"
@@ -161,6 +167,14 @@ if ($AudioAt) {
     $t = New-ScheduledTaskTrigger -Daily -At $AudioAt
     Register-One "TerminalAudio" (New-HiddenAction "record_audio.bat" $AudioArgs) $t `
         "매일 $AudioAt 에 소리만 녹음합니다(FFmpeg/SoX, [recording.terminal])."
+}
+
+# --- 시간표 실시간 송출 (선택) ---
+if ($Stream) {
+    $t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $t.Delay = "PT3M"
+    Register-One "StreamSchedule" (New-HiddenAction "stream_schedule.bat" @()) $t `
+        "로그온 후 대기하다가 시간표대로 수업마다 실시간 송출합니다([stream])."
 }
 
 Write-Host ""

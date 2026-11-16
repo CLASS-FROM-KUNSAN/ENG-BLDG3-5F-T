@@ -31,6 +31,8 @@ SLOTS: dict[str, Slot] = {
     "eclass": Slot("eclass_password", "GYMHALL_ECLASS_PASSWORD", "Eclass 로그인 비밀번호"),
     "github": Slot("github_token", "GITHUB_TOKEN", "GitHub Personal Access Token (repo 권한)"),
     "openai": Slot("openai_api_key", "OPENAI_API_KEY", "OpenAI API 키"),
+    "icecast": Slot("icecast_source_password", "GYMHALL_ICECAST_PASSWORD",
+                    "Icecast 소스 비밀번호 (stream.server = \"icecast\" 일 때만)"),
 }
 
 

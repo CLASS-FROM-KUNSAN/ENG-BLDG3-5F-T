@@ -498,6 +498,158 @@ vad_stop_sec  = 3.0
 
 
 # =====================================================================
+#  2-1. 실시간 오디오 송출 (Tailscale 망 안에서만)
+#
+#   python -m gymhall stream start          지금 송출 (링크 -> GitHub 이슈)
+#   python -m gymhall stream schedule       시간표대로 수업마다 송출
+#   python -m gymhall stream link           링크가 어떻게 만들어질지 미리 보기
+#   python -m gymhall stream cleanup        비정상 종료로 남은 tailscale serve 정리
+#
+# 소리를 mp3/aac 로 인코딩해 내장 서버(또는 Icecast)로 내보내고,
+# Tailscale 로 같은 tailnet 의 기기만 들을 수 있게 합니다. 링크가 생길
+# 때마다(시작할 때, 기기 주소가 바뀔 때) 저장소 이슈로 올립니다.
+# 자세한 내용: docs/STREAMING.md
+#
+# 주의: 강의 소리는 교수와 학교의 저작물입니다. tailnet 밖(funnel)으로
+#       내보내거나 public 저장소에 링크를 올리면 공중송신이 됩니다.
+# =====================================================================
+[stream]
+# "builtin" : 내장 HTTP 오디오 서버. 설치할 것이 없습니다.          [권장]
+# "icecast" : Icecast(오픈소스 스트리밍 서버)로 밉니다. Icecast 를 따로
+#             띄워 두고  python -m gymhall secrets set icecast  로 소스
+#             비밀번호를 저장하세요. 접속 토큰은 쓰지 않습니다.
+server = "builtin"
+
+# "system" : 스피커로 나가는 소리(온라인 강의 소리)   "mic" : 마이크
+source = "system"
+# "auto"      : soundcard 가 있으면 soundcard, 없으면 ffmpeg
+# "soundcard" : WASAPI 루프백 포함. Windows 에서 system 은 이것만 됩니다
+# "ffmpeg"    : ffmpeg 가 장치를 직접 엶 (dshow / avfoundation / pulse)
+capture = "auto"
+# 비우면 기본 장치. 이름 일부(soundcard) 또는 ffmpeg 장치 이름/번호.
+device = ""
+
+# "mp3" 또는 "aac". 둘 다 중간에 들어온 청취자도 바로 재생됩니다.
+codec        = "mp3"
+bitrate_kbps = 96        # 말소리는 64 로도 충분합니다
+samplerate   = 48000
+channels     = 2
+
+# 내장 서버 포트와 경로. 듣기 주소는 <호스트><path>, 재생 페이지는 <호스트>/
+port = 8765
+# 비우면 자동: direct 모드는 이 기기의 Tailscale IP, serve/funnel 은 127.0.0.1.
+# "0.0.0.0" 으로 두면 같은 와이파이의 다른 사람도 닿을 수 있습니다.
+bind = ""
+path = "/live"
+player_page = true
+title = "실시간 송출"
+
+# 동시 청취자 상한 (0 = 무제한)
+max_listeners = 0
+# 이만큼 밀린 청취자 한 명만 끊습니다(송출은 계속, 그 청취자는 다시 접속하면 됨).
+client_buffer_kb = 2048
+
+# 접속 토큰. 링크 끝에 ?t=... 로 붙습니다. tailnet 안이라도 링크를
+# 모르는 사람은 못 듣게 합니다.
+require_token = true
+# 비우면 송출마다 새로 만듭니다(권장). 고정하려면 12자 이상.
+token = ""
+token_bytes = 16
+
+# --- 시간표가 최우선 ---
+# [[recording.timetable]] 의 수업 시간 안이면 그 수업이 끝나는 시각에 끝나고,
+# 그 전에는 아래 어떤 조건(최대 송출 시간, 청취자 없음, 장애)으로도 멈추지
+# 않습니다. 수업 밖에서 켠 송출이 수업 시간에 들어가면 그 수업을 넘겨받습니다.
+# `python -m gymhall stream schedule` 은 시간표대로 기다렸다가 수업마다 송출합니다.
+follow_timetable = true
+# 송출할 수업 이름만 고르기 (비우면 시간표 전체). 예: ["자료구조", "운영체제"]
+timetable_slots = []
+pre_roll_minutes  = 0        # 수업 시작 몇 분 전부터
+post_roll_minutes = 0        # 수업 끝나고 몇 분 더
+
+# --- 멈춤 조건: 기본은 전부 '없음' ---
+# 최대 송출 시간(분). 0 = 없음. 닿으면 on_max_duration 대로:
+#   "rollback" : 멈추지 않고 인코더를 마지막으로 잘 돌던 상태로 새로 띄워
+#                이어 갑니다(장시간 송출의 누적 문제 해소). 링크·이슈는 그대로.   [기본]
+#   "stop"     : 멈춤 (시간표 수업 중에는 무시)
+max_duration_minutes = 0
+on_max_duration = "rollback"
+# 청취자가 이만큼(분) 없으면 멈춤. 0 = 없음. 시간표 수업 중에는 무시.
+idle_stop_minutes = 0
+# 시작 후 이 시간(초) 동안 소리가 실제로 나와야 링크를 올립니다.
+# 장치가 틀려 바로 죽는 송출의 링크가 이슈로 올라가는 것을 막습니다.
+min_uptime_sec = 5
+
+# --- 롤백(복구) ---
+# 인코더가 죽거나 장치가 사라지면 멈추지 않고 되돌립니다:
+#   마지막으로 소리가 나온 장치 -> 설정한 device -> (fallback_default_device) 기본 장치
+# 실패하면 restart_backoff_sec 부터 두 배씩, restart_backoff_max_sec 까지 늘려 가며 재시도.
+# restart_on_failure : 연속 실패 허용 횟수. 0 = 무제한
+restart_on_failure      = 0
+restart_backoff_sec     = 5
+restart_backoff_max_sec = 120
+fallback_default_device = true
+
+[stream.tailscale]
+# false 면 Tailscale 없이 127.0.0.1 에서만 열고, 이슈도 올리지 않습니다.
+enabled = true
+# "serve"  : tailnet 안에 HTTPS 로 (tailscale serve)                  [권장]
+# "direct" : 이 기기의 Tailscale IP 에 HTTP 로 직접. 방화벽 허용이 필요할 수 있음
+# "funnel" : 인터넷 전체 공개 (tailscale funnel). allow_funnel = true 필요
+mode = "serve"
+https_port = 443           # serve/funnel 의 HTTPS 포트 (funnel 은 443, 8443, 10000 만 됩니다)
+use_magicdns = true        # 링크에 기기 이름(…ts.net)을 씀. false 면 100.x IP
+allow_funnel = false
+exe = ""                   # tailscale 실행 파일 경로 (비우면 자동)
+# 이 간격(초)마다 tailnet 상태를 다시 읽어 링크가 바뀌면 다시 올립니다 (0 = 안 봄)
+link_check_sec = 60
+# Tailscale 이 연결돼 있지 않으면 시작하지 않습니다
+require_online = true
+# 이 HTTPS 포트를 이미 다른 serve 가 쓰고 있으면 덮어쓸지
+override_existing = false
+# 끝날 때 serve/funnel 을 끌지
+teardown = true
+
+[stream.icecast]
+# server = "icecast" 일 때만. 링크의 포트·경로도 이 값을 씁니다.
+host  = "127.0.0.1"
+port  = 8000
+mount = "/live"
+user  = "source"
+
+[stream.issue]
+# 링크가 생길 때마다 저장소 이슈로 올립니다.
+enabled = true
+# 비우면 [github] 의 owner / repo
+owner = ""
+repo  = ""
+# 쓸 수 있는 자리: {link} {player} {host} {tailnet} {mode} {label} {machine}
+#                  {source} {codec} {bitrate} {started} {until} {reason} {token_note}
+title = "[실시간 송출] {label} — {started}"
+# 비우면 기본 본문(표 형식). 직접 쓰려면 여러 줄 문자열 """ ... """ 로.
+body  = ""
+labels      = ["live-stream"]
+label_color = "d93f0b"     # 라벨이 없으면 이 색으로 만듭니다
+assignees   = []           # 예: ["seongbin45"]
+# 본문 맨 앞에 붙일 멘션. 적은 사람에게 GitHub 알림이 갑니다.
+mentions    = []           # 예: ["@seongbin45"]
+# 링크의 토큰을 이슈에 그대로 적을지. false 면 토큰을 가리고 따로 전해야 합니다.
+include_token = true
+# 링크가 바뀌었을 때(기기 이름·IP 변경)
+#   "new"     : 새 이슈           "comment" : 같은 이슈에 댓글      "none" : 아무것도 안 함
+on_change = "new"
+close_previous  = true     # "new" 일 때 옛 이슈를 닫음
+comment_on_stop = true     # 끝나면 길이·청취 수를 댓글로
+close_on_stop   = true     # 끝나면 이슈를 닫음
+# 같은 링크(토큰 고정 시)로 열린 이슈가 있으면 새로 만들지 않음
+dedupe = true
+# public 저장소에는 올리지 않습니다
+require_private_repo = true
+# 롤백으로 복구할 때마다 이슈에 댓글 (끝날 때 댓글에는 횟수가 항상 들어갑니다)
+comment_on_rollback = false
+
+
+# =====================================================================
 #  3. 음성 전사 (STT)
 # =====================================================================
 [transcribe]

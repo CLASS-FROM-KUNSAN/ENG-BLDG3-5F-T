@@ -185,6 +185,79 @@ DEFAULTS: dict[str, Any] = {
             "vad_stop_sec": 3.0,
         },
     },
+    # 실시간 오디오 송출 (Tailscale 망 안에서만). `python -m gymhall stream start`
+    # 각 항목의 뜻은 config.example.toml 과 docs/STREAMING.md 에 있습니다.
+    "stream": {
+        "server": "builtin",
+        "source": "system",
+        "capture": "auto",
+        "device": "",
+        "codec": "mp3",
+        "bitrate_kbps": 96,
+        "samplerate": 48000,
+        "channels": 2,
+        "port": 8765,
+        "bind": "",
+        "path": "/live",
+        "player_page": True,
+        "title": "실시간 송출",
+        "max_listeners": 0,
+        "client_buffer_kb": 2048,
+        "require_token": True,
+        "token": "",
+        "token_bytes": 16,
+        # 멈춤 조건은 기본으로 전부 '없음'. 최대 송출 시간은 멈추지 않고 롤백(순환)합니다.
+        "max_duration_minutes": 0,
+        "on_max_duration": "rollback",
+        "idle_stop_minutes": 0,
+        "min_uptime_sec": 5,
+        "restart_on_failure": 0,
+        "restart_backoff_sec": 5,
+        "restart_backoff_max_sec": 120,
+        "fallback_default_device": True,
+        # 시간표(recording.timetable)가 최우선
+        "follow_timetable": True,
+        "timetable_slots": [],
+        "pre_roll_minutes": 0,
+        "post_roll_minutes": 0,
+        "tailscale": {
+            "enabled": True,
+            "mode": "serve",
+            "https_port": 443,
+            "use_magicdns": True,
+            "allow_funnel": False,
+            "exe": "",
+            "link_check_sec": 60,
+            "require_online": True,
+            "override_existing": False,
+            "teardown": True,
+        },
+        "icecast": {
+            "host": "127.0.0.1",
+            "port": 8000,
+            "mount": "/live",
+            "user": "source",
+        },
+        "issue": {
+            "enabled": True,
+            "owner": "",
+            "repo": "",
+            "title": "[실시간 송출] {label} — {started}",
+            "body": "",
+            "labels": ["live-stream"],
+            "label_color": "d93f0b",
+            "assignees": [],
+            "mentions": [],
+            "include_token": True,
+            "on_change": "new",
+            "close_previous": True,
+            "comment_on_stop": True,
+            "close_on_stop": True,
+            "dedupe": True,
+            "require_private_repo": True,
+            "comment_on_rollback": False,
+        },
+    },
     "transcribe": {
         "enabled": True,
         "engine": "faster-whisper",
@@ -406,9 +479,63 @@ def _matches_everything(pattern: str) -> bool:
                for probes in (_EXCLUDE_PROBES, _EXCLUDE_PROBES_EXT))
 
 
+def _validate_stream(cfg: Config, errors: list[str]) -> None:
+    _choice(cfg, "stream.server", {"builtin", "icecast"}, errors)
+    _choice(cfg, "stream.source", {"system", "mic"}, errors)
+    _choice(cfg, "stream.capture", {"auto", "soundcard", "ffmpeg"}, errors)
+    _choice(cfg, "stream.codec", {"mp3", "aac"}, errors)
+    _choice(cfg, "stream.tailscale.mode", {"direct", "serve", "funnel"}, errors)
+    _choice(cfg, "stream.issue.on_change", {"new", "comment", "none"}, errors)
+    _choice(cfg, "stream.on_max_duration", {"rollback", "stop"}, errors)
+    for key in ("bitrate_kbps", "samplerate", "channels", "client_buffer_kb", "token_bytes",
+                "restart_backoff_sec", "restart_backoff_max_sec"):
+        _positive(cfg, f"stream.{key}", errors)
+    for key in ("max_listeners", "max_duration_minutes", "idle_stop_minutes",
+                "min_uptime_sec", "restart_on_failure", "pre_roll_minutes", "post_roll_minutes"):
+        _positive(cfg, f"stream.{key}", errors, allow_zero=True)
+    slots = cfg.get("stream.timetable_slots", [])
+    if not isinstance(slots, list) or not all(isinstance(v, str) for v in slots):
+        errors.append('stream.timetable_slots 는 수업 이름 목록이어야 합니다 (예: ["자료구조"])')
+    elif slots:
+        known = {str(e.get("name", "")) for e in cfg.get("recording.timetable", []) or []
+                 if isinstance(e, dict)}
+        missing = [n for n in slots if n not in known]
+        if missing:
+            errors.append(f"stream.timetable_slots 의 {missing} 가 [[recording.timetable]] 에 없습니다")
+    _positive(cfg, "stream.tailscale.link_check_sec", errors, allow_zero=True)
+    for key in ("stream.port", "stream.tailscale.https_port", "stream.icecast.port"):
+        port = cfg.get(key)
+        if not isinstance(port, int) or not 1 <= port <= 65535:
+            errors.append(f"{key} 는 1~65535 사이 정수여야 합니다 (현재: {port!r})")
+    for key in ("stream.path", "stream.icecast.mount"):
+        if not str(cfg.get(key, "")).startswith("/"):
+            errors.append(f"{key} 는 '/' 로 시작해야 합니다 (현재: {cfg.get(key)!r})")
+    if str(cfg.get("stream.path", "")) in {"/", "/status"}:
+        errors.append("stream.path 는 '/' 나 '/status' 가 될 수 없습니다(재생 페이지·상태가 씁니다)")
+    token = str(cfg.get("stream.token", ""))
+    if token and len(token) < 12:
+        errors.append("stream.token 이 12자보다 짧습니다. 비우면 송출마다 무작위로 만듭니다.")
+    if not re.fullmatch(r"#?[0-9a-fA-F]{6}", str(cfg.get("stream.issue.label_color", ""))):
+        errors.append("stream.issue.label_color 는 6자리 16진수 색이어야 합니다 (예: 'd93f0b')")
+    for key in ("labels", "assignees", "mentions"):
+        value = cfg.get(f"stream.issue.{key}", [])
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            errors.append(f"stream.issue.{key} 는 문자열 목록이어야 합니다")
+    if (cfg.get("stream.tailscale.mode") == "funnel"
+            and not cfg.get("stream.tailscale.allow_funnel")):
+        errors.append(
+            'stream.tailscale.mode = "funnel" 은 인터넷 전체에 공개합니다. '
+            "정말 필요하면 stream.tailscale.allow_funnel = true 를 함께 적으세요."
+        )
+    if (cfg.get("stream.tailscale.mode") == "funnel"
+            and cfg.get("stream.tailscale.https_port") not in {443, 8443, 10000}):
+        errors.append("funnel 의 https_port 는 443, 8443, 10000 중 하나여야 합니다 (Tailscale 제한)")
+
+
 def validate(cfg: Config) -> None:
     """잘못된 설정을 한 번에 모아서 알려줍니다."""
     errors: list[str] = []
+    _validate_stream(cfg, errors)
 
     _choice(cfg, "github.tag_strategy", _VALID_TAG_STRATEGIES, errors)
     _choice(cfg, "github.tag_strategy_eclass", _VALID_TAG_STRATEGIES, errors)
@@ -562,6 +689,15 @@ def warnings_for(cfg: Config) -> list[str]:
             "홈 정리가 켜져 있습니다. GitHub 사슬로 확인된 파일은 로컬에서 지워집니다 "
             f"(올린 뒤 {hours}시간 이후)."
         )
+
+    if (cfg.get("stream.issue.enabled") and cfg.get("stream.issue.include_token")
+            and not cfg.get("stream.issue.require_private_repo")):
+        notes.append(
+            "stream.issue.require_private_repo = false 이고 include_token = true 입니다. "
+            "public 저장소면 송출 링크와 토큰이 그대로 공개됩니다."
+        )
+    if cfg.get("stream.tailscale.mode") == "funnel":
+        notes.append("실시간 송출이 funnel(인터넷 공개)로 설정돼 있습니다. 강의 소리라면 공중송신이 될 수 있습니다.")
 
     if cfg.get("github.delete_local_after_upload"):
         notes.append("업로드 후 로컬 원본을 삭제하도록 설정돼 있습니다. 업로드 실패 시 복구할 수 없습니다.")
