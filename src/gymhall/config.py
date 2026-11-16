@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -166,6 +167,23 @@ DEFAULTS: dict[str, Any] = {
             "watch_stop_grace_sec": 60,
         },
         "timetable": [],
+        # 터미널 녹음기(FFmpeg / SoX / arecord). 소리만 받습니다.
+        # `python -m gymhall audio record` 와 cron·작업 스케줄러용입니다.
+        "terminal": {
+            "backend": "auto",
+            "source": "mic",
+            "device": "",
+            "seconds": 3600,
+            "format": "wav",
+            "filename": "record_%Y%m%d_%H%M%S",
+            "out_dir": "",
+            "samplerate": 44100,
+            "channels": 2,
+            "vad": False,
+            "vad_threshold": "3%",
+            "vad_start_sec": 0.1,
+            "vad_stop_sec": 3.0,
+        },
     },
     "transcribe": {
         "enabled": True,
@@ -345,6 +363,9 @@ _VALID_TAG_STRATEGIES = {"monthly", "weekly", "daily", "single"}
 _VALID_TRACK_LAYOUTS = {"separate", "mixed", "both"}
 _VALID_VIDEO_BACKENDS = {"gdigrab", "ddagrab"}
 _VALID_AUDIO_BACKENDS = {"soundcard", "dshow"}
+_VALID_TERMINAL_BACKENDS = {"auto", "ffmpeg", "sox", "arecord"}
+_VALID_TERMINAL_SOURCES = {"mic", "system"}
+_VALID_TERMINAL_FORMATS = {"wav", "mp3", "flac"}
 _VALID_ENGINES = {"faster-whisper", "openai"}
 _VALID_BATCH_MODES = {"immediate", "queue"}
 _VALID_SOURCE_TRACKS = {"system", "mic", "both"}
@@ -394,6 +415,9 @@ def validate(cfg: Config) -> None:
     _choice(cfg, "recording.audio.track_layout", _VALID_TRACK_LAYOUTS, errors)
     _choice(cfg, "recording.video.backend", _VALID_VIDEO_BACKENDS, errors)
     _choice(cfg, "recording.audio.backend", _VALID_AUDIO_BACKENDS, errors)
+    _choice(cfg, "recording.terminal.backend", _VALID_TERMINAL_BACKENDS, errors)
+    _choice(cfg, "recording.terminal.source", _VALID_TERMINAL_SOURCES, errors)
+    _choice(cfg, "recording.terminal.format", _VALID_TERMINAL_FORMATS, errors)
     _choice(cfg, "transcribe.engine", _VALID_ENGINES, errors)
     _choice(cfg, "transcribe.batch.mode", _VALID_BATCH_MODES, errors)
     _choice(cfg, "transcribe.source_track", _VALID_SOURCE_TRACKS, errors)
@@ -427,6 +451,16 @@ def validate(cfg: Config) -> None:
     elif any(_matches_everything(p) for p in excl):
         errors.append("backup.home.exclude_names 에 모든 파일에 맞는 패턴('*')이 있습니다. "
                       "그러면 아무것도 백업되지 않습니다.")
+    _positive(cfg, "recording.terminal.seconds", errors)
+    _positive(cfg, "recording.terminal.vad_start_sec", errors, allow_zero=True)
+    _positive(cfg, "recording.terminal.vad_stop_sec", errors)
+
+    # SoX 의 silence 문턱값: 3% 처럼 백분율이거나 -40d 처럼 dB 입니다.
+    threshold = str(cfg.get("recording.terminal.vad_threshold", "3%"))
+    if not re.fullmatch(r"\d+(\.\d+)?%|-?\d+(\.\d+)?d", threshold):
+        errors.append(
+            f"recording.terminal.vad_threshold = {threshold!r} 는 '3%' 나 '-40d' 형식이어야 합니다"
+        )
 
     split_mb = cfg.get("github.split_size_mb", 1900)
     if isinstance(split_mb, (int, float)) and split_mb > 2000:

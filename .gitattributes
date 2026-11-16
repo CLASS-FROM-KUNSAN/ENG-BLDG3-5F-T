@@ -5,7 +5,8 @@
 *.ps1 text eol=crlf
 *.vbs text eol=crlf
 
-# 나머지는 LF
+# 나머지는 LF. .sh 는 CRLF 면 '/bin/sh^M: bad interpreter' 로 안 돕니다.
+*.sh  text eol=lf
 *.py  text eol=lf
 *.md  text eol=lf
 *.toml text eol=lf

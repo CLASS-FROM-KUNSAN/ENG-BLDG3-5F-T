@@ -8,6 +8,8 @@
   python -m gymhall record start          수동 녹화
   python -m gymhall record schedule       시간표 대기
   python -m gymhall record watch          프로그램 감지 대기
+  python -m gymhall audio record          소리만 녹음 (FFmpeg / SoX / arecord)
+  python -m gymhall audio tools           터미널 녹음 도구 점검
   python -m gymhall transcribe queue      대기열 전사
   python -m gymhall upload <경로>         임의 파일 업로드
 """
@@ -16,7 +18,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
+import subprocess
 import sys
+import time
 import traceback
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -1091,6 +1096,106 @@ def cmd_backup_prune(args) -> int:
 
 
 # ---------------------------------------------------------------------------
+# audio — 터미널 녹음기 (FFmpeg / SoX / arecord)
+# ---------------------------------------------------------------------------
+def _terminal_plan(cfg, args):
+    from .recorder import terminal
+
+    t = cfg.section("recording.terminal")
+
+    def pick(name, key):
+        value = getattr(args, name, None)
+        return t.get(key) if value is None else value
+
+    return terminal.Plan(
+        backend=str(pick("backend", "backend")),
+        source=str(pick("source", "source")),
+        device=str(pick("device", "device") or ""),
+        seconds=float(pick("seconds", "seconds")),
+        fmt=str(pick("format", "format")),
+        vad=bool(args.vad or t.get("vad", False)),
+        vad_threshold=str(pick("threshold", "vad_threshold")),
+        vad_start_sec=float(t.get("vad_start_sec", 0.1)),
+        vad_stop_sec=float(pick("stop_after", "vad_stop_sec")),
+        samplerate=int(t.get("samplerate", 44100)),
+        channels=int(t.get("channels", 2)),
+    )
+
+
+def _terminal_out_dir(cfg, layout, args) -> Path:
+    from .recorder import terminal
+
+    raw = args.out or str(cfg.get("recording.terminal.out_dir", "") or "")
+    if raw:
+        return Path(os.path.expandvars(raw)).expanduser()
+    return terminal.default_out_dir(layout.recordings)
+
+
+def cmd_audio_record(args) -> int:
+    from .recorder import terminal
+
+    cfg, layout = _load(args)
+    plan = _terminal_plan(cfg, args)
+    pattern = args.name or str(cfg.get("recording.terminal.filename", "record_%Y%m%d_%H%M%S"))
+    saved = 0
+
+    try:
+        if args.print:
+            out = _terminal_out_dir(cfg, layout, args) / terminal.output_name(pattern, plan.fmt)
+            backend, cmd = terminal.build(plan, out)
+            print(f"# {backend}")
+            print(subprocess.list2cmdline(cmd) if os.name == "nt" else shlex.join(cmd))
+            return 0
+
+        while True:
+            out = terminal.record_once(plan, _terminal_out_dir(cfg, layout, args),
+                                       pattern=pattern)
+            if out is not None:
+                saved += 1
+                print(out)
+            elif not args.loop:
+                return 1
+            if not args.loop:
+                return 0
+            # 장치가 사라져 곧바로 실패하는 경우 CPU 를 태우며 돌지 않게 합니다.
+            if out is None:
+                time.sleep(5)
+    except terminal.TerminalAudioError as exc:
+        print(f"\n{exc}")
+        return 2
+    except KeyboardInterrupt:
+        log.info("터미널 녹음을 멈췄습니다. 이번 실행에서 %d개 저장.", saved)
+        return 0
+
+
+def cmd_audio_tools(args) -> int:
+    from .recorder import terminal
+
+    cfg, layout = _load(args)
+    found = terminal.available()
+    plat = terminal.platform_key()
+    print(f"터미널 녹음 도구 ({plat})")
+    print("=" * 62)
+    for name, path in found.items():
+        if name == "arecord" and plat != "linux":
+            print(f"  [-] {name:<8} 리눅스 전용")
+            continue
+        print(f"  {'[O]' if path else '[-]'} {name:<8} {path or '없음'}")
+
+    plan = _terminal_plan(cfg, args)
+    out = _terminal_out_dir(cfg, layout, args) / terminal.output_name(
+        str(cfg.get("recording.terminal.filename", "record_%Y%m%d_%H%M%S")), plan.fmt)
+    print("\n지금 설정으로 실행될 명령")
+    try:
+        backend, cmd = terminal.build(plan, out, found=found)
+    except terminal.TerminalAudioError as exc:
+        print(f"  (만들 수 없음) {exc}")
+        return 1
+    print(f"  [{backend}] " + (subprocess.list2cmdline(cmd) if os.name == "nt" else shlex.join(cmd)))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gymhall",
@@ -1163,6 +1268,38 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true",
                    help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
     p.set_defaults(func=cmd_record_watch)
+
+    # --- audio (터미널 녹음기) ---
+    au = sub.add_parser(
+        "audio", help="소리만 녹음 (FFmpeg / SoX / arecord, cron·작업 스케줄러용)"
+    ).add_subparsers(dest="sub", required=True)
+
+    def _audio_opts(p):
+        p.add_argument("-b", "--backend", choices=["auto", "ffmpeg", "sox", "arecord"])
+        p.add_argument("--source", choices=["mic", "system"],
+                       help="mic(기본 입력) 또는 system(스피커로 나가는 소리)")
+        p.add_argument("-d", "--device", help="장치 이름/번호 (비우면 기본 장치)")
+        p.add_argument("-t", "--seconds", type=float,
+                       help="녹음 길이(초). --vad 와 함께면 최대 길이")
+        p.add_argument("-f", "--format", choices=["wav", "mp3", "flac"])
+        p.add_argument("--vad", action="store_true",
+                       help="소리가 날 때만 녹음 (SoX silence 효과)")
+        p.add_argument("--threshold", help="소리 감지 문턱값 (예: 3%%, -40d)")
+        p.add_argument("--stop-after", type=float, dest="stop_after",
+                       help="이만큼(초) 조용하면 끝 (기본 3)")
+        p.add_argument("-o", "--out", help="저장 폴더")
+
+    p = au.add_parser("record", help="지금 녹음 (설정은 [recording.terminal])")
+    _audio_opts(p)
+    p.add_argument("-n", "--name", help="파일 이름 형식 (strftime, 예: lecture_%%Y%%m%%d_%%H%%M)")
+    p.add_argument("--loop", action="store_true",
+                   help="끝나면 새 파일로 다시 녹음 (--vad 와 함께 상시 감시)")
+    p.add_argument("--print", action="store_true", help="실행하지 않고 명령만 출력")
+    p.set_defaults(func=cmd_audio_record)
+
+    p = au.add_parser("tools", help="설치된 도구와 실행될 명령 보기")
+    _audio_opts(p)
+    p.set_defaults(func=cmd_audio_tools)
 
     # --- transcribe ---
     tr = sub.add_parser("transcribe", help="음성 전사").add_subparsers(dest="sub", required=True)

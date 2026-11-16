@@ -122,6 +122,30 @@ scripts\record_now.bat -l 자료구조 -m 90 REM 이름과 길이 지정
 | 프로그램 감지 | `record_watch.bat` | Zoom/Webex 온라인 강의 |
 | 터미널 | `.venv\Scripts\python -m gymhall record start` | 직접 호출 |
 
+#### 소리만 — 터미널 녹음기 (FFmpeg · SoX · arecord)
+
+화면 없이 소리만 받는 명령줄 녹음기도 있습니다. **macOS · Linux 에서도**
+돌고, cron · 작업 스케줄러에 그대로 걸 수 있습니다.
+
+```sh
+python -m gymhall audio record -t 60 -f mp3   # FFmpeg: 정확히 60초
+python -m gymhall audio record --vad --loop   # SoX: 소리가 날 때만, 계속
+python -m gymhall audio record -b arecord     # Linux: 설치 없는 ALSA 기본 도구
+python -m gymhall audio tools                 # 무엇이 깔려 있고 무엇이 실행될지
+```
+
+| 도구 | 지원 OS | 핵심 자동화 기능 | 쓸 만한 때 |
+|---|---|---|---|
+| FFmpeg | Windows, macOS, Linux | `-t` 로 정확한 길이, mp3 등 인코딩 | 예약 시간제 강의·회의 녹음 |
+| SoX | Windows, macOS, Linux | `silence` 로 무음 감지 자동 시작·정지 | 소리 날 때만 기록하는 감시·메모 |
+| arecord | Linux | 설치 불필요, 초경량 | 리눅스 서버·라즈베리파이 상시 녹음 |
+
+파일 이름은 `record_20261116_090000.wav` 처럼 날짜·시각이 들어가 덮어쓰지
+않고 쌓입니다. 예약은 Linux/macOS 는 `scripts/record_audio.sh` 를 crontab
+에, Windows 는 `register_tasks.ps1 -AudioAt 09:00` 으로 겁니다.
+설정은 `[recording.terminal]`, 자세한 내용은
+[docs/TERMINAL_AUDIO.md](docs/TERMINAL_AUDIO.md).
+
 ### 3. 음성 전사
 
 ```bat
@@ -190,6 +214,8 @@ python -m gymhall eclass sync            자료 수집 + 업로드
 python -m gymhall record start           수동 녹화
 python -m gymhall record schedule        시간표 대기
 python -m gymhall record watch           프로그램 감지 대기
+python -m gymhall audio record           소리만 녹음 (FFmpeg / SoX / arecord)
+python -m gymhall audio tools            터미널 녹음 도구 점검
 python -m gymhall transcribe queue       대기열 전사
 python -m gymhall transcribe warmup      모델 미리 받기
 python -m gymhall upload <경로>          임의 파일 업로드
@@ -223,6 +249,7 @@ src\gymhall\
     session.py           세그먼트 관리
     schedule.py          시간표
     watcher.py           프로그램 감지
+    terminal.py          터미널 녹음기 (FFmpeg / SoX / arecord)
   transcribe\
     batch.py             정밀 전사 + 대기열
     realtime.py          실시간(임시) 전사
@@ -237,6 +264,7 @@ docs\
   TROUBLESHOOTING.md     안 될 때
   TESTING.md             테스트와 개발 중 잡은 버그들
   CLOUD_SYNC.md          PC 없이 수집하기 (GitHub Actions)
+  TERMINAL_AUDIO.md      소리만 녹음 + cron / 작업 스케줄러
 ```
 
 산출물은 저장소가 아니라 `%LOCALAPPDATA%\gym-w-hall-2f\` 에 쌓입니다
@@ -246,8 +274,9 @@ docs\
 
 ## 알려진 한계
 
-- **Windows 전용**입니다. 화면 캡처와 WASAPI 루프백이 그렇습니다.
+- **화면 녹화는 Windows 전용**입니다. 화면 캡처와 WASAPI 루프백이 그렇습니다.
   (코드는 Linux에서 `x11grab` 으로 돌아가지만 시험하지 않았습니다.)
+  소리만이라면 `audio record`(터미널 녹음기)가 macOS · Linux 에서 돕니다.
 - **세그먼트 사이에 1초 안팎의 공백**이 생깁니다. 강의에는 문제가 없지만
   연속 측정에는 맞지 않습니다.
 - **학교가 LMS 를 개편하면 수집이 멈춥니다.** `eclass_probe.bat` 으로
