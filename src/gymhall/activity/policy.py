@@ -15,9 +15,10 @@ import fnmatch
 import re
 from dataclasses import dataclass
 
-# AcroForm 필드 플래그(/Ff). PDF 32000-1 표 227.
-FF_PASSWORD = 1 << 12   # bit 13 — 비밀번호 필드
-FF_RICHTEXT = 1 << 25   # bit 26 — 리치텍스트
+# AcroForm 텍스트 필드 플래그(/Ff). PDF 32000-1 표 228. 비트 위치는 1-기준이라
+# 비트 N 의 값은 2^(N-1) 입니다 — 헷갈리기 쉬워 실기에서 한 번 틀렸던 부분.
+FF_PASSWORD = 1 << 13   # 비트 14, 값 0x2000 — 비밀번호 필드
+FF_RICHTEXT = 1 << 25   # 비트 26, 값 0x2000000 — 리치텍스트
 
 
 @dataclass(frozen=True)

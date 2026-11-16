@@ -7,9 +7,10 @@
 > **책임 고지.** 이 기능은 **당신 전용 기기에서만** 쓰세요. 기기를 공유하면 타인의
 > 입력까지 담길 수 있습니다. 결과물은 **private 저장소에만** 두세요.
 
-> **구현 상태.** 안전 척추(하드웨어/OS 게이트 + 정책 엔진)는 **구현됨**
-> (`src/gymhall/activity/`, `python -m gymhall activity gate`). 저장소(SQLite 봉인)와
-> 캡처 어댑터(A→C→B→D)는 **다음 증분**.
+> **구현 상태.** **구현됨** (`src/gymhall/activity/`): 하드웨어/OS 게이트 + 정책 엔진 +
+> SQLite 봉인 저장소(AES-GCM) + DEK 관리(DPAPI) + ingest 파이프라인 + 네이티브 메시징
+> 길이-프레이밍. 명령: `activity gate`, `activity export`.
+> **다음 증분**: 브라우저 확장(A 어댑터 JS) + 프로브/오리진 학습 CLI. 그다음 C→B→D.
 
 ---
 
@@ -93,10 +94,15 @@
 
 ---
 
-## 6. 저장·봉인
-- 디스크 쓰기 **전에** AEAD + **공개키 봉투**. SQLite 엔 암호문 + 래핑 키 + 타임라인 메타만.
-- 개인키 **TPM 추출 불가** + Windows Hello. 백업키 없음, 기기 죽으면 **복구 불가(수용)**.
-- 업로드 `sealed_only` 또는 `off`. public 저장소 금지.
+## 6. 저장·봉인 (구현됨)
+- SQLite 에 **AES-GCM 암호문만**. 평문 JSON 은 메모리에만, 디스크·로그엔 안 남음
+  (실기에서 바이트로 확인). 평문 메타(`t_ms`,`doc_hash`,`adapter`)만 질의용으로 노출.
+- 복호 AAD = `doc_hash` — 행을 다른 문서로 바꿔치기하면 복호 실패.
+- **DEK(32B)는 무작위 생성, at-rest 는 Windows DPAPI 로 봉인.** 게이트가 TPM·Secure
+  Boot 를 검증한 기기에서만 생성. **정직하게: 이번은 DPAPI 바인딩이고, TPM 비추출 CNG
+  키로 DEK 를 감싸는 것은 다음 하드닝**(DEK 분리라 저장소 포맷 불변).
+- 백업키 없음, 기기 죽으면 **복구 불가(수용)**. `activity export` 는 읽기 게이트 적용,
+  실패 시 `--break-glass` 1회만.
 
 ## 7. 가시성·동의 (어댑터 증분에서)
 - 캡처 중엔 보임(탭 배지/트레이), 사이트별 옵트인, 시크릿창 차단, 패닉 일시정지.
@@ -151,10 +157,12 @@ retention_days = 0
 
 ## 9. 명령
 ```
-python -m gymhall activity gate      이 기기가 봉인 저장을 허용받는지 점검
+python -m gymhall activity gate                 이 기기가 봉인 저장을 허용받는지 점검
+python -m gymhall activity export [--break-glass] 봉인 로그를 복호해 JSONL 로(읽기 게이트 적용)
 ```
-(캡처/저장 명령은 어댑터 증분에서 추가.)
+(브라우저로 받는 캡처 명령/호스트 등록은 확장 증분에서 추가.)
 
 ## 10. 빌드 순서
-스키마 → 정책 엔진(완료) → 게이트(완료) → **A(PDF.js)** → C(Acrobat JS) → B(Acrobat Web) → D(UIA).
+게이트(완료) → 정책 엔진(완료) → 봉인 저장소·DEK·ingest·프레이밍(완료) →
+**A(PDF.js) 확장(JS)** → C(Acrobat JS) → B(Acrobat Web) → D(UIA).
 각 어댑터는 `어댑터 → 테스트 → 설정/검증 → docs`. 한 번에 하나씩.

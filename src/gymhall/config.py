@@ -343,7 +343,8 @@ DEFAULTS: dict[str, Any] = {
             "acrobat_js": False,
             "acrobat_uia": False,
         },
-        "origins": [],                   # 당신 PDF 오리진만(웹 어댑터)
+        # 웹 어댑터 허용 오리진. Adobe 기본 포함, PDF.js 데모는 제외.
+        "origins": ["https://acrobat.adobe.com", "https://documentcloud.adobe.com"],
         "process_allowlist": ["Acrobat.exe"],  # 데스크톱 어댑터 프로세스 스코프
         # 정책 엔진 — 자격증명/민감 필드 제외 + 저장 전 레드액션
         "policy": {
@@ -366,6 +367,8 @@ DEFAULTS: dict[str, Any] = {
         },
         # 저장·봉인
         "store": {
+            "db_path": "",               # 비우면 <데이터>/activity/activity.db
+            "dek_path": "",              # 비우면 <데이터>/activity/dek.bin (DPAPI 봉인)
             "public_key": "",
             "key_storage": "tpm",        # 추출 불가. TPM 없으면 저장 안 됨
             "require_hello": True,
