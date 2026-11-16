@@ -10,6 +10,8 @@
   python -m gymhall record watch          프로그램 감지 대기
   python -m gymhall audio record          소리만 녹음 (FFmpeg / SoX / arecord)
   python -m gymhall audio tools           터미널 녹음 도구 점검
+  python -m gymhall stream start          실시간 송출 (Tailscale, 링크 -> 이슈)
+  python -m gymhall stream link           송출 링크 미리 보기
   python -m gymhall transcribe queue      대기열 전사
   python -m gymhall upload <경로>         임의 파일 업로드
 """
@@ -1196,6 +1198,129 @@ def cmd_audio_tools(args) -> int:
 
 
 # ---------------------------------------------------------------------------
+# stream — 실시간 오디오 송출 (Tailscale)
+# ---------------------------------------------------------------------------
+_STREAM_FLAGS = {
+    "server": "server", "source": "source", "device": "device", "codec": "codec",
+    "bitrate": "bitrate_kbps", "port": "port", "minutes": "max_duration_minutes",
+    "idle_stop": "idle_stop_minutes", "mode": "ts_mode",
+}
+
+
+def _stream_settings(cfg, args):
+    from .stream import live
+
+    s = live.settings_from(cfg)
+    for flag, attr in _STREAM_FLAGS.items():
+        value = getattr(args, flag, None)
+        if value is not None:
+            setattr(s, attr, value)
+    if getattr(args, "no_tailscale", False):
+        s.ts_enabled = False
+    if getattr(args, "no_issue", False):
+        s.issue.enabled = False
+    return s
+
+
+def _stream_notifier(cfg, layout, s, *, dry_run: bool):
+    from .release import ReleaseError, ReleaseUploader
+    from .stream import notify
+
+    if not s.issue.enabled or not s.ts_enabled:
+        return None
+    try:
+        client = ReleaseUploader(
+            owner=s.issue.owner, repo=s.issue.repo,
+            retry_count=int(cfg.get("github.retry_count", 4)),
+            retry_backoff=float(cfg.get("github.retry_backoff", 2.0)),
+            dry_run=dry_run,
+        )
+    except ReleaseError as exc:
+        log.warning("송출 링크를 이슈로 올리지 않습니다: %s ([stream.issue] owner/repo)", exc)
+        return None
+    return notify.IssueNotifier(s.issue, client=client, store=_store(layout, "stream"),
+                                dry_run=dry_run)
+
+
+def cmd_stream_start(args) -> int:
+    from .stream import capture, live, tailnet
+
+    cfg, layout = _load(args)
+    s = _stream_settings(cfg, args)
+    label = args.label or f"송출_{datetime.now():%H%M}"
+    session = live.Session(settings=s, label=label, machine=cfg.machine_label,
+                           dry_run=args.dry_run)
+    try:
+        live.check(s)
+        notifier = _stream_notifier(cfg, layout, s, dry_run=args.dry_run)
+        return session.run(notifier)
+    except (live.StreamError, tailnet.TailscaleError, capture.CaptureError) as exc:
+        print(f"\n{exc}")
+        return 2
+
+
+def cmd_stream_link(args) -> int:
+    from .stream import live, tailnet
+
+    cfg, layout = _load(args)
+    s = _stream_settings(cfg, args)
+    print("실시간 송출 점검")
+    print("=" * 62)
+    print(f"  서버       : {s.server}   소리: {s.source} ({s.capture})   {s.codec} {s.bitrate_kbps}kbps")
+    if not s.ts_enabled:
+        print("  Tailscale  : 꺼짐 — 127.0.0.1 에서만 열리고 이슈는 올리지 않습니다.")
+        return 0
+    try:
+        exe = tailnet.find_exe(s.ts_exe)
+        node = tailnet.status(exe)
+    except tailnet.TailscaleError as exc:
+        print(f"  [X] {exc}")
+        return 1
+    ok = node.running and node.online
+    print(f"  Tailscale  : {'[O]' if ok else '[X]'} {node.backend_state}  {exe}")
+    print(f"  이 기기    : {node.dns_name or '(MagicDNS 없음)'}  {node.ipv4}")
+    print(f"  tailnet    : {node.tailnet}")
+    print(f"  노출 방식  : {s.ts_mode}" + ("  (인터넷 공개!)" if s.ts_mode == "funnel" else ""))
+    try:
+        live.check(s)
+        port = s.ic_port if s.server == "icecast" else s.port
+        path = s.ic_mount if s.server == "icecast" else s.path
+        link = tailnet.build_link(node, mode=s.ts_mode, port=port, https_port=s.ts_https_port,
+                                  path=path, use_magicdns=s.ts_use_magicdns)
+        if s.require_token and s.server != "icecast":
+            link += "?t=<고정 토큰>" if s.token else "?t=<송출마다 새 토큰>"
+        print(f"  링크       : {link}")
+        if s.ts_mode != "direct":
+            busy = tailnet.port_in_use(tailnet.serve_status(exe), s.ts_https_port)
+            print(f"  serve 포트 : {s.ts_https_port} " + (
+                "[!] 이미 사용 중 (override_existing 이 꺼져 있으면 시작하지 않습니다)" if busy else "비어 있음"))
+    except (live.StreamError, tailnet.TailscaleError) as exc:
+        print(f"  [X] {exc}")
+        ok = False
+    iss = s.issue
+    if iss.enabled:
+        print(f"  이슈       : {iss.owner}/{iss.repo}  labels={iss.labels}  on_change={iss.on_change}"
+              f"  토큰 {'포함' if iss.include_token else '가림'}")
+    else:
+        print("  이슈       : 올리지 않음")
+    return 0 if ok else 1
+
+
+def cmd_stream_cleanup(args) -> int:
+    from .stream import live, tailnet
+
+    cfg, _ = _load(args)
+    s = live.settings_from(cfg)
+    if s.ts_mode == "direct":
+        print("direct 모드는 정리할 tailscale serve 가 없습니다.")
+        return 0
+    exe = tailnet.find_exe(s.ts_exe)
+    tailnet.unexpose(exe, s.ts_mode, s.ts_https_port)
+    print(f"tailscale {s.ts_mode} --https={s.ts_https_port} off 를 실행했습니다.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gymhall",
@@ -1268,6 +1393,40 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true",
                    help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
     p.set_defaults(func=cmd_record_watch)
+
+    # --- stream (실시간 송출) ---
+    st = sub.add_parser(
+        "stream", help="실시간 오디오 송출 (Tailscale 망, 링크를 GitHub 이슈로)"
+    ).add_subparsers(dest="sub", required=True)
+
+    def _stream_opts(p):
+        p.add_argument("--server", choices=["builtin", "icecast"])
+        p.add_argument("--source", choices=["system", "mic"])
+        p.add_argument("-d", "--device", help="장치 이름 (비우면 기본 장치)")
+        p.add_argument("--codec", choices=["mp3", "aac"])
+        p.add_argument("--bitrate", type=int, help="kbps")
+        p.add_argument("--port", type=int, help="내장 서버 포트")
+        p.add_argument("--mode", choices=["direct", "serve", "funnel"],
+                       help="Tailscale 노출 방식 (funnel 은 allow_funnel 필요)")
+        p.add_argument("--no-tailscale", action="store_true", help="127.0.0.1 에서만 (이슈 없음)")
+        p.add_argument("--no-issue", action="store_true", help="이슈를 올리지 않음")
+
+    p = st.add_parser("start", help="지금 송출 시작 (설정은 [stream])")
+    _stream_opts(p)
+    p.add_argument("-l", "--label", help="이슈 제목 등에 쓰는 이름")
+    p.add_argument("-m", "--minutes", type=float, help="이만큼 송출하고 멈춤")
+    p.add_argument("--idle-stop", type=float, dest="idle_stop",
+                   help="청취자가 이만큼(분) 없으면 멈춤")
+    p.add_argument("--dry-run", action="store_true",
+                   help="송출은 하되 이슈는 만들지 않고 내용만 출력")
+    p.set_defaults(func=cmd_stream_start)
+
+    p = st.add_parser("link", help="Tailscale 상태와 만들어질 링크 미리 보기")
+    _stream_opts(p)
+    p.set_defaults(func=cmd_stream_link)
+
+    st.add_parser("cleanup", help="비정상 종료로 남은 tailscale serve/funnel 끄기").set_defaults(
+        func=cmd_stream_cleanup)
 
     # --- audio (터미널 녹음기) ---
     au = sub.add_parser(
