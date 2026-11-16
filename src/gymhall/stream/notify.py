@@ -41,6 +41,7 @@ DEFAULT_BODY = """\
 | 노출 방식 | `{mode}` |
 | 소리 | {source} · {codec} {bitrate}kbps |
 | 시작 | {started} |
+| 끝 | {until} |
 | 생성 이유 | {reason} |
 
 - 같은 **Tailscale 망(tailnet)** 에 들어와 있는 기기에서만 열립니다.
@@ -68,6 +69,7 @@ class IssueSettings:
     close_on_stop: bool = True
     dedupe: bool = True
     require_private_repo: bool = True
+    comment_on_rollback: bool = False
 
 
 @dataclass
@@ -84,6 +86,7 @@ class LinkInfo:
     bitrate: int = 0
     started: str = ""
     token: str = ""
+    until: str = ""          # 시간표가 정한 끝 시각 (HH:MM). 없으면 ""
 
 
 def link_key(link: str) -> str:
@@ -114,6 +117,7 @@ def render(template: str, info: LinkInfo, s: IssueSettings, reason: str) -> str:
         "host": info.host, "tailnet": info.tailnet, "mode": info.mode, "label": info.label,
         "machine": info.machine, "source": info.source, "codec": info.codec,
         "bitrate": str(info.bitrate), "started": info.started, "reason": reason,
+        "until": info.until or "직접 멈출 때까지",
         "token_note": token_note,
     }
 
@@ -285,14 +289,24 @@ class IssueNotifier:
             log.error("송출 링크 이슈를 올리지 못했습니다: %s", exc)
             return None
 
-    def stopped(self, *, reason: str, minutes: float, listeners: int) -> None:
+    def note(self, text: str) -> None:
+        """진행 중인 이슈에 댓글 하나(시간표 넘겨받음, 롤백 등). 실패해도 송출은 계속."""
+        if not self.s.enabled or self.current is None:
+            return
+        try:
+            self._comment(self.current, text)
+        except Exception as exc:
+            log.warning("이슈에 댓글을 남기지 못했습니다: %s", exc)
+
+    def stopped(self, *, reason: str, minutes: float, listeners: int, rollbacks: int = 0) -> None:
         if not self.s.enabled or self.current is None:
             return
         try:
             if self.s.comment_on_stop:
+                extra = f", 롤백 복구 {rollbacks}회" if rollbacks else ""
                 self._comment(self.current,
                               f"송출을 마쳤습니다 — {reason}. "
-                              f"{minutes:.0f}분, 누적 청취 접속 {listeners}회. "
+                              f"{minutes:.0f}분, 누적 청취 접속 {listeners}회{extra}. "
                               f"({datetime.now():%Y-%m-%d %H:%M})")
             if self.s.close_on_stop:
                 self._close(self.current)

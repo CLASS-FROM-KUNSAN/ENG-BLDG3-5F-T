@@ -201,15 +201,25 @@ DEFAULTS: dict[str, Any] = {
         "path": "/live",
         "player_page": True,
         "title": "실시간 송출",
-        "max_listeners": 5,
-        "client_buffer_kb": 512,
+        "max_listeners": 0,
+        "client_buffer_kb": 2048,
         "require_token": True,
         "token": "",
         "token_bytes": 16,
+        # 멈춤 조건은 기본으로 전부 '없음'. 최대 송출 시간은 멈추지 않고 롤백(순환)합니다.
         "max_duration_minutes": 0,
+        "on_max_duration": "rollback",
         "idle_stop_minutes": 0,
         "min_uptime_sec": 5,
-        "restart_on_failure": 2,
+        "restart_on_failure": 0,
+        "restart_backoff_sec": 5,
+        "restart_backoff_max_sec": 120,
+        "fallback_default_device": True,
+        # 시간표(recording.timetable)가 최우선
+        "follow_timetable": True,
+        "timetable_slots": [],
+        "pre_roll_minutes": 0,
+        "post_roll_minutes": 0,
         "tailscale": {
             "enabled": True,
             "mode": "serve",
@@ -245,6 +255,7 @@ DEFAULTS: dict[str, Any] = {
             "close_on_stop": True,
             "dedupe": True,
             "require_private_repo": True,
+            "comment_on_rollback": False,
         },
     },
     "transcribe": {
@@ -475,11 +486,22 @@ def _validate_stream(cfg: Config, errors: list[str]) -> None:
     _choice(cfg, "stream.codec", {"mp3", "aac"}, errors)
     _choice(cfg, "stream.tailscale.mode", {"direct", "serve", "funnel"}, errors)
     _choice(cfg, "stream.issue.on_change", {"new", "comment", "none"}, errors)
-    for key in ("bitrate_kbps", "samplerate", "channels", "client_buffer_kb", "token_bytes"):
+    _choice(cfg, "stream.on_max_duration", {"rollback", "stop"}, errors)
+    for key in ("bitrate_kbps", "samplerate", "channels", "client_buffer_kb", "token_bytes",
+                "restart_backoff_sec", "restart_backoff_max_sec"):
         _positive(cfg, f"stream.{key}", errors)
     for key in ("max_listeners", "max_duration_minutes", "idle_stop_minutes",
-                "min_uptime_sec", "restart_on_failure"):
+                "min_uptime_sec", "restart_on_failure", "pre_roll_minutes", "post_roll_minutes"):
         _positive(cfg, f"stream.{key}", errors, allow_zero=True)
+    slots = cfg.get("stream.timetable_slots", [])
+    if not isinstance(slots, list) or not all(isinstance(v, str) for v in slots):
+        errors.append('stream.timetable_slots 는 수업 이름 목록이어야 합니다 (예: ["자료구조"])')
+    elif slots:
+        known = {str(e.get("name", "")) for e in cfg.get("recording.timetable", []) or []
+                 if isinstance(e, dict)}
+        missing = [n for n in slots if n not in known]
+        if missing:
+            errors.append(f"stream.timetable_slots 의 {missing} 가 [[recording.timetable]] 에 없습니다")
     _positive(cfg, "stream.tailscale.link_check_sec", errors, allow_zero=True)
     for key in ("stream.port", "stream.tailscale.https_port", "stream.icecast.port"):
         port = cfg.get(key)

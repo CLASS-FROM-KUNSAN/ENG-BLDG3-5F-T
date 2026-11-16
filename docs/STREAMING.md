@@ -15,6 +15,7 @@ PC 에서 나는 소리(또는 마이크)를 실시간으로 내보내고, **같
 ```sh
 python -m gymhall stream link       # 먼저: Tailscale 상태와 만들어질 링크 점검
 python -m gymhall stream start      # 송출 시작 (Ctrl+C 로 멈춤)
+python -m gymhall stream schedule   # 시간표대로 수업마다 송출
 python -m gymhall stream start --dry-run   # 이슈는 만들지 않고 내용만 출력
 python -m gymhall stream cleanup    # 강제 종료로 남은 tailscale serve 끄기
 ```
@@ -112,7 +113,7 @@ serve 가 걸려 있으면 시작하지 않고 알려 줍니다(`override_existi
 
 ```
 {link} {player} {host} {tailnet} {mode} {label} {machine}
-{source} {codec} {bitrate} {started} {reason} {token_note}
+{source} {codec} {bitrate} {started} {until} {reason} {token_note}
 ```
 
 모르는 `{이름}` 은 그대로 남깁니다(오타 하나로 송출이 멈추지 않게).
@@ -131,18 +132,73 @@ on_change = "comment"
 
 ---
 
-## 멈추는 조건
+## 시간표가 최우선
 
-| 설정 | 뜻 |
+`config.toml` 의 `[[recording.timetable]]` 이 송출의 시작과 끝을 정합니다.
+
+```sh
+python -m gymhall stream schedule          # 시간표대로 기다렸다가 수업마다 송출
+python -m gymhall stream schedule --show   # 송출할 수업만 보기
+```
+
+- 수업 시간 안이면 송출은 **그 수업이 끝나는 시각에 끝납니다.** 그 전에는
+  최대 송출 시간, 청취자 없음, 장애 어느 것으로도 멈추지 않습니다.
+- `stream start` 를 수업 중에 켜면 그 수업 끝에 맞춰 끝나고, 이름도 수업
+  이름이 됩니다. 수업 밖에서 켠 송출이 수업 시간에 들어가면 그 수업을
+  넘겨받습니다(이슈에 댓글).
+- 수업마다 새 토큰 → 새 링크 → 새 이슈입니다.
+- `timetable_slots = ["자료구조"]` 로 송출할 수업만 고르고,
+  `pre_roll_minutes` / `post_roll_minutes` 로 앞뒤 여유를 줍니다.
+- 작업 스케줄러: `register_tasks.ps1 -Stream` 이면 로그온 시
+  `stream_schedule.bat` 이 창 없이 떠서 기다립니다.
+
+## 멈춤 조건 — 기본은 전부 없음
+
+| 설정 | 기본 | 뜻 |
+|---|---|---|
+| `max_duration_minutes` | `0` (없음) | 닿으면 `on_max_duration` 대로 |
+| `on_max_duration` | `"rollback"` | 멈추지 않고 인코더를 새로 띄워 이어 감(아래 롤백). `"stop"` 이면 멈춤 |
+| `idle_stop_minutes` (`--idle-stop`) | `0` (없음) | 청취자가 이만큼 없으면 멈춤 |
+| `restart_on_failure` | `0` (무제한) | 연속 복구 실패 허용 횟수 |
+| `max_listeners` | `0` (무제한) | 동시 청취자 상한 |
+| `client_buffer_kb` | `2048` | 이만큼 밀린 청취자 **한 명만** 끊음(송출은 계속) |
+| `-m` (명령줄) | — | 직접 준 길이는 '그만큼만' 이라는 뜻이라 멈춤 |
+
+시간표 수업 중에는 `"stop"` 이든 `idle_stop_minutes` 든 무시하고 수업 끝까지 갑니다.
+
+## 롤백 — 멈추지 않고 되돌리기
+
+다음이 생기면 세션을 끝내지 않고 **마지막으로 잘 돌던 상태로 되돌려** 다시 띄웁니다.
+토큰·링크·이슈는 그대로라 듣는 사람은 같은 링크로 다시 연결하면 됩니다.
+
+| 무엇이 | 어떻게 되돌리나 |
 |---|---|
-| `max_duration_minutes` (`-m`) | 이만큼 송출하면 멈춤 |
-| `idle_stop_minutes` (`--idle-stop`) | 청취자가 이만큼 없으면 멈춤 |
-| `restart_on_failure` | 인코더가 죽으면 이만큼 다시 띄우고, 넘으면 멈춤 |
-| `max_listeners` | 동시 청취자 상한 (넘으면 503) |
-| `client_buffer_kb` | 이만큼 밀린 청취자만 끊음 |
-| Ctrl+C | 멈춤 |
+| 인코더(ffmpeg)가 죽음, 소리가 안 나옴 | 마지막으로 소리가 나온 장치 → 설정한 `device` → 기본 장치(`fallback_default_device`) 순으로 다시 띄움 |
+| 최대 송출 시간 도달 (`on_max_duration = "rollback"`) | 새 인코더로 순환. 장시간 송출의 누적 문제를 끊음 |
+| `tailscale serve` 설정이 사라짐 | 다시 켬 |
+| 오디오 서버 스레드가 멈춤 | 같은 주소로 다시 엶 |
+| Tailscale IP 변경 (direct) | 새 IP 로 서버를 다시 엶 + 새 링크 이슈 |
+| Tailscale 연결 끊김 | 송출은 계속, 돌아오면 링크 재확인 |
+| 시작할 때 Tailscale 미연결 | 송출을 먼저 띄우고, 연결되면 링크를 올림 |
 
-어떻게 멈췄든 serve 를 끄고 이슈에 이유를 남깁니다.
+복구가 실패하면 `restart_backoff_sec`(5초)부터 두 배씩
+`restart_backoff_max_sec`(120초)까지 늘려 가며 계속 시도합니다.
+장치 이름이 틀렸거나 장치가 빠진 경우는 기본 장치로 내려가 이어 갑니다(로그에 경고).
+'Windows 에서 ffmpeg 로 스피커 소리' 처럼 **조합 자체가 안 되는 설정**만은 다시
+해도 같으니 바로 알려 주고 멈춥니다.
+
+`comment_on_rollback = true` 면 복구할 때마다 이슈에 댓글을 답니다.
+끝날 때 댓글에는 복구 횟수가 항상 들어갑니다.
+
+### 실기 확인 (2026-11-16, Windows 11, Tailscale 1.104)
+
+`https_port = 10000`, 시간표 18:38–18:43, `max_duration_minutes = 0.75` 로 실제 이슈를 올렸습니다.
+
+- 18:40:11 이슈 생성, tailnet 주소로 재생 확인
+- ffmpeg 를 강제로 죽임 → 5초 뒤 롤백 완료, **같은 링크로 다시 재생**
+- 0.75분마다 순환 롤백 2회 (멈추지 않음)
+- 18:43:00 시간표 끝에 정확히 종료, serve 10000 끔, 이슈에
+  "시간표 종료 · 3분 · 청취 2회 · 롤백 3회" 댓글 후 닫힘
 
 ## 접속 토큰
 

@@ -159,8 +159,11 @@ python -m gymhall stream link              REM Tailscale 상태와 링크 미리
 
 - 오디오 서버: 내장 HTTP 서버(설치 없음) 또는 **Icecast**(오픈소스 스트리밍 서버)
 - 노출: `serve`(tailnet 전용 HTTPS, 기본) / `direct` / `funnel`(인터넷 공개, 명시적 허용 필요)
-- 접속 토큰, 청취자 상한, 최대 길이, 청취자 없으면 멈춤, 이슈 제목·본문·라벨·담당자·
-  링크 변경 시 동작까지 `[stream]` 에서 전부 조정합니다.
+- **시간표가 최우선**: `stream schedule` 은 `[[recording.timetable]]` 수업마다 송출하고
+  수업이 끝나는 시각에 끝냅니다. 그 전에는 어떤 조건으로도 멈추지 않습니다.
+- **멈추지 않고 롤백**: 멈춤 조건은 기본으로 전부 없음. 인코더가 죽거나 최대 송출
+  시간에 닿으면 마지막으로 잘 돌던 상태로 되돌려 같은 링크로 이어 갑니다.
+- 접속 토큰, 이슈 제목·본문·라벨·담당자, 링크 변경 시 동작까지 `[stream]` 에서 전부 조정합니다.
 - 이미 쓰고 있는 `tailscale serve/funnel` 포트는 건드리지 않습니다.
 
 자세한 내용은 [docs/STREAMING.md](docs/STREAMING.md).
@@ -236,6 +239,7 @@ python -m gymhall record watch           프로그램 감지 대기
 python -m gymhall audio record           소리만 녹음 (FFmpeg / SoX / arecord)
 python -m gymhall audio tools            터미널 녹음 도구 점검
 python -m gymhall stream start           실시간 송출 (Tailscale, 링크 -> 이슈)
+python -m gymhall stream schedule        시간표대로 수업마다 송출
 python -m gymhall stream link            송출 링크·Tailscale 점검
 python -m gymhall stream cleanup         남은 tailscale serve 끄기
 python -m gymhall transcribe queue       대기열 전사

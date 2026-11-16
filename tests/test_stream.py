@@ -348,3 +348,180 @@ def test_cli_flags_override_config():
     s = cli._stream_settings(cfg, args)
     assert (s.ts_mode, s.port, s.codec, s.max_duration_minutes, s.issue.enabled) == (
         "direct", 9000, "aac", 50.0, False)
+
+
+# ---------------------------------------------------------------------------
+# 시간표 최우선 + 롤백
+# ---------------------------------------------------------------------------
+from datetime import datetime, timedelta  # noqa: E402
+
+from gymhall.recorder import schedule as sched  # noqa: E402
+
+
+class FakeEncoder:
+    """살아 있다가 kill() 하면 죽는 인코더. 시작될 때마다 기록합니다."""
+
+    started: list[str] = []
+
+    def __init__(self, device, healthy=True):
+        self.device, self.healthy, self.error = device, healthy, None
+        self._alive = True
+        FakeEncoder.started.append(device)
+
+    @property
+    def alive(self):
+        return self._alive
+
+    def kill(self):
+        self._alive = False
+
+    def stop(self):
+        self._alive = False
+
+
+def fake_session(monkeypatch, *, bad_devices=(), **kw) -> live.Session:
+    FakeEncoder.started = []
+    s = live.StreamSettings(ts_enabled=False, server="icecast", min_uptime_sec=0,
+                            restart_backoff_sec=0.01, restart_backoff_max_sec=0.02,
+                            **kw.pop("settings", {}))
+    sess = live.Session(settings=s, tick=0.01, **kw)
+
+    def start(self, device):
+        if device in bad_devices:
+            raise OSError(f"장치 없음: {device}")
+        self._encoder = FakeEncoder(device)
+
+    monkeypatch.setattr(live.Session, "_start_encoder", start)
+    monkeypatch.setattr(live.Session, "_wait_healthy", lambda self, sec: self._encoder.alive)
+    return sess
+
+
+def test_backoff_doubles_up_to_the_cap():
+    assert [live.backoff(i, 5, 60) for i in range(6)] == [5, 10, 20, 40, 60, 60]
+
+
+def test_timetable_filter_and_active_slot():
+    cfg = cfgmod.Config(data=cfgmod._deep_merge(cfgmod.DEFAULTS, {"recording": {"timetable": [
+        {"name": "자료구조", "day": "mon", "start": "09:00", "end": "10:50"},
+        {"name": "영어", "day": "mon", "start": "11:00", "end": "12:00"},
+    ]}}))
+    s = live.StreamSettings(timetable_slots=["자료구조"], pre_roll_minutes=5)
+    slots = live.timetable(cfg, s)
+    assert [x.name for x in slots] == ["자료구조"]
+    monday = datetime(2026, 11, 16)  # 월요일
+    assert live.active_slot(slots, s, monday.replace(hour=8, minute=56)).slot.name == "자료구조"
+    assert live.active_slot(slots, s, monday.replace(hour=8, minute=50)) is None
+    assert live.active_slot(slots, s, monday.replace(hour=11, minute=30)) is None
+
+
+def test_recover_rolls_back_to_the_last_good_device_then_default(monkeypatch):
+    sess = fake_session(monkeypatch, bad_devices=("USB 마이크",),
+                        settings={"device": "USB 마이크"})
+    sess._good_device = "USB 마이크"
+    assert sess._recover("장치가 사라짐")
+    # 마지막 장치(=설정 장치)가 없으니 기본 장치로 내려가 복구합니다.
+    assert sess._encoder.device == "" and sess._good_device == "" and sess.rollbacks == 1
+
+
+def test_recover_is_unlimited_by_default(monkeypatch):
+    sess = fake_session(monkeypatch)
+    fails = {"n": 0}
+
+    def flaky(self, device):
+        fails["n"] += 1
+        if fails["n"] < 6:
+            raise OSError("아직 안 됨")
+        self._encoder = FakeEncoder(device)
+
+    monkeypatch.setattr(live.Session, "_start_encoder", flaky)
+    assert sess._recover("테스트") and fails["n"] >= 6
+
+
+def test_recover_respects_an_explicit_limit(monkeypatch):
+    sess = fake_session(monkeypatch, bad_devices=("",), settings={"restart_on_failure": 3})
+    assert not sess._recover("테스트")
+
+
+def test_config_errors_are_not_retried_forever(monkeypatch):
+    sess = fake_session(monkeypatch)
+
+    def broken(self, device):
+        raise capture.CaptureError("Windows 에서 루프백 불가")
+
+    monkeypatch.setattr(live.Session, "_start_encoder", broken)
+    with pytest.raises(capture.CaptureError):
+        sess._recover("테스트")
+
+
+def test_dead_encoder_is_rolled_back_not_stopped(monkeypatch):
+    sess = fake_session(monkeypatch, until=datetime.now() + timedelta(seconds=0.4))
+    assert sess._try_start()
+    first = sess._encoder
+    threading.Timer(0.05, first.kill).start()
+    reason = sess._loop(None, None)
+    assert reason.startswith("시간표 종료")
+    assert sess.rollbacks >= 1 and sess._encoder is not first
+
+
+def test_max_duration_rolls_over_instead_of_stopping(monkeypatch):
+    sess = fake_session(monkeypatch, until=datetime.now() + timedelta(seconds=0.5),
+                        settings={"max_duration_minutes": 0.1 / 60})
+    assert sess._try_start()
+    assert sess._loop(None, None).startswith("시간표 종료")
+    assert sess.rollbacks >= 2
+
+
+def test_timetable_beats_stop_conditions(monkeypatch):
+    # 'stop' 으로 둬도, 청취자가 없어도, 시간표 수업 중에는 끝 시각까지 갑니다.
+    sess = fake_session(monkeypatch, until=datetime.now() + timedelta(seconds=0.4),
+                        settings={"max_duration_minutes": 0.05 / 60, "on_max_duration": "stop",
+                                  "idle_stop_minutes": 0.01 / 60})
+    sess._hub = hub.Hub()
+    assert sess._try_start()
+    started = time.time()
+    assert sess._loop(None, None).startswith("시간표 종료")
+    assert time.time() - started >= 0.3
+
+
+def test_stop_conditions_still_work_outside_the_timetable(monkeypatch):
+    sess = fake_session(monkeypatch, settings={"max_duration_minutes": 0.05 / 60,
+                                               "on_max_duration": "stop"})
+    assert sess._try_start()
+    assert sess._loop(None, None).startswith("최대 송출 시간")
+
+
+def test_manual_stream_adopts_a_class_that_starts(monkeypatch):
+    now = datetime.now()
+    slot = sched.Slot(name="운영체제", day=list(sched.DAY_INDEX)[now.weekday()],
+                      start=f"{now:%H:%M}", end=f"{(now + timedelta(minutes=2)):%H:%M}")
+    sess = fake_session(monkeypatch, slots=[slot])
+    sess._adopt_slot()
+    assert sess.until is not None and sess.until > now
+
+
+def test_cli_minutes_means_stop_but_config_means_rollback():
+    cfg = _cfg({"stream": {"max_duration_minutes": 60}})
+    plain = cli._stream_settings(cfg, cli.build_parser().parse_args(["stream", "start"]))
+    assert plain.on_max_duration == "rollback"
+    flagged = cli._stream_settings(cfg, cli.build_parser().parse_args(["stream", "start", "-m", "5"]))
+    assert flagged.on_max_duration == "stop" and flagged.max_duration_minutes == 5
+
+
+def test_defaults_put_no_limits_on_the_stream():
+    s = live.settings_from(_cfg({}))
+    assert (s.max_duration_minutes, s.idle_stop_minutes, s.restart_on_failure,
+            s.max_listeners, s.on_max_duration, s.follow_timetable) == (0, 0, 0, 0, "rollback", True)
+
+
+def test_unknown_timetable_slot_name_is_rejected():
+    with pytest.raises(cfgmod.ConfigError, match="timetable_slots"):
+        cfgmod.validate(_cfg({"stream": {"timetable_slots": ["없는과목"]}}))
+
+
+def test_stop_comment_reports_rollbacks():
+    gh = FakeGitHub()
+    n = notify.IssueNotifier(notify.IssueSettings(), client=gh, store=MemStore())
+    n.link_created(info(), reason="start")
+    n.stopped(reason="시간표 종료", minutes=100, listeners=2, rollbacks=3)
+    comment = next(b["body"] for m, p, b in gh.calls if p == "/issues/1/comments")
+    assert "롤백 복구 3회" in comment

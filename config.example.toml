@@ -501,6 +501,7 @@ vad_stop_sec  = 3.0
 #  2-1. 실시간 오디오 송출 (Tailscale 망 안에서만)
 #
 #   python -m gymhall stream start          지금 송출 (링크 -> GitHub 이슈)
+#   python -m gymhall stream schedule       시간표대로 수업마다 송출
 #   python -m gymhall stream link           링크가 어떻게 만들어질지 미리 보기
 #   python -m gymhall stream cleanup        비정상 종료로 남은 tailscale serve 정리
 #
@@ -544,9 +545,9 @@ player_page = true
 title = "실시간 송출"
 
 # 동시 청취자 상한 (0 = 무제한)
-max_listeners = 5
-# 이만큼 밀린 청취자는 끊습니다(다른 청취자를 지키기 위해).
-client_buffer_kb = 512
+max_listeners = 0
+# 이만큼 밀린 청취자 한 명만 끊습니다(송출은 계속, 그 청취자는 다시 접속하면 됨).
+client_buffer_kb = 2048
 
 # 접속 토큰. 링크 끝에 ?t=... 로 붙습니다. tailnet 안이라도 링크를
 # 모르는 사람은 못 듣게 합니다.
@@ -555,14 +556,39 @@ require_token = true
 token = ""
 token_bytes = 16
 
-# 멈추는 조건 (0 = 쓰지 않음)
-max_duration_minutes = 0     # 이만큼 송출하면 멈춤
-idle_stop_minutes    = 0     # 청취자가 이만큼 없으면 멈춤
+# --- 시간표가 최우선 ---
+# [[recording.timetable]] 의 수업 시간 안이면 그 수업이 끝나는 시각에 끝나고,
+# 그 전에는 아래 어떤 조건(최대 송출 시간, 청취자 없음, 장애)으로도 멈추지
+# 않습니다. 수업 밖에서 켠 송출이 수업 시간에 들어가면 그 수업을 넘겨받습니다.
+# `python -m gymhall stream schedule` 은 시간표대로 기다렸다가 수업마다 송출합니다.
+follow_timetable = true
+# 송출할 수업 이름만 고르기 (비우면 시간표 전체). 예: ["자료구조", "운영체제"]
+timetable_slots = []
+pre_roll_minutes  = 0        # 수업 시작 몇 분 전부터
+post_roll_minutes = 0        # 수업 끝나고 몇 분 더
+
+# --- 멈춤 조건: 기본은 전부 '없음' ---
+# 최대 송출 시간(분). 0 = 없음. 닿으면 on_max_duration 대로:
+#   "rollback" : 멈추지 않고 인코더를 마지막으로 잘 돌던 상태로 새로 띄워
+#                이어 갑니다(장시간 송출의 누적 문제 해소). 링크·이슈는 그대로.   [기본]
+#   "stop"     : 멈춤 (시간표 수업 중에는 무시)
+max_duration_minutes = 0
+on_max_duration = "rollback"
+# 청취자가 이만큼(분) 없으면 멈춤. 0 = 없음. 시간표 수업 중에는 무시.
+idle_stop_minutes = 0
 # 시작 후 이 시간(초) 동안 소리가 실제로 나와야 링크를 올립니다.
 # 장치가 틀려 바로 죽는 송출의 링크가 이슈로 올라가는 것을 막습니다.
 min_uptime_sec = 5
-# 인코더가 죽으면 다시 띄우는 횟수
-restart_on_failure = 2
+
+# --- 롤백(복구) ---
+# 인코더가 죽거나 장치가 사라지면 멈추지 않고 되돌립니다:
+#   마지막으로 소리가 나온 장치 -> 설정한 device -> (fallback_default_device) 기본 장치
+# 실패하면 restart_backoff_sec 부터 두 배씩, restart_backoff_max_sec 까지 늘려 가며 재시도.
+# restart_on_failure : 연속 실패 허용 횟수. 0 = 무제한
+restart_on_failure      = 0
+restart_backoff_sec     = 5
+restart_backoff_max_sec = 120
+fallback_default_device = true
 
 [stream.tailscale]
 # false 면 Tailscale 없이 127.0.0.1 에서만 열고, 이슈도 올리지 않습니다.
@@ -598,7 +624,7 @@ enabled = true
 owner = ""
 repo  = ""
 # 쓸 수 있는 자리: {link} {player} {host} {tailnet} {mode} {label} {machine}
-#                  {source} {codec} {bitrate} {started} {reason} {token_note}
+#                  {source} {codec} {bitrate} {started} {until} {reason} {token_note}
 title = "[실시간 송출] {label} — {started}"
 # 비우면 기본 본문(표 형식). 직접 쓰려면 여러 줄 문자열 """ ... """ 로.
 body  = ""
@@ -619,6 +645,8 @@ close_on_stop   = true     # 끝나면 이슈를 닫음
 dedupe = true
 # public 저장소에는 올리지 않습니다
 require_private_repo = true
+# 롤백으로 복구할 때마다 이슈에 댓글 (끝날 때 댓글에는 횟수가 항상 들어갑니다)
+comment_on_rollback = false
 
 
 # =====================================================================

@@ -11,6 +11,7 @@
   python -m gymhall audio record          소리만 녹음 (FFmpeg / SoX / arecord)
   python -m gymhall audio tools           터미널 녹음 도구 점검
   python -m gymhall stream start          실시간 송출 (Tailscale, 링크 -> 이슈)
+  python -m gymhall stream schedule       시간표대로 수업마다 송출
   python -m gymhall stream link           송출 링크 미리 보기
   python -m gymhall transcribe queue      대기열 전사
   python -m gymhall upload <경로>         임의 파일 업로드
@@ -1215,6 +1216,11 @@ def _stream_settings(cfg, args):
         value = getattr(args, flag, None)
         if value is not None:
             setattr(s, attr, value)
+    if getattr(args, "minutes", None):
+        # 명령줄의 -m 은 '이만큼만 하고 끝' 이라는 직접 지시입니다. 설정의
+        # max_duration_minutes(기본: 롤백 순환)와 달리 멈춥니다. 시간표 수업
+        # 중이면 그래도 시간표가 우선입니다.
+        s.on_max_duration = "stop"
     if getattr(args, "no_tailscale", False):
         s.ts_enabled = False
     if getattr(args, "no_issue", False):
@@ -1247,9 +1253,8 @@ def cmd_stream_start(args) -> int:
 
     cfg, layout = _load(args)
     s = _stream_settings(cfg, args)
-    label = args.label or f"송출_{datetime.now():%H%M}"
-    session = live.Session(settings=s, label=label, machine=cfg.machine_label,
-                           dry_run=args.dry_run)
+    session = live.Session(settings=s, label=args.label or "", machine=cfg.machine_label,
+                           dry_run=args.dry_run, slots=live.timetable(cfg, s))
     try:
         live.check(s)
         notifier = _stream_notifier(cfg, layout, s, dry_run=args.dry_run)
@@ -1257,6 +1262,43 @@ def cmd_stream_start(args) -> int:
     except (live.StreamError, tailnet.TailscaleError, capture.CaptureError) as exc:
         print(f"\n{exc}")
         return 2
+
+
+def cmd_stream_schedule(args) -> int:
+    """시간표대로 기다렸다가 수업마다 송출합니다. 수업 끝 = 송출 끝."""
+    from .recorder import schedule as sched
+    from .stream import capture, live, tailnet
+
+    cfg, layout = _load(args)
+    s = _stream_settings(cfg, args)
+    slots = live.timetable(cfg, s)
+    print(sched.describe(slots).replace("다음 녹화", "다음 송출"))
+    if not slots or args.show:
+        return 0 if slots else 1
+    live.check(s)
+
+    while True:
+        nxt = sched.next_occurrence(slots, pre_roll_min=s.pre_roll_minutes,
+                                    post_roll_min=s.post_roll_minutes)
+        if nxt is None:
+            log.info("예정된 수업이 없습니다.")
+            return 0
+        log.info("다음 송출: %s  %s ~ %s", nxt.slot.name,
+                 nxt.start.strftime("%m-%d %H:%M"), nxt.end.strftime("%H:%M"))
+        if not sched.wait_until(nxt.start):
+            return 0
+        session = live.Session(settings=s, label=nxt.slot.name, machine=cfg.machine_label,
+                               dry_run=args.dry_run, until=nxt.end, slots=slots)
+        try:
+            code = session.run(_stream_notifier(cfg, layout, s, dry_run=args.dry_run))
+        except (live.StreamError, tailnet.TailscaleError, capture.CaptureError) as exc:
+            # 상시 실행이라 한 수업이 실패해도 다음 수업은 기다립니다.
+            log.error("[%s] 송출하지 못했습니다: %s", nxt.slot.name, exc)
+            code = 2
+        if args.once:
+            return code
+        # 같은 수업을 바로 다시 잡지 않게 끝 시각을 넘깁니다.
+        sched.wait_until(nxt.end)
 
 
 def cmd_stream_link(args) -> int:
@@ -1420,6 +1462,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true",
                    help="송출은 하되 이슈는 만들지 않고 내용만 출력")
     p.set_defaults(func=cmd_stream_start)
+
+    p = st.add_parser("schedule", help="시간표([[recording.timetable]])대로 수업마다 송출")
+    _stream_opts(p)
+    p.add_argument("--show", action="store_true", help="송출할 시간표만 출력")
+    p.add_argument("--once", action="store_true", help="한 수업만 송출하고 종료")
+    p.add_argument("--dry-run", action="store_true", help="이슈는 만들지 않고 내용만 출력")
+    p.set_defaults(func=cmd_stream_schedule)
 
     p = st.add_parser("link", help="Tailscale 상태와 만들어질 링크 미리 보기")
     _stream_opts(p)
