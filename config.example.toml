@@ -716,6 +716,13 @@ require_hello = true
 recovery_key = false       # 복구 불가 수용(기기 죽으면 영구 복구 불가)
 retention_days = 0
 
+# C(데스크톱 Acrobat) 사이드카 워처 — acrobat_js 어댑터가 떨군 필드 값을 읽어 봉인.
+# 사이드카는 짧은 순간 평문입니다(워처가 읽고 즉시 삭제). 자세한 한계는 docs/ACTIVITY.md.
+[activity.watch_acrobat]
+staging_dir = ""           # 비우면 <데이터>/activity/.staging
+poll_sec = 1.0
+sweep_minutes = 5          # 기동 시 이보다 묵은 사이드카는 삭제(평문 잔존 방지)
+
 
 # =====================================================================
 #  3. 음성 전사 (STT)

@@ -1417,6 +1417,20 @@ def cmd_activity_export(args) -> int:
     return 0
 
 
+def cmd_activity_watch_acrobat(args) -> int:
+    from .activity import sidecar
+
+    cfg, _ = _load(args)
+    if not cfg.get("activity.enabled") or not cfg.get("activity.adapters.acrobat_js"):
+        print("activity.enabled 와 activity.adapters.acrobat_js 를 켜야 합니다.")
+        return 1
+    try:
+        return sidecar.run(cfg, once=args.once)
+    except Exception as exc:
+        print(f"\n{exc}")
+        return 2
+
+
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -1501,6 +1515,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--break-glass", action="store_true", dest="break_glass",
                    help="게이트 실패 상태에서도 1회 복호 허용(감사 로그에 남음)")
     p.set_defaults(func=cmd_activity_export)
+    p = ac.add_parser("watch-acrobat", help="데스크톱 Acrobat 사이드카를 감시해 봉인(C 어댑터)")
+    p.add_argument("--once", action="store_true", help="대기 중인 사이드카만 한 번 처리하고 종료")
+    p.set_defaults(func=cmd_activity_watch_acrobat)
 
     # --- stream (실시간 송출) ---
     st = sub.add_parser(

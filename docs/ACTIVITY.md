@@ -9,8 +9,10 @@
 
 > **구현 상태.** **구현됨** (`src/gymhall/activity/`): 하드웨어/OS 게이트 + 정책 엔진 +
 > SQLite 봉인 저장소(AES-GCM) + DEK 관리(DPAPI) + ingest 파이프라인 + 네이티브 메시징
-> 길이-프레이밍. 명령: `activity gate`, `activity export`.
-> **다음 증분**: 브라우저 확장(A 어댑터 JS) + 프로브/오리진 학습 CLI. 그다음 C→B→D.
+> 길이-프레이밍 + **C(Acrobat) 사이드카 워처(받는 쪽)**.
+> 명령: `activity gate`, `activity export`, `activity watch-acrobat`.
+> **보류/다음**: A 어댑터 브라우저 확장(JS) + 프로브/오리진 CLI, C 생산자(Acrobat 폴더 JS,
+> Acrobat 설치 기기에서 검증 필요). 받는 쪽은 합성 사이드카로 CI 검증됨.
 
 ---
 
@@ -159,8 +161,16 @@ retention_days = 0
 ```
 python -m gymhall activity gate                 이 기기가 봉인 저장을 허용받는지 점검
 python -m gymhall activity export [--break-glass] 봉인 로그를 복호해 JSONL 로(읽기 게이트 적용)
+python -m gymhall activity watch-acrobat [--once] 데스크톱 Acrobat 사이드카 감시→봉인 (C)
 ```
-(브라우저로 받는 캡처 명령/호스트 등록은 확장 증분에서 추가.)
+(브라우저로 받는 캡처 명령/호스트 등록은 A 확장 증분에서 추가.)
+
+### C 사이드카의 정직한 한계 — 짧은 평문 창
+데스크톱 Acrobat 은 AES-GCM·DPAPI 를 못 하므로, Acrobat JS 가 필드 값을 **평문 사이드카
+JSON** 으로 스테이징 폴더에 떨구고 워처가 읽어 봉인합니다. 그 사이드카는 **워처가 읽고
+지울 때까지(보통 1초 안쪽) 평문으로 디스크에 존재**합니다(ACL=현재 사용자, 파일명=UUID).
+Python 이 꺼져 있던 동안 쌓인 것은 기동 시 `sweep` 으로 지웁니다(그 폼은 봉인 안 됨).
+저장소 본체(SQLite)는 여전히 평문 0 입니다.
 
 ## 10. 빌드 순서
 게이트(완료) → 정책 엔진(완료) → 봉인 저장소·DEK·ingest·프레이밍(완료) →

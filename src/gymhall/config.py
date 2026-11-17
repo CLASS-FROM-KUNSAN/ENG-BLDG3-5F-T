@@ -375,6 +375,12 @@ DEFAULTS: dict[str, Any] = {
             "recovery_key": False,       # 복구 불가 수용
             "retention_days": 0,
         },
+        # C(데스크톱 Acrobat) 사이드카 워처. acrobat_js 어댑터가 떨군 필드 값을 읽음.
+        "watch_acrobat": {
+            "staging_dir": "",           # 비우면 <데이터>/activity/.staging
+            "poll_sec": 1.0,
+            "sweep_minutes": 5,          # 기동 시 이보다 묵은 사이드카는 삭제(평문 잔존 방지)
+        },
         "upload": "sealed_only",         # off | sealed_only
         "pause_hotkey": "Ctrl+Alt+P",
     },
@@ -590,6 +596,8 @@ def _validate_activity(cfg: Config, errors: list[str]) -> None:
     _choice(cfg, "activity.store.key_storage", {"tpm"}, errors)
     _positive(cfg, "activity.debounce_ms", errors)
     _positive(cfg, "activity.store.retention_days", errors, allow_zero=True)
+    _positive(cfg, "activity.watch_acrobat.poll_sec", errors)
+    _positive(cfg, "activity.watch_acrobat.sweep_minutes", errors, allow_zero=True)
 
     for key in ("activity.origins", "activity.timetable_slots",
                 "activity.process_allowlist", "activity.policy.name_blacklist"):
