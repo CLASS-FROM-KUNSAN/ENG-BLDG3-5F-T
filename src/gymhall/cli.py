@@ -1388,6 +1388,49 @@ def cmd_activity_gate(args) -> int:
     return 0 if res.ok else 1
 
 
+def cmd_activity_export(args) -> int:
+    import json
+    from pathlib import Path
+
+    from .activity import gate as gate_mod
+    from .activity import kms
+    from .activity.store import SealedStore, paths
+
+    cfg, _ = _load(args)
+    # 읽기도 게이트 적용(대칭 차단). 실패면 --break-glass 1회로만.
+    try:
+        gate_mod.require_for_read(cfg.section("activity.gate"), break_glass=args.break_glass)
+    except gate_mod.GateError as exc:
+        print(f"\n{exc}")
+        return 2
+    db_path, dek_path = paths(cfg)
+    if not Path(dek_path).exists() or not Path(db_path).exists():
+        print("아직 저장된 활동이 없습니다.")
+        return 0
+    store = SealedStore.open(db_path, kms.load_or_create(dek_path))
+    n = 0
+    for event in store.decrypt_all():
+        print(json.dumps(event, ensure_ascii=False))
+        n += 1
+    store.close()
+    print(f"# {n}건 복호", file=sys.stderr)
+    return 0
+
+
+def cmd_activity_watch_acrobat(args) -> int:
+    from .activity import sidecar
+
+    cfg, _ = _load(args)
+    if not cfg.get("activity.enabled") or not cfg.get("activity.adapters.acrobat_js"):
+        print("activity.enabled 와 activity.adapters.acrobat_js 를 켜야 합니다.")
+        return 1
+    try:
+        return sidecar.run(cfg, once=args.once)
+    except Exception as exc:
+        print(f"\n{exc}")
+        return 2
+
+
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -1468,6 +1511,13 @@ def build_parser() -> argparse.ArgumentParser:
     ).add_subparsers(dest="sub", required=True)
     ac.add_parser("gate", help="하드웨어/OS 무결성 게이트 점검(저장 가능 여부)").set_defaults(
         func=cmd_activity_gate)
+    p = ac.add_parser("export", help="봉인된 활동 로그를 복호해 JSONL 로 출력(게이트 적용)")
+    p.add_argument("--break-glass", action="store_true", dest="break_glass",
+                   help="게이트 실패 상태에서도 1회 복호 허용(감사 로그에 남음)")
+    p.set_defaults(func=cmd_activity_export)
+    p = ac.add_parser("watch-acrobat", help="데스크톱 Acrobat 사이드카를 감시해 봉인(C 어댑터)")
+    p.add_argument("--once", action="store_true", help="대기 중인 사이드카만 한 번 처리하고 종료")
+    p.set_defaults(func=cmd_activity_watch_acrobat)
 
     # --- stream (실시간 송출) ---
     st = sub.add_parser(

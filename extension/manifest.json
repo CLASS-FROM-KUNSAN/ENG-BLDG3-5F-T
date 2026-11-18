@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "gymhall activity (PDF web forms)",
+  "version": "0.1.0",
+  "description": "본인 PDF 웹 뷰어 폼 입력을 로컬 봉인 저장소로. 자격증명 제외, 시크릿창 차단.",
+  "permissions": ["nativeMessaging"],
+  "host_permissions": [
+    "https://acrobat.adobe.com/*",
+    "https://documentcloud.adobe.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://acrobat.adobe.com/*",
+        "https://documentcloud.adobe.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "background": { "service_worker": "background.js" },
+  "incognito": "not_allowed"
+}

@@ -48,10 +48,23 @@ def test_password_by_is_password_flag_is_dropped():
     assert not d.capture and d.reason == "password_field"
 
 
-def test_password_by_ff_bit13_is_dropped():
-    # PDF AcroForm /Ff 비밀번호 플래그(bit 13)만 봐도 제외.
+def test_password_by_ff_flag_is_dropped():
+    # PDF AcroForm /Ff 비밀번호 플래그만 봐도 제외.
     d = web_policy().decide(ev(flags=FF_PASSWORD, value="s3cret"))
     assert not d.capture and d.reason == "password_field"
+
+
+def test_real_pdf_password_bit_value_0x2000_is_dropped():
+    # 스펙상 실제 값(0x2000)으로 직접 — 상수를 1<<12 로 잘못 두면 이 테스트가 잡습니다.
+    assert FF_PASSWORD == 0x2000
+    d = web_policy().decide(ev(flags=0x2000, value="s3cret"))
+    assert not d.capture and d.reason == "password_field"
+
+
+def test_multiline_flag_0x1000_is_not_treated_as_password():
+    # 0x1000 은 Multiline 이지 Password 가 아닙니다 — 일반 메모로 담겨야 합니다.
+    d = web_policy().decide(ev(flags=0x1000, value="여러 줄 메모"))
+    assert d.capture
 
 
 def test_drop_password_cannot_be_bypassed_even_if_name_clean():

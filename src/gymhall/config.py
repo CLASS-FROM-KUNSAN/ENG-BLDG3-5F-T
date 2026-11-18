@@ -343,7 +343,8 @@ DEFAULTS: dict[str, Any] = {
             "acrobat_js": False,
             "acrobat_uia": False,
         },
-        "origins": [],                   # 당신 PDF 오리진만(웹 어댑터)
+        # 웹 어댑터 허용 오리진. Adobe 기본 포함, PDF.js 데모는 제외.
+        "origins": ["https://acrobat.adobe.com", "https://documentcloud.adobe.com"],
         "process_allowlist": ["Acrobat.exe"],  # 데스크톱 어댑터 프로세스 스코프
         # 정책 엔진 — 자격증명/민감 필드 제외 + 저장 전 레드액션
         "policy": {
@@ -366,11 +367,19 @@ DEFAULTS: dict[str, Any] = {
         },
         # 저장·봉인
         "store": {
+            "db_path": "",               # 비우면 <데이터>/activity/activity.db
+            "dek_path": "",              # 비우면 <데이터>/activity/dek.bin (DPAPI 봉인)
             "public_key": "",
             "key_storage": "tpm",        # 추출 불가. TPM 없으면 저장 안 됨
             "require_hello": True,
             "recovery_key": False,       # 복구 불가 수용
             "retention_days": 0,
+        },
+        # C(데스크톱 Acrobat) 사이드카 워처. acrobat_js 어댑터가 떨군 필드 값을 읽음.
+        "watch_acrobat": {
+            "staging_dir": "",           # 비우면 <데이터>/activity/.staging
+            "poll_sec": 1.0,
+            "sweep_minutes": 5,          # 기동 시 이보다 묵은 사이드카는 삭제(평문 잔존 방지)
         },
         "upload": "sealed_only",         # off | sealed_only
         "pause_hotkey": "Ctrl+Alt+P",
@@ -587,6 +596,8 @@ def _validate_activity(cfg: Config, errors: list[str]) -> None:
     _choice(cfg, "activity.store.key_storage", {"tpm"}, errors)
     _positive(cfg, "activity.debounce_ms", errors)
     _positive(cfg, "activity.store.retention_days", errors, allow_zero=True)
+    _positive(cfg, "activity.watch_acrobat.poll_sec", errors)
+    _positive(cfg, "activity.watch_acrobat.sweep_minutes", errors, allow_zero=True)
 
     for key in ("activity.origins", "activity.timetable_slots",
                 "activity.process_allowlist", "activity.policy.name_blacklist"):

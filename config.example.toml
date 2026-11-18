@@ -672,8 +672,9 @@ timetable_slots = []
 # 필드 값을 언제 읽나(키 후킹 아님): field_commit(blur/change/Enter) | document_save | field_debounce
 keys_level = "field_commit"
 debounce_ms = 800
-# 웹 어댑터 허용 오리진(당신 PDF 사이트만)
-origins = []
+# 웹 어댑터 허용 오리진. Adobe 기본 포함, PDF.js 데모(mozilla.github.io)는 제외.
+# 당신 뷰어 오리진은 여기 한 줄 추가. `activity origins allow` 로도 됩니다(다음 증분).
+origins = ["https://acrobat.adobe.com", "https://documentcloud.adobe.com"]
 # 데스크톱 어댑터 프로세스 스코프
 process_allowlist = ["Acrobat.exe"]
 upload = "sealed_only"     # off | sealed_only
@@ -707,11 +708,20 @@ read_enforces_gate = true
 
 # 저장·봉인
 [activity.store]
+db_path = ""               # 비우면 <데이터>/activity/activity.db
+dek_path = ""              # 비우면 <데이터>/activity/dek.bin (DPAPI 봉인)
 public_key = ""            # 봉인할 공개키. 비면 저장 안 됨
 key_storage = "tpm"        # 추출 불가. TPM 없으면 저장 안 됨
 require_hello = true
 recovery_key = false       # 복구 불가 수용(기기 죽으면 영구 복구 불가)
 retention_days = 0
+
+# C(데스크톱 Acrobat) 사이드카 워처 — acrobat_js 어댑터가 떨군 필드 값을 읽어 봉인.
+# 사이드카는 짧은 순간 평문입니다(워처가 읽고 즉시 삭제). 자세한 한계는 docs/ACTIVITY.md.
+[activity.watch_acrobat]
+staging_dir = ""           # 비우면 <데이터>/activity/.staging
+poll_sec = 1.0
+sweep_minutes = 5          # 기동 시 이보다 묵은 사이드카는 삭제(평문 잔존 방지)
 
 
 # =====================================================================
