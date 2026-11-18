@@ -10,14 +10,18 @@
 > **구현 상태.** **구현됨** (`src/gymhall/activity/`): 하드웨어/OS 게이트 + 정책 엔진 +
 > SQLite 봉인 저장소(AES-GCM) + DEK 관리(DPAPI) + ingest 파이프라인 + 네이티브 메시징
 > 길이-프레이밍 + **C(Acrobat) 사이드카 워처(받는 쪽)**.
-> \+ **브라우저 확장**(`extension/`: content/background, 자격증명 제외 로직 Playwright 검증).
+> \+ **브라우저 확장**(`extension/`: content/background) + 네이티브 호스트 등록.
 > 명령: `activity gate`, `activity export`, `activity watch-acrobat`.
-> **남음**: 네이티브 호스트 등록 자동화, acrobat.adobe.com **라이브 DOM 확인**
-> (Adobe 독자 웹앱 — 표준 선택자로 잡히는지 라이브로만 검증 가능).
 >
 > **실측으로 내린 결론**: 사용자는 PDF 폼을 **웹 뷰어(acrobat.adobe.com)**에서 채웁니다.
 > 데스크톱 Acrobat(C)은 해당 없음 — 무료 Reader 는 폴더 레벨 trusted-function 을
-> 지원하지 않아(실기에서 Reader 충돌 확인) 생산자를 못 돌립니다. C 는 Acrobat Pro 필요.
+> 지원하지 않아(실기에서 Reader 충돌 확인) 생산자를 못 돌립니다(C 는 Acrobat Pro 필요).
+>
+> **B(acrobat.adobe.com)는 라이브 DOM 으로 검증됨**: PDF 폼 입력은 실제
+> `input[data-testid="textInput"]` 이고, 비번 필드는 `type=password` 로 렌더됩니다.
+> 확장이 폼 필드만(FullName/Address/…) 이름으로 담고, 비번은 제외, AI 질문칸·
+> 페이지번호칸 등 비-폼 요소는 안 건드리는 것을 당신 계정의 실제 폼에서 확인했습니다.
+> 그 구조를 CI Playwright 테스트로 고정했습니다(계정 없이 회귀).
 
 ---
 
