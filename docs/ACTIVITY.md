@@ -10,9 +10,14 @@
 > **구현 상태.** **구현됨** (`src/gymhall/activity/`): 하드웨어/OS 게이트 + 정책 엔진 +
 > SQLite 봉인 저장소(AES-GCM) + DEK 관리(DPAPI) + ingest 파이프라인 + 네이티브 메시징
 > 길이-프레이밍 + **C(Acrobat) 사이드카 워처(받는 쪽)**.
+> \+ **브라우저 확장**(`extension/`: content/background, 자격증명 제외 로직 Playwright 검증).
 > 명령: `activity gate`, `activity export`, `activity watch-acrobat`.
-> **보류/다음**: A 어댑터 브라우저 확장(JS) + 프로브/오리진 CLI, C 생산자(Acrobat 폴더 JS,
-> Acrobat 설치 기기에서 검증 필요). 받는 쪽은 합성 사이드카로 CI 검증됨.
+> **남음**: 네이티브 호스트 등록 자동화, acrobat.adobe.com **라이브 DOM 확인**
+> (Adobe 독자 웹앱 — 표준 선택자로 잡히는지 라이브로만 검증 가능).
+>
+> **실측으로 내린 결론**: 사용자는 PDF 폼을 **웹 뷰어(acrobat.adobe.com)**에서 채웁니다.
+> 데스크톱 Acrobat(C)은 해당 없음 — 무료 Reader 는 폴더 레벨 trusted-function 을
+> 지원하지 않아(실기에서 Reader 충돌 확인) 생산자를 못 돌립니다. C 는 Acrobat Pro 필요.
 
 ---
 
