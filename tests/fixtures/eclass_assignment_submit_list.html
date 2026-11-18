@@ -1,0 +1,123 @@
+<!doctype html>
+<!--
+  과제 목록(viewReportInfoPageList) 축약본 — 2026-11 실제 페이지에서
+  사람 이름·학번·reportId 만 가명으로 바꾸고 구조/JS 를 유지했습니다.
+  제출완료 과제(제출정보보기=submitReportView) 2건, 미제출 과제
+  (과제제출=submitReport, 위험) 1건이 섞여 있습니다.
+
+  폼 POST 를 실제로 수행합니다: submitReportView 는 cmd=viewReportSubmit
+  (열람 전용)로, submitReport 는 cmd=viewReportSubmitForm 으로 /report 에
+  POST 합니다. 테스트 서버는 cmd 를 보고 '열람인지 제출경로인지' 를
+  판별합니다 — 우리 코드가 제출경로를 누르면 서버가 그것을 기록합니다.
+-->
+<html lang="ko-kr"><head><meta charset="utf-8"><title>eClass 과제</title></head>
+<body>
+<form name="reportForm" method="post" action="/report">
+  <input type="hidden" name="cmd" value="viewReportInfoPageList">
+  <input type="hidden" name="gubun" value="">
+  <input type="hidden" name="reportInfoDTO.reportInfoId" value="">
+  <input type="hidden" name="reportInfoDTO.randomYn" value="N">
+
+  <div id="listBox">
+    <!-- 1) 제출완료 — 제출정보보기(열람 전용) -->
+    <div class="listContent pb20">
+      <dl class="element">
+        <dt>
+          <h4 class="f14">
+            <span class="ml10 fcRed f12">[마감]</span>
+            [일반 과제]&nbsp;11/5(목) 수업 중 제출 과제: Idea Map Worksheet
+          </h4>
+          <ul class="btnBox">
+            <li><a class="btn small" onclick="javascript:submitReportView('REPT_AAA000','N');"><i class="icon-note-small-color"></i>제출정보보기</a></li>
+          </ul>
+        </dt>
+        <dd>
+          <ul class="fl ml10"><li><b>참고 자료 :</b></li></ul>
+        </dd>
+        <dd>
+          <table class="boardListInfo" summary="과제 관련 리스트입니다.">
+            <thead><tr class="odd-row"><th class="first">제출기간</th><th>성적공개일자</th><th>연장제출</th><th class="last">제출여부</th></tr></thead>
+            <tbody><tr class="odd-row">
+              <td class="first">2026-11-05 09:10 ~ 2026-11-11 23:59</td>
+              <td></td><td>미허용</td><td class="last">제출완료</td>
+            </tr></tbody>
+          </table>
+        </dd>
+        <dd><div class="cont pb0"><p>Idea Map Worksheet 사진 파일 제출</p></div></dd>
+      </dl>
+    </div>
+
+    <!-- 2) 미제출 — 과제제출(submitReport, 위험) : 상세 없음 -->
+    <div class="listContent pb20">
+      <dl class="element">
+        <dt>
+          <h4 class="f14">
+            <span class="ml10 fcRed f12">[마감]</span>
+            [일반 과제]&nbsp;11/12(목) 과제: 예습
+          </h4>
+          <ul class="btnBox">
+            <li><a class="btn small" onclick="javascript:submitReport('REPT_BBB111');"><i class="icon-write-small-color"></i>과제제출</a></li>
+          </ul>
+        </dt>
+        <dd><ul class="fl ml10"><li><b>참고 자료 :</b></li></ul></dd>
+        <dd>
+          <table class="boardListInfo" summary="과제 관련 리스트입니다.">
+            <thead><tr class="odd-row"><th class="first">제출기간</th><th>성적공개일자</th><th>연장제출</th><th class="last">제출여부</th></tr></thead>
+            <tbody><tr class="odd-row">
+              <td class="first">2026-11-12 00:00 ~ 2026-11-18 23:59</td>
+              <td></td><td>미허용</td><td class="last">미제출</td>
+            </tr></tbody>
+          </table>
+        </dd>
+        <dd><div class="cont pb0"><p>교재 문제 풀기</p></div></dd>
+      </dl>
+    </div>
+
+    <!-- 3) 제출완료 — 제출정보보기(열람 전용) -->
+    <div class="listContent pb20">
+      <dl class="element">
+        <dt>
+          <h4 class="f14">
+            <span class="ml10 fcRed f12">[마감]</span>
+            [일반 과제]&nbsp;10/8(목) Presentation Script 제출
+          </h4>
+          <ul class="btnBox">
+            <li><a class="btn small" onclick="javascript:submitReportView('REPT_CCC222','N');"><i class="icon-note-small-color"></i>제출정보보기</a></li>
+          </ul>
+        </dt>
+        <dd><ul class="fl ml10"><li><b>참고 자료 :</b></li></ul></dd>
+        <dd>
+          <table class="boardListInfo" summary="과제 관련 리스트입니다.">
+            <thead><tr class="odd-row"><th class="first">제출기간</th><th>성적공개일자</th><th>연장제출</th><th class="last">제출여부</th></tr></thead>
+            <tbody><tr class="odd-row">
+              <td class="first">2026-10-08 00:00 ~ 2026-10-14 23:59</td>
+              <td></td><td>미허용</td><td class="last">제출완료</td>
+            </tr></tbody>
+          </table>
+        </dd>
+        <dd><div class="cont pb0"><p>첨부한 서식을 다운받아 작성</p></div></dd>
+      </dl>
+    </div>
+  </div>
+</form>
+
+<script>
+  function submitReportView(id, rnd) {
+    var f = document.reportForm;
+    f["cmd"].value = "viewReportSubmit";
+    f["reportInfoDTO.reportInfoId"].value = id;
+    f["reportInfoDTO.randomYn"].value = rnd;
+    f["gubun"].value = "A";
+    f.submit();
+  }
+  // 과제제출 경로. 실제로는 업로드 폼으로 가지만, 테스트에서는 '열람이
+  // 아닌 cmd' 로 POST 되는지만 봅니다. 우리 코드는 이 함수를 절대
+  // 호출/클릭하지 않아야 합니다.
+  function submitReport(id) {
+    var f = document.reportForm;
+    f["cmd"].value = "viewReportSubmitForm";
+    f["reportInfoDTO.reportInfoId"].value = id;
+    f.submit();
+  }
+</script>
+</body></html>

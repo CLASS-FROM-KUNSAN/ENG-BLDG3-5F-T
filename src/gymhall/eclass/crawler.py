@@ -115,6 +115,17 @@ ATTACHMENT = (
 #       <dd><div class="cont"><table class="boardListBasic">…</table></div></dd>
 LESSON_WEEK = "#listBox dl.element"
 
+# 과제 목록의 '제출정보보기' 버튼.
+#   <a class="btn small" onclick="javascript:submitReportView('REPT_...','N');">
+# submitReportView 는 **열람 전용**입니다(폼 cmd 를 viewReportSubmit 으로 POST).
+# 과제를 실제로 내는 submitReport(...) / 과제제출 과는 다릅니다 — 글자가
+# 'submitReport' 까지 겹치므로, 'View(' 를 요구해 그 둘을 확실히 가릅니다.
+# 이 선택자로 잡힌 것만 눌러 상세(제출정보)로 들어갑니다.
+ASSIGN_DETAIL_LINK = "a[onclick*='submitReportView(']"
+# 상세(제출정보) 화면의 라벨/값 표. 기본정보·제출정보 두 표가 같은 클래스입니다.
+ASSIGN_DETAIL_TABLE = "table.boardListWrite"
+_REPORT_ID_RE = re.compile(r"submitReportView\(\s*'([^']+)'")
+
 # 쪽지함. 칸 순서가 게시판과 달라서(맨 앞이 체크박스) 따로 읽습니다.
 #   [체크박스] [번호] [보낸이] [제목] [파일] [읽음] [받은 날짜]
 MESSAGE_ROW = "table.boardListBasic tbody tr"
@@ -707,8 +718,187 @@ class Crawler:
             self.stats.posts += 1
 
         files = self._download_attachments(out_dir)
-        log.info("%s / 과제: %d건, 첨부 %d개", course.name, len(blocks), len(files))
+
+        # 목록만으로는 과제명·제출기간·제출여부·참고자료까지입니다. '제출상태'
+        # (제출완료/과제제출일시)와 **제출한 첨부파일** 은 '제출정보보기'
+        # (submitReportView=열람 전용)로 들어가는 상세 화면에만 있습니다.
+        # 그래서 상세까지 들어가 그 값들을 함께 모읍니다. 실패해도 목록
+        # 수집은 이미 끝나 있습니다.
+        try:
+            detail_n, sub_files = self.collect_assignment_submissions(course, out_dir)
+        except Exception as exc:  # 상세 수집 실패가 목록 수집을 깨면 안 됩니다.
+            log.warning("%s / 과제 제출정보 수집 실패: %s", course.name, exc)
+            detail_n, sub_files = 0, 0
+
+        log.info("%s / 과제: %d건, 참고자료 %d개, 제출정보 %d건, 제출첨부 %d개",
+                 course.name, len(blocks), len(files), detail_n, sub_files)
         self.store.save()
+
+    # 과제 목록의 한 과제 = dl.element 하나. 제목·제출기간·제출여부와,
+    # '제출정보보기'(submitReportView) 의 reportInfoId 를 함께 읽습니다.
+    def read_assignment_entries(self) -> list[dict[str, Any]]:
+        raw = _eval_json(
+            self.br.page,
+            """() => {
+                 const squash = (v) => (v || '').replace(/\\s+/g, ' ').trim();
+                 const out = Array.from(
+                   document.querySelectorAll('#listBox dl.element')).map(dl => {
+                   const h = dl.querySelector('dt h4');
+                   const info = dl.querySelector('table.boardListInfo tbody tr');
+                   const tds = info ? Array.from(info.querySelectorAll('td')) : [];
+                   const due = tds.length ? squash(tds[0].innerText) : '';
+                   const status = tds.length ? squash(tds[tds.length - 1].innerText) : '';
+                   const view = dl.querySelector("a[onclick*='submitReportView(']");
+                   const oc = view ? (view.getAttribute('onclick') || '') : '';
+                   return { title: squash(h ? h.innerText : ''),
+                            due: due, status: status, onclick: oc };
+                 });
+                 return JSON.stringify(out);
+               }""",
+        )
+        if not isinstance(raw, list):
+            raise PageReadError(f"과제 목록이 리스트가 아닙니다: {type(raw).__name__}")
+        entries: list[dict[str, Any]] = []
+        detail_index = 0
+        for e in raw:
+            oc = e.get("onclick") or ""
+            m = _REPORT_ID_RE.search(oc)
+            report_id = m.group(1) if m else ""
+            entry = {
+                "title": e.get("title", ""),
+                "due": e.get("due", ""),
+                "status": e.get("status", ""),
+                "report_info_id": report_id,
+                # 화면에서 '제출정보보기' 가 걸린 순서(nth). report_info_id 가
+                # 있는 블록만 셉니다 — 그 순서로 링크를 눌러야 맞습니다.
+                "detail_index": detail_index if report_id else -1,
+            }
+            if report_id:
+                detail_index += 1
+            entries.append(entry)
+        return entries
+
+    # 제출정보 상세 화면(viewReportSubmit)의 라벨/값 쌍을 순서대로 읽습니다.
+    # 기본정보(과제명·제출기간·과제내용·참고자료)와 제출정보(제출자·과제설명·
+    # 첨부파일·제출상태·과제제출일시)가 같은 class 의 두 표에 나뉘어 있습니다.
+    def read_submission_detail(self) -> list[tuple[str, str]]:
+        raw = _eval_json(
+            self.br.page,
+            """() => {
+                 const squash = (v) => (v || '').replace(/\\s+/g, ' ').trim();
+                 const out = [];
+                 for (const tb of document.querySelectorAll(__SEL__)) {
+                   for (const tr of tb.querySelectorAll('tbody tr')) {
+                     const th = tr.querySelector('th');
+                     const td = tr.querySelector('td');
+                     if (!th || !td) continue;
+                     const label = squash(th.innerText);
+                     if (!label) continue;
+                     out.push([label, squash(td.innerText)]);
+                   }
+                 }
+                 return JSON.stringify(out);
+               }""",
+            sel=ASSIGN_DETAIL_TABLE,
+        )
+        if not isinstance(raw, list):
+            raise PageReadError(f"제출정보가 리스트가 아닙니다: {type(raw).__name__}")
+        return [(str(p[0]), str(p[1])) for p in raw if isinstance(p, list) and len(p) == 2]
+
+    def _return_to_assignment_list(self, course: Course) -> bool:
+        """상세를 한 번 들어가면 목록이 사라집니다. 과제 목록으로 돌아갑니다."""
+        return self.open_menu(course, "assignment")
+
+    def collect_assignment_submissions(
+            self, course: Course, out_dir: Path) -> tuple[int, int]:
+        """'제출정보보기' 가 있는 과제마다 상세로 들어가 제출정보를 모읍니다.
+
+        돌려주는 값: (상세를 읽은 과제 수, 받은 제출첨부 수).
+
+        **안전**: 누르는 것은 submitReportView(열람 전용)뿐입니다. 과제제출
+        /제출/goSave 는 선택자(ASSIGN_DETAIL_LINK)로도, 누르기 직전 재확인
+        으로도 막습니다. 상세의 첨부는 기존 _download_attachments 가 받습니다
+        (제출 버튼은 _is_unsafe_click 으로 거릅니다).
+        """
+        entries = [e for e in self.read_assignment_entries() if e["report_info_id"]]
+        if not entries:
+            return 0, 0
+
+        sections: list[str] = []
+        subfiles = 0
+        done = 0
+        for e in entries:
+            # 목록으로 복귀(첫 과제도 포함 — 현재 화면이 상세일 수 있음).
+            if not self._return_to_assignment_list(course):
+                self.stats.errors.append(
+                    f"{course.name}/과제: 제출정보 수집 중 목록 복귀 실패")
+                break
+
+            links = self.br.page.locator(ASSIGN_DETAIL_LINK)
+            if e["detail_index"] < 0 or e["detail_index"] >= links.count():
+                continue
+            link = links.nth(e["detail_index"])
+            # 누르기 직전 마지막 확인: 정말 열람 전용 링크인가.
+            oc = link.get_attribute("onclick") or ""
+            if "submitReportView(" not in oc or _is_unsafe_click(
+                    oc.replace("submitReportView", "")):
+                log.warning("%s/과제: 안전하지 않아 건너뜁니다: %s", course.name, oc[:60])
+                continue
+
+            if not self._enter_detail(link, f"과제 제출정보/{e['title']}"):
+                self.stats.errors.append(
+                    f"{course.name}/과제 '{e['title']}': 제출정보 상세에 못 들어갔습니다")
+                continue
+
+            pairs = self.read_submission_detail()
+            fields = dict(pairs)  # 라벨 중복 시 뒤엣것(제출정보 쪽)이 남습니다
+            title = fields.get("과제명") or e["title"]
+            sections.append(self._submission_section(title, e, pairs))
+
+            stem = safe_name(title, max_len=60) or f"과제{done + 1}"
+            att = self._download_attachments(out_dir / "제출첨부" / safe_name(stem, max_len=60))
+            subfiles += len(att)
+            done += 1
+
+        if sections:
+            body = (f"# {course.name} - 과제 제출정보\n\n"
+                    f"<!-- '제출정보보기'(열람 전용)로 들어가 모은 값입니다. "
+                    f"수집 {datetime.now().astimezone():%Y-%m-%d %H:%M} -->\n\n"
+                    + "\n".join(sections)).strip()
+            digest = sha256_text(body)
+            state_key = f"page:{course.course_id}:assignment_submit"
+            if self.store.data["downloaded"].get(state_key, {}).get("sha256") == digest:
+                self.stats.skipped += 1
+            else:
+                md = out_dir / safe_name("과제_제출정보.md")
+                md.write_text(body + "\n", encoding="utf-8")
+                self._snapshot(md)
+                self.store.mark_downloaded(state_key, path=str(md), digest=digest)
+                self.stats.posts += 1
+        return done, subfiles
+
+    @staticmethod
+    def _submission_section(title: str, entry: dict[str, Any],
+                            pairs: list[tuple[str, str]]) -> str:
+        # 한 줄 값(표 라벨)과 본문(과제내용·과제설명)을 나눠 적습니다.
+        long_labels = {"과제 내용", "과제설명", "참고 자료"}
+        lines = [f"## {title}", ""]
+        due = entry.get("due") or next(
+            (v for k, v in pairs if k == "제출기간"), "")
+        if due:
+            lines.append(f"- 제출기간: {due}")
+        for label, value in pairs:
+            if label in ("과제명", "제출기간") or label in long_labels:
+                continue
+            lines.append(f"- {label}: {value}" if value else f"- {label}:")
+        if not any(k == "제출상태" for k, _ in pairs) and entry.get("status"):
+            lines.append(f"- 제출여부: {entry['status']}")
+        for label in ("참고 자료", "과제 내용", "과제설명"):
+            value = next((v for k, v in pairs if k == label), "")
+            if value:
+                lines += ["", f"### {label}", "", value]
+        lines.append("")
+        return "\n".join(lines)
 
     # -- 강의 목록(교안) ---------------------------------------------
     # 이 화면이 사용자가 제일 원하는 것 — 주차별 교안 PDF 가 여기 있습니다.
