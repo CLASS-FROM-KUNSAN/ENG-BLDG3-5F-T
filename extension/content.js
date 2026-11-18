@@ -20,6 +20,24 @@
   var NAME_BLACKLIST =
     /(pwd|passwd|password|pass|pin|otp|cvv|cvc|secret|token|seed|ssn|주민|계좌|2fa|mfa|security.?code)/i;
 
+  // 사이트별 "지정 폼 필드" 선택자. 실측(acrobat.adobe.com)에서 PDF 폼 입력은
+  // input[data-testid="textInput"] 로, 비번 필드는 type=password 로 렌더됩니다.
+  // 이렇게 좁히면 AI 질문칸(QnAQuestionInput)·페이지번호칸 등 비-폼 요소가 안 잡힙니다.
+  var SITE_PROFILES = [
+    { match: /(^|\.)acrobat\.adobe\.com$/i,
+      fieldSelector: 'input[data-testid="textInput"], textarea[data-testid="textInput"]' },
+    { match: /(^|\.)documentcloud\.adobe\.com$/i,
+      fieldSelector: 'input[data-testid="textInput"], textarea[data-testid="textInput"]' },
+  ];
+
+  function siteSelector() {
+    var host = String(window.__gymhallProfileHost || location.hostname || "").toLowerCase();
+    for (var i = 0; i < SITE_PROFILES.length; i++) {
+      if (SITE_PROFILES[i].match.test(host)) return SITE_PROFILES[i].fieldSelector;
+    }
+    return null; // 알려진 사이트가 아니면 일반 폼 요소 스캔
+  }
+
   function acToken(el) {
     var a = (el.getAttribute("autocomplete") || "").trim().toLowerCase();
     if (!a) return "";
@@ -65,6 +83,11 @@
   };
 
   function candidates(doc) {
+    // 알려진 사이트: 지정 폼 필드만(비-폼 입력 제외). classify 가 비번 등은 또 거릅니다.
+    var profileSel = siteSelector();
+    if (profileSel) {
+      return Array.prototype.slice.call(doc.querySelectorAll(profileSel));
+    }
     var out = [];
     var formEls = doc.querySelectorAll("input, textarea, select");
     for (var i = 0; i < formEls.length; i++) {

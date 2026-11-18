@@ -15,9 +15,12 @@ background.js   네이티브 메시징(connectNative)으로 로컬 호스트에 
 - **자격증명 제외 로직은 실제 Chromium 에서 검증됨**(`tests/test_extension_content.py`,
   Playwright). password 타입·`current/new-password`·`one-time-code`·폼 전염·이름
   블랙리스트 → 전부 제외. jest/Node 없이 이 레포의 Playwright 로 돕니다.
-- **acrobat.adobe.com 라이브 DOM 은 미검증.** Adobe 의 독자 웹앱이라 폼을 비표준
-  (canvas·웹컴포넌트·shadow DOM)으로 그리면 표준 선택자로 못 잡을 수 있습니다.
-  이것만은 라이브 세션(로그인+PDF)에서 확인해야 합니다 — 아래 "라이브 확인" 참고.
+- **acrobat.adobe.com 은 라이브 DOM 으로 검증됨.** 실제 로그인 세션의 PDF 폼에서
+  확인: 폼 입력은 `input[data-testid="textInput"]`, 비번 필드는 `type=password`.
+  확장은 그 폼 필드만 이름으로 담고, 비번은 제외, AI 질문칸(`QnAQuestionInput`)·
+  페이지번호칸은 안 건드립니다(`content.js` 의 SITE_PROFILES 로 그 사이트는
+  `data-testid="textInput"` 로 범위를 좁힘). 그 구조는 CI Playwright 테스트로 고정.
+  (Adobe 가 UI 를 개편하면 선택자 보강이 필요할 수 있습니다 — 유지보수 비용.)
 
 ## 설치(개발자 모드)
 1. 크롬/엣지 → `chrome://extensions` → 개발자 모드 켜기 → **압축해제된 확장 프로그램 로드**
