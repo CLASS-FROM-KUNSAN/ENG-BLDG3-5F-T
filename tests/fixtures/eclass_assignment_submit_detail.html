@@ -1,0 +1,68 @@
+<!doctype html>
+<!--
+  과제 제출정보 상세(viewReportSubmit) 축약본 — 2026-11 실제 페이지에서
+  이름·학번·파일명만 가명으로 바꿨습니다. 기본정보(과제명·제출기간·
+  과제내용·참고자료)와 제출정보(제출자·과제설명·첨부파일·제출상태·
+  과제제출일시)가 같은 class(boardListWrite)의 두 표에 나뉘어 있습니다.
+  첨부파일은 <span onclick="fileDownload(이름,저장명,디렉터리)"> 입니다
+  (게시글 첨부와 같은 형식 → fileDownServlet).
+-->
+<html lang="ko-kr"><head><meta charset="utf-8"><title>eClass 과제 제출정보</title></head>
+<body>
+<div id="bodyContent">
+<form name="reportForm" method="post" action="/report">
+  <input type="hidden" name="cmd" value="addReportSubmit">
+  <div id="listBox">
+    <div class="listContent pb20">
+      <dl class="element">
+        <dt><h4 class="f14">기본정보</h4></dt>
+        <dd>
+          <table class="boardListWrite mt20" summary="과제 기본 정보">
+            <tbody>
+              <tr class="odd-row"><th class="head first"><label>과제명</label></th>
+                <td class="last">10/8(목) Presentation Script 제출</td></tr>
+              <tr><th class="head first">제출기간</th>
+                <td class="last"><ul class="option"><li>2026-10-08 00:00</li><li>~</li><li>2026-10-14 23:59</li></ul></td></tr>
+              <tr class="odd-row"><th class="head first"><label>과제 내용</label></th>
+                <td class="last"><p>첨부한 서식을 다운받아 구조에 맞게 작성하기 바랍니다.</p></td></tr>
+              <tr><th class="head first">참고 자료</th>
+                <td class="last">
+                  <span onclick="fileDownload('Script*20Form.docx','COMF_0001.docx','*2Fbusiness*2Freport*2FX*2F');" style="cursor:pointer;" title="Download: Script Form.docx">Script Form.docx</span>
+                </td></tr>
+            </tbody>
+          </table>
+        </dd>
+      </dl>
+    </div>
+
+    <div class="listContent pb20">
+      <dl class="element">
+        <dt><h4 class="f14">제출정보</h4></dt>
+        <dd>
+          <table class="boardListWrite mt20" summary="과제 제출 정보">
+            <tbody>
+              <tr class="odd-row"><th class="head first"><label>제출자</label></th>
+                <td class="last">홍길동(0000000)</td></tr>
+              <tr><th class="head first"><label>과제설명</label></th>
+                <td class="last">발표 대본 초안입니다.</td></tr>
+              <tr class="odd-row"><th class="head first">첨부파일</th>
+                <td class="last">
+                  <span onclick="fileDownload('Script.docx','COMF_1001.docx','*2Fbusiness*2Freport*2FX*2FREPT_CCC222*2F');" style="cursor:pointer;" title="Download: Script.docx">Script.docx</span>
+                  <span onclick="fileDownload('Notes.jpeg','COMF_1002.jpeg','*2Fbusiness*2Freport*2FX*2FREPT_CCC222*2F');" style="cursor:pointer;" title="Download: Notes.jpeg">Notes.jpeg</span>
+                </td></tr>
+              <tr class="odd-row"><th class="head first"><label>제출상태</label></th>
+                <td class="last">제출완료</td></tr>
+              <tr><th class="head first"><label>과제제출일시</label></th>
+                <td class="last"><ul class="option"><li>2026-10-10 14:22</li></ul></td></tr>
+            </tbody>
+          </table>
+        </dd>
+      </dl>
+    </div>
+  </div>
+
+  <!-- 되돌릴 수 없는 버튼. 절대 눌리면 안 됩니다. -->
+  <button type="button" class="btn large" onclick="javascript:moveList();"><i class="icon-list-color"></i>목 록</button>
+</form>
+</div>
+</body></html>
