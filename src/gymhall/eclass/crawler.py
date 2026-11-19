@@ -330,6 +330,11 @@ class Crawler:
         self.screenshots = bool(screenshots)
         self.capture_html = bool(capture_html)
         self._owner: str | None = None   # 로그인 본인 이름(마스킹용), 지연 추출
+        # 수집하며 '구조적으로' 알게 된 사람 이름들(작성자 열·이름 열·보낸이).
+        # 사번이 안 붙어 정규식으론 못 잡는 '맨 이름' 이라도, 이 레지스트리에
+        # 있으면 자유 본문·스크린샷·HTML·파일명 어디서든 그 문자열만 정확히
+        # 가립니다. 사전이 아니라 '본 적 있는 이름' 이라, 못 본 이름은 못 가립니다.
+        self._known_names: set[str] = set()
         self.site = site
         self.layout = layout
         self.store = store
@@ -460,14 +465,43 @@ class Crawler:
         if md is None:
             return
         if self.screenshots:
+            # 이번 호출의 known_names 에 더해, 그동안 구조적으로 알게 된 모든
+            # 이름을 함께 넘깁니다 — 다른 메뉴에서 본 이름이 이 화면에 있어도
+            # 가립니다.
+            merged = [*known_names, *self._known_names]
             if snapshot.take(self.br.page, md, senders=senders,
                              own_name=self._owner_name(),
-                             known_names=known_names) is not None:
+                             known_names=merged) is not None:
                 self.stats.shots += 1
             else:
                 self.stats.shots_failed += 1
         if self.capture_html:
             self._capture_full_html(md)
+
+    def _note_names(self, values: Iterable[str]) -> None:
+        """구조적으로 알게 된 사람 이름을 레지스트리에 모읍니다(2자 이상·글자 포함).
+
+        `이름 (사번)` 꼴이면 '이름' 만 떼어 함께 담습니다 — 본문엔 사번 없이
+        이름만 나오는 경우가 많기 때문입니다. 숫자·이메일·전화는 이미 정규식이
+        잡으므로 담지 않습니다.
+        """
+        for v in values:
+            v = (v or "").strip()
+            if not v:
+                continue
+            m = anon._SENDER.match(v)
+            if m:
+                v = m.group("name").strip()
+            if len(v) >= 2 and any(ch.isalpha() for ch in v) and not v.isdigit():
+                self._known_names.add(v)
+
+    def _mask_names(self, own: str = "") -> tuple[str, ...]:
+        """자유 본문용(mask_pii 의 own_names 자리): 본인 이름 + 레지스트리."""
+        names = set(self._known_names)
+        own = (own or self._owner or "").strip()
+        if len(own) >= 2:
+            names.add(own)
+        return tuple(names)
 
     def _owner_name(self) -> str:
         """상단 프로필의 로그인 이름(마스킹용). 한 번 찾으면 캐시."""
@@ -478,6 +512,7 @@ class Crawler:
                 loc = self.br.page.locator(sel).first
                 if loc.count() and (t := loc.inner_text(timeout=600).strip()):
                     self._owner = t.split("(")[0].strip()
+                    self._note_names([self._owner])
                     return self._owner
             except Exception:
                 continue
@@ -491,7 +526,7 @@ class Crawler:
         """
         own = self._owner_name()
         try:
-            html = singlefile.capture(self.br.page, own_names=(own,) if own else ())
+            html = singlefile.capture(self.br.page, own_names=self._mask_names(own))
         except Exception as exc:
             log.debug("전체 HTML 캡처 실패(%s): %s", md.name, exc)
             self.stats.html_failed += 1
@@ -1209,8 +1244,13 @@ class Crawler:
                 continue
         return ""
 
-    def _account_menu_markdown(self, label: str) -> str:
-        """현재 페이지(#bodyContent)를 '빠짐 없이' 마크다운으로. 이름 열 마스킹."""
+    def _account_menu_markdown(self, label: str) -> tuple[str, list[str]]:
+        """현재 페이지(#bodyContent)를 '빠짐 없이' 마크다운으로. 이름 열 마스킹.
+
+        돌려주는 두 번째 값은 이름 열에서 뽑은 '맨 이름' 들입니다 — .md 는
+        여기서 가리지만, 같은 화면의 스크린샷(.png)에서도 그 문자열만 정확히
+        가리라고 호출부에 넘겨 주려는 용도입니다.
+        """
         page = self.br.page
         try:
             page.wait_for_load_state("domcontentloaded", timeout=self.br.timeout_ms)
@@ -1241,13 +1281,14 @@ class Crawler:
                }""",
         )
         if not isinstance(data, dict):
-            return f"## {label}\n\n(읽기 실패)\n"
+            return f"## {label}\n\n(읽기 실패)\n", []
         if data.get("blocked"):
-            return f"## {label}\n\n(방화벽 차단 — 수집 안 함)\n"
+            return f"## {label}\n\n(방화벽 차단 — 수집 안 함)\n", []
         if data.get("relogin"):
-            return f"## {label}\n\n(세션 필요 — 건너뜀)\n"
+            return f"## {label}\n\n(세션 필요 — 건너뜀)\n", []
 
         lines = [f"## {label}", ""]
+        names: list[str] = []
         tables = data.get("tables") or []
         for t in tables:
             cap = t.get("caption") or ""
@@ -1262,6 +1303,11 @@ class Crawler:
                 cells = ["<NAME>" if i in name_cols else c.replace("|", "\\|")
                          for i, c in enumerate(r)]
                 lines.append("| " + " | ".join(cells) + " |")
+                # 이름 열의 '맨 이름' 은 스크린샷용으로 모읍니다(글자 2자 이상).
+                for i in name_cols:
+                    v = (r[i] if i < len(r) else "").strip()
+                    if len(v) >= 2 and any(ch.isalpha() for ch in v):
+                        names.append(v)
             lines.append("")
         # 표 밖 텍스트(문의처·안내문 등)도 빠뜨리지 않습니다.
         txt = (data.get("text") or "").strip()
@@ -1269,26 +1315,32 @@ class Crawler:
             lines += [txt, ""]
         elif not tables:
             lines += ["(내용 없음)", ""]
-        return "\n".join(lines)
+        return "\n".join(lines), names
 
     def crawl_account(self) -> None:
         out_dir = self.layout.menu_dir(self.term, "_계정", "계정정보")
         out_dir.mkdir(parents=True, exist_ok=True)
         own = ""
         sections = []
+        known_names: list[str] = []
         for label, tail in ACCOUNT_MENUS:
             try:
                 self.br.goto(self.site.base_url.rstrip("/") + tail)
                 if not own:
                     own = self._account_owner_name()
-                sections.append(self._account_menu_markdown(label))
+                md_text, names = self._account_menu_markdown(label)
+                sections.append(md_text)
+                known_names.extend(names)
             except Exception as exc:
                 sections.append(f"## {label}\n\n(수집 실패: {type(exc).__name__})\n")
                 self.stats.errors.append(f"계정/{label}: {exc}")
+        # 이름 열에서 뽑은 이름을 레지스트리에 모아, 표 밖 자유 본문에 같은
+        # 이름이 '맨 이름' 으로 나와도(.md·스크린샷·HTML) 가립니다.
+        self._note_names(known_names)
         body = ("# 계정 정보 (계정 레벨 · 과목 무관)\n\n"
                 "<!-- 개인정보(학번/이메일/전화/이름)는 마스킹됨(쪽지와 같은 수준). -->\n\n"
                 + "\n".join(sections)).strip()
-        body = anon.mask_pii(body, own_names=(own,) if own else ())
+        body = anon.mask_pii(body, own_names=self._mask_names(own))
         digest = sha256_text(body)
         state_key = "account:info"
         if self.store.data["downloaded"].get(state_key, {}).get("sha256") == digest:
@@ -1296,7 +1348,9 @@ class Crawler:
         else:
             fp = out_dir / safe_name("계정정보.md")
             fp.write_text(body + "\n", encoding="utf-8")
-            self._snapshot(fp)
+            # .md 는 이름 열을 가렸지만, 스크린샷(마지막 메뉴 화면)에도 그
+            # '맨 이름' 들이 남지 않게 정확 일치로 넘깁니다.
+            self._snapshot(fp, known_names=known_names)
             self.store.mark_downloaded(state_key, path=str(fp), digest=digest)
             self.stats.posts += 1
         log.info("계정: 메뉴 %d개 수집(계정정보.md, 개인정보 마스킹)", len(ACCOUNT_MENUS))
@@ -1326,6 +1380,7 @@ class Crawler:
                 break
 
             list_url = self.br.page.url
+            self._note_names(r.get("sender", "") for r in rows)
             for row in rows:
                 who = anon.sender(row["sender"])
                 state_key = sha256_text(
@@ -1567,6 +1622,9 @@ class Crawler:
                     log.info("%s / %s: 글이 없습니다.", course.name, label)
                 break
 
+            # 이 페이지 작성자 이름을 먼저 레지스트리에 모읍니다 — 상세 본문에
+            # '맨 이름' 으로 다시 나와도 가릴 수 있게.
+            self._note_names(r.get("author", "") for r in rows)
             grand_total += len(rows)
             if total_pages > 1:
                 log.info("%s / %s: %d/%d페이지, %d건",
@@ -1713,15 +1771,18 @@ class Crawler:
         # 제목·본문은 '확실한 PII 토큰'(이름(사번)·학번·이메일·전화·본인 이름)만
         # (mask_pii) 가립니다. 내용은 그대로 둬 '빠지는 정보' 가 없게 합니다.
         own = self._owner_name()
-        own_names = (own,) if own else ()
+        self._note_names([row.get("author", "")])
+        # 본문·제목은 '확실한 토큰'(mask_pii) 에 더해, 구조적으로 아는 이름
+        # (작성자 등)도 own_names 자리로 넘겨 '맨 이름' 까지 가립니다.
+        mask_names = self._mask_names(own)
         md.write_text(
-            f"# {anon.mask_pii(row['title'], own_names)}\n\n"
+            f"# {anon.mask_pii(row['title'], mask_names)}\n\n"
             f"- 과목: {course.name}\n"
             f"- 게시판: {MENU_LABELS.get(key, key)}\n"
-            f"- 작성자: {anon.mask_name(row.get('author', ''), own_names)}\n"
+            f"- 작성자: {anon.mask_name(row.get('author', ''), mask_names)}\n"
             f"- 작성일: {row.get('date','')}\n"
             f"- 수집시각: {datetime.now().astimezone():%Y-%m-%d %H:%M:%S}\n\n---\n\n"
-            f"{anon.mask_pii(body, own_names)}\n",
+            f"{anon.mask_pii(body, mask_names)}\n",
             encoding="utf-8",
         )
         # 작성자 '맨 이름' 은 정규식으론 못 잡지만 목록 행에서 구조적으로
@@ -2003,7 +2064,7 @@ class Crawler:
         원래 경로를, 바꾸다 실패하면도 원래 경로를 돌려줍니다(수집을 막지
         않습니다).
         """
-        masked = anon.mask_filename(path.name, own_names=(own,) if own else ())
+        masked = anon.mask_filename(path.name, own_names=self._mask_names(own))
         if masked == path.name:
             return path
         target = unique_path(path.with_name(masked))

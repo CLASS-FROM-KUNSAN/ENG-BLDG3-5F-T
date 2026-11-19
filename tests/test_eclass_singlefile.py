@@ -124,6 +124,25 @@ def test_scripts_are_removed(captured):
     assert "window.__ran" not in html
 
 
+def test_known_names_mask_bare_third_party_names(browser):
+    """사번 없는 제3자 '맨 이름' 도 레지스트리(own_names)에 있으면 전부 가립니다.
+
+    과거엔 첫 이름 하나만 가렸습니다 — 수집하며 알게 된 모든 이름을 넘기면
+    자유 본문의 그 이름들도 가려야 합니다. 모르는 이름은 그대로 둡니다."""
+    pg = browser.new_page()
+    try:
+        pg.set_content(
+            "<!doctype html><meta charset=utf-8><body>"
+            "<p>작성자 김철수. 담당 이영희 선생님. 문의는 박민수에게.</p></body>"
+        )
+        html = singlefile.capture(pg, own_names=("김철수", "이영희"))
+    finally:
+        pg.close()
+    assert "김철수" not in html and "이영희" not in html
+    assert "[이름]" in html
+    assert "박민수" in html, "레지스트리에 없는 이름까지 함부로 가리면 안 됩니다"
+
+
 def test_pii_is_masked(captured):
     html, _ = captured
     # 플레이스홀더는 각괄호가 아니라 대괄호([ ]) — HTML 에서 안 숨겨지고 안 깨짐.
