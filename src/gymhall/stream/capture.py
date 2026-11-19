@@ -105,6 +105,7 @@ class Encoder:
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self.error: str | None = None
+        self.peak: float = 0.0
 
     def start(self) -> None:
         import os
@@ -141,6 +142,9 @@ class Encoder:
                     data = rec.record(numframes=frames)
                     if data is None or len(data) == 0:
                         continue
+                    max_val = float(np.max(np.abs(data)))
+                    if max_val > self.peak:
+                        self.peak = max_val
                     pcm = (np.clip(data, -1.0, 1.0) * 32767.0).astype("<i2")
                     self.proc.stdin.write(pcm.tobytes())
         except (BrokenPipeError, OSError, ValueError) as exc:

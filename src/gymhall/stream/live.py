@@ -346,7 +346,25 @@ class Session:
         if self._hub is not None and seconds > 0 and self._hub.bytes_in == start_bytes:
             self._encoder.error = "인코더에서 소리가 한 바이트도 나오지 않음"
             return False
+        if (self.settings.source == "mic" and getattr(self._encoder, "pcm_source", None) is not None
+                and getattr(self._encoder, "peak", 1.0) == 0.0 and seconds > 0):
+            self._encoder.error = "[mic] 레벨이 정확히 0 입니다 (신호 경로 없음)"
+            return False
         return True
+
+    def _find_alternate_mic(self, exclude: list[str]) -> str | None:
+        """실패한 마이크를 제외하고 살아있는 대체 마이크를 탐색합니다."""
+        from ..recorder import devices
+
+        try:
+            chosen, _probes = devices.select_working_mic(exclude=exclude)
+            if chosen is not None:
+                name = getattr(chosen, "name", "")
+                if name:
+                    return name
+        except Exception as exc:
+            log.debug("대체 마이크 탐색 실패: %s", exc)
+        return None
 
     def _try_start(self) -> bool:
         """마지막으로 잘 돌던 장치 -> 설정한 장치 -> 기본 장치 순으로 띄웁니다."""
@@ -355,6 +373,12 @@ class Session:
         for dev in (self._good_device, s.device, "" if s.fallback_default_device else None):
             if dev is not None and dev not in order:
                 order.append(dev)
+
+        # 사용자가 특정 장치를 강제 고정한 경우(s.device 명시 + fallback_default_device=False)
+        # 에는 대체 장치 자동 전환을 차단합니다.
+        can_switch_mic = (s.source == "mic" and (not s.device or s.fallback_default_device))
+
+        failed_devices: list[str] = []
         for dev in order:
             if self._encoder is not None:
                 self._encoder.stop()
@@ -364,6 +388,7 @@ class Session:
                 raise  # 설정 문제: 다시 해도 같습니다
             except Exception as exc:
                 log.warning("장치 '%s' 를 열지 못했습니다: %s", dev or "(기본)", exc)
+                failed_devices.append(dev)
                 continue
             if self._wait_healthy(s.min_uptime_sec):
                 if self._good_device is not None and dev != self._good_device:
@@ -371,8 +396,31 @@ class Session:
                 self._good_device = dev
                 self._segment_started = time.time()
                 return True
+            failed_devices.append(dev)
             log.warning("장치 '%s' 로는 소리가 나오지 않습니다: %s",
                         dev or "(기본)", self._encoder.error or "ffmpeg 종료")
+
+        # 기존 복구 체인에서 실패했고, 마이크 자동 전환이 허용된 경우 대체 마이크 탐색
+        if can_switch_mic:
+            alt_dev = self._find_alternate_mic(exclude=failed_devices)
+            if alt_dev is not None and alt_dev not in failed_devices:
+                log.info("대체 마이크 탐색: '%s' 시도", alt_dev)
+                if self._encoder is not None:
+                    self._encoder.stop()
+                try:
+                    self._start_encoder(alt_dev)
+                    if self._wait_healthy(s.min_uptime_sec):
+                        log.warning("대체 마이크 '%s' 로 전환하여 복구했습니다.", alt_dev)
+                        self._good_device = alt_dev
+                        self._segment_started = time.time()
+                        return True
+                    failed_devices.append(alt_dev)
+                    log.warning("대체 마이크 '%s' 로도 소리가 나오지 않습니다: %s",
+                                alt_dev, self._encoder.error or "ffmpeg 종료")
+                except Exception as exc:
+                    failed_devices.append(alt_dev)
+                    log.warning("대체 마이크 '%s' 열기 실패: %s", alt_dev, exc)
+
         return False
 
     def _recover(self, why: str) -> bool:

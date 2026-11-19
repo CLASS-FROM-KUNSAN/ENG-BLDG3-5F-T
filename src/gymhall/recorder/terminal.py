@@ -24,21 +24,24 @@
 
 from __future__ import annotations
 
+import collections
 import os
 import shutil
 import subprocess
 import sys
 import time
+import wave
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from ..logging_setup import get as get_logger
 from ..paths import safe_name, unique_path
 
 log = get_logger("recorder.terminal")
 
-BACKENDS = ("auto", "ffmpeg", "sox", "arecord")
+BACKENDS = ("auto", "ffmpeg", "sox", "arecord", "silero")
 SOURCES = ("mic", "system")
 FORMATS = ("wav", "mp3", "flac")
 
@@ -280,6 +283,8 @@ def choose_backend(plan: Plan, found: dict[str, str | None], *, plat: str | None
 def build(plan: Plan, out: Path, *, plat: str | None = None,
           found: dict[str, str | None] | None = None) -> tuple[str, list[str]]:
     """(쓰는 백엔드, 명령) 을 돌려줍니다. 실행은 하지 않습니다."""
+    if plan.backend == "silero":
+        raise TerminalAudioError("silero 백엔드는 파이썬 내부 링 버퍼를 사용하므로 CLI 명령을 만들지 않습니다.")
     if plan.vad and plan.backend not in ("auto", "sox"):
         raise TerminalAudioError("소리 감지 녹음(--vad)은 sox 백엔드에서만 됩니다.")
     found = available() if found is None else found
@@ -289,14 +294,209 @@ def build(plan: Plan, out: Path, *, plat: str | None = None,
 
 
 # ---------------------------------------------------------------------------
+# Silero VAD + 링 버퍼 녹음
+# ---------------------------------------------------------------------------
+def record_vad_ring_buffer(
+    out: Path,
+    plan: Plan,
+    *,
+    vad_detector: Any = None,
+    pcm_source: Any = None,
+    max_wait_sec: float = 60.0,
+    hangover_sec: float | None = None,
+    pre_roll_chunks: int = 15,
+) -> Path | None:
+    """Silero VAD + 링 버퍼 기반 음성 감지 녹음.
+
+    - 32ms 청크 단위로 오디오 수집
+    - collections.deque(maxlen=15) 프리롤 버퍼로 발화 직전 480ms 오디오 보존 (첫 어절 잘림 방지)
+    - 발화 감지 시 프리롤을 파일에 기록하고 녹음 개시
+    - 발화 종료 후 hangover_chunks 동안 무음 지속 시 정상 종료
+    - max_wait_sec 동안 발화가 전혀 없으면 타임아웃 종료
+    - 파일 기록용 원본 PCM(int16)과 VAD 추론용 정규화 데이터(float32) 명확 분리
+    """
+    import numpy as np
+
+    if vad_detector is None:
+        from .vad import SileroVADDetector
+
+        vad_detector = SileroVADDetector()
+    if not getattr(vad_detector, "available", False):
+        raise TerminalAudioError("Silero VAD 를 사용할 수 없습니다 (onnxruntime 또는 모델 파일 없음).")
+
+    if pcm_source is None:
+        from . import devices
+
+        if plan.source == "system":
+            pcm_source = devices.resolve_system_source(plan.device)
+        else:
+            pcm_source = devices.resolve_mic_source(plan.device)
+
+    samplerate = int(plan.samplerate)
+    channels = int(plan.channels)
+    chunk_frames = max(1, int(round(samplerate * 0.032)))
+    max_record_chunks = int(round(plan.seconds / 0.032)) if plan.seconds > 0 else 0
+
+    if hangover_sec is None:
+        hangover_sec = plan.vad_stop_sec if plan.vad_stop_sec > 0 else 1.5
+    hangover_chunks = max(1, int(round(hangover_sec / 0.032)))
+
+    pre_roll: collections.deque[bytes] = collections.deque(maxlen=pre_roll_chunks)
+
+    vad_detector.reset()
+    is_recording = False
+    recorded_chunks = 0
+    silence_chunks = 0
+    wav = None
+    started_wait = time.time()
+
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    temp_wav = out if plan.fmt == "wav" else out.with_suffix(".temp.wav")
+
+    try:
+        with pcm_source.recorder(samplerate=samplerate, channels=channels, blocksize=chunk_frames) as rec:
+            while True:
+                data = rec.record(numframes=chunk_frames)
+                if data is None or len(data) == 0:
+                    continue
+
+                # 1. 파일 기록용 원본 PCM (int16) 데이터 분리
+                if np.issubdtype(data.dtype, np.floating):
+                    clipped = np.clip(data, -1.0, 1.0)
+                    pcm_int16 = (clipped * 32767.0).astype(np.int16)
+                elif np.issubdtype(data.dtype, np.integer):
+                    pcm_int16 = data.astype(np.int16)
+                else:
+                    pcm_int16 = data.astype(np.int16)
+                pcm_bytes = pcm_int16.tobytes()
+
+                # 2. VAD 추론용 정규화 데이터 분리 (float32, 16kHz 모노, 512 샘플)
+                mono = np.mean(data, axis=1) if data.ndim > 1 else data
+
+                if np.issubdtype(mono.dtype, np.integer):
+                    mono_f32 = mono.astype(np.float32) / 32768.0
+                else:
+                    mono_f32 = mono.astype(np.float32)
+
+                if samplerate == 48000:
+                    chunk_16k = mono_f32[::3]
+                elif samplerate == 16000:
+                    chunk_16k = mono_f32
+                else:
+                    step = max(1, round(samplerate / 16000))
+                    chunk_16k = mono_f32[::step]
+
+                if len(chunk_16k) > 512:
+                    chunk_16k = chunk_16k[:512]
+                elif len(chunk_16k) < 512:
+                    chunk_16k = np.pad(chunk_16k, (0, 512 - len(chunk_16k)))
+
+                prob = vad_detector.step(chunk_16k)
+                speech = prob >= vad_detector.threshold
+
+                if not is_recording:
+                    if not speech:
+                        pre_roll.append(pcm_bytes)
+                        if max_wait_sec > 0 and (time.time() - started_wait) >= max_wait_sec:
+                            log.warning("[vad] 대기 시간(%.1f초) 동안 발화가 감지되지 않았습니다.", max_wait_sec)
+                            break
+                    else:
+                        is_recording = True
+                        wav = wave.open(str(temp_wav), "wb")  # noqa: SIM115
+                        wav.setnchannels(channels)
+                        wav.setsampwidth(2)
+                        wav.setframerate(samplerate)
+                        for pre in pre_roll:
+                            wav.writeframes(pre)
+                        pre_roll.clear()
+                        wav.writeframes(pcm_bytes)
+                        recorded_chunks += 1
+                        silence_chunks = 0
+                else:
+                    wav.writeframes(pcm_bytes)
+                    recorded_chunks += 1
+                    if speech:
+                        silence_chunks = 0
+                    else:
+                        silence_chunks += 1
+                        if silence_chunks >= hangover_chunks:
+                            log.info("[vad] 발화 종료 감지 (연속 무음 %d청크, 약 %.1f초)",
+                                     silence_chunks, silence_chunks * 0.032)
+                            break
+                    if max_record_chunks > 0 and recorded_chunks >= max_record_chunks:
+                        log.info("[vad] 최대 녹음 시간(%.1f초) 도달", plan.seconds)
+                        break
+    finally:
+        if wav is not None:
+            try:
+                wav.close()
+            except Exception:
+                pass
+
+    if not is_recording or not temp_wav.exists() or temp_wav.stat().st_size <= 44:
+        if temp_wav.exists():
+            try:
+                temp_wav.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return None
+
+    if plan.fmt != "wav" and temp_wav != out:
+        from .ffmpeg_util import find_ffmpeg, run
+
+        codec = {"mp3": ["-c:a", "libmp3lame", "-q:a", "4"],
+                 "flac": ["-c:a", "flac"]}.get(plan.fmt, ["-c:a", "copy"])
+        cmd = [find_ffmpeg(), "-hide_banner", "-loglevel", "warning", "-y",
+               "-i", str(temp_wav), *codec, str(out)]
+        try:
+            run(cmd, timeout=30)
+            temp_wav.unlink(missing_ok=True)
+        except Exception as exc:
+            log.warning("포맷 변환(%s) 실패, WAV 로 유지합니다: %s", plan.fmt, exc)
+            return temp_wav
+
+    return out
+
+
+# ---------------------------------------------------------------------------
 # 실행
 # ---------------------------------------------------------------------------
 def record_once(plan: Plan, out_dir: Path, *, pattern: str = "record_%Y%m%d_%H%M%S",
-                found: dict[str, str | None] | None = None) -> Path | None:
+                found: dict[str, str | None] | None = None,
+                vad_detector: Any = None,
+                pcm_source: Any = None) -> Path | None:
     """한 파일을 녹음합니다. 받은 파일 경로, 아무것도 안 남았으면 None."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out = unique_path(out_dir / output_name(pattern, plan.fmt))
+
+    use_silero = False
+    if plan.backend == "silero":
+        use_silero = True
+    elif plan.vad and plan.backend == "auto":
+        if vad_detector is not None and getattr(vad_detector, "available", False):
+            use_silero = True
+        elif vad_detector is None:
+            try:
+                from .vad import SileroVADDetector
+
+                detector = SileroVADDetector()
+                if detector.available:
+                    vad_detector = detector
+                    use_silero = True
+            except Exception:
+                use_silero = False
+
+    if use_silero:
+        try:
+            log.info("[silero-vad] 링 버퍼 기반 음성 감지 녹음 시작 -> %s", out)
+            return record_vad_ring_buffer(out, plan, vad_detector=vad_detector, pcm_source=pcm_source)
+        except TerminalAudioError:
+            raise
+        except Exception as exc:
+            log.warning("[silero-vad] 녹음 중 오류(%s), CLI 백엔드로 폴백합니다.", exc)
+
     backend, cmd = build(plan, out, found=found)
 
     log.info("[%s] 녹음 시작 -> %s", backend, out)
