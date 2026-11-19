@@ -407,6 +407,13 @@ silence_abort_sec = 3600
 # '완전 무음' 기준. 낮출수록 엄격합니다.
 silence_peak = 1e-5
 
+# Silero VAD (ONNX Runtime) 기반 음성 활동 감지.
+# 빔프로젝터·에어컨 소음 환경에서 무음 오탐을 방지합니다.
+# onnxruntime 이 없거나 모델 파일이 없으면 기존 진폭(peak) 판정으로 자동 폴백합니다.
+use_vad = false
+# ONNX 모델 파일 경로 (비우면 SILERO_VAD_PATH 환경변수 또는 models/silero_vad.onnx)
+vad_model_path = ""
+
 # ---------------------------------------------------------------------
 # [recording.triggers] 언제 녹화를 시작할지
 # ---------------------------------------------------------------------
