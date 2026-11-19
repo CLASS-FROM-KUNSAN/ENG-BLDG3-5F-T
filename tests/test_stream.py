@@ -525,3 +525,98 @@ def test_stop_comment_reports_rollbacks():
     n.stopped(reason="시간표 종료", minutes=100, listeners=2, rollbacks=3)
     comment = next(b["body"] for m, p, b in gh.calls if p == "/issues/1/comments")
     assert "롤백 복구 3회" in comment
+
+
+# ---------------------------------------------------------------------------
+# 동적 마이크 자동 전환 (스트리밍)
+# ---------------------------------------------------------------------------
+class FakeMicEncoder(FakeEncoder):
+    def __init__(self, device, peak=0.5):
+        super().__init__(device)
+        self.peak = peak
+        self.pcm_source = object()  # pcm_source 활성 표시
+
+
+def test_stream_mic_silent_zero_triggers_switch_to_alternate_mic(monkeypatch):
+    from gymhall.recorder import devices
+
+    sess = fake_session(
+        monkeypatch,
+        settings={"source": "mic", "device": "USB마이크-죽음", "fallback_default_device": True},
+    )
+    sess._good_device = "USB마이크-죽음"
+
+    # USB마이크-죽음 및 기본장치("")는 peak == 0.0 으로 실패, 대체 마이크는 peak == 0.5 로 성공
+    def start_enc(self, dev):
+        if dev in ("USB마이크-죽음", ""):
+            self._encoder = FakeMicEncoder(dev, peak=0.0)
+        else:
+            self._encoder = FakeMicEncoder(dev, peak=0.5)
+
+    monkeypatch.setattr(live.Session, "_start_encoder", start_enc)
+    # _wait_healthy 에서 peak == 0.0 이면 무음으로 실패하도록 설정
+    monkeypatch.setattr(
+        live.Session,
+        "_wait_healthy",
+        lambda self, sec: self._encoder.alive and getattr(self._encoder, "peak", 1.0) > 0.0,
+    )
+
+    alt_called_with_exclude = []
+
+    def mock_select(exclude=(), **kw):
+        alt_called_with_exclude.append(list(exclude))
+        return type("MockMic", (), {"name": "내장마이크-살아있음"})(), []
+
+    monkeypatch.setattr(devices, "select_working_mic", mock_select)
+
+    assert sess._try_start()
+    assert sess._good_device == "내장마이크-살아있음"
+    assert any("USB마이크-죽음" in excl for excl in alt_called_with_exclude)
+
+
+def test_stream_mic_switch_refused_when_device_explicitly_fixed(monkeypatch):
+    from gymhall.recorder import devices
+
+    # 장치가 명시되어 있고 fallback_default_device = False 인 고정 상태
+    sess = fake_session(
+        monkeypatch,
+        settings={"source": "mic", "device": "전용고정마이크", "fallback_default_device": False},
+    )
+
+    def start_enc(self, dev):
+        self._encoder = FakeMicEncoder(dev, peak=0.0)
+
+    monkeypatch.setattr(live.Session, "_start_encoder", start_enc)
+    monkeypatch.setattr(live.Session, "_wait_healthy", lambda self, sec: False)
+
+    select_called = False
+
+    def mock_select(**kw):
+        nonlocal select_called
+        select_called = True
+        return type("MockMic", (), {"name": "임의장치"})(), []
+
+    monkeypatch.setattr(devices, "select_working_mic", mock_select)
+
+    assert not sess._try_start()
+    assert not select_called, "고정된 장치 설정에서는 임의로 다른 마이크를 탐색해선 안 됩니다"
+
+
+def test_stream_mic_all_dead_triggers_backoff_and_safe_recovery(monkeypatch):
+    from gymhall.recorder import devices
+
+    sess = fake_session(
+        monkeypatch,
+        settings={"source": "mic", "device": "", "restart_on_failure": 2},
+    )
+
+    def start_enc(self, dev):
+        self._encoder = FakeMicEncoder(dev, peak=0.0)
+
+    monkeypatch.setattr(live.Session, "_start_encoder", start_enc)
+    monkeypatch.setattr(live.Session, "_wait_healthy", lambda self, sec: False)
+    monkeypatch.setattr(devices, "select_working_mic", lambda **kw: (None, []))
+
+    # 모든 마이크가 실패할 때 지수 백오프를 거쳐 상한(2회) 도달 시 안전 종료
+    assert not sess._recover("전체 마이크 무음")
+

@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
+import wave
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from gymhall import cli
@@ -225,3 +227,169 @@ def test_cli_print_does_not_record(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert code == 0
     assert "# ffmpeg" in out and "pulse" in out
+
+
+# ---------------------------------------------------------------------------
+# Silero VAD + 링 버퍼
+# ---------------------------------------------------------------------------
+class FakeVADDetector:
+    def __init__(self, speech_flags: list[bool], threshold: float = 0.5):
+        self.speech_flags = list(speech_flags)
+        self.threshold = threshold
+        self.available = True
+        self.step_calls = 0
+
+    def reset(self):
+        pass
+
+    def step(self, chunk):
+        self.step_calls += 1
+        if self.speech_flags:
+            flag = self.speech_flags.pop(0)
+            return 0.9 if flag else 0.1
+        return 0.1
+
+
+class FakeChunkRecorder:
+    def __init__(self, chunks):
+        self.chunks = list(chunks)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def record(self, numframes):
+        if self.chunks:
+            return self.chunks.pop(0)
+        return np.zeros((numframes, 2), dtype=np.float32)
+
+
+class FakeChunkSource:
+    def __init__(self, chunks):
+        self.chunks = chunks
+
+    def recorder(self, samplerate, channels, blocksize):
+        return FakeChunkRecorder(self.chunks)
+
+
+def test_vad_ring_buffer_preserves_preroll_and_hangover(tmp_path):
+    sr = 48000
+    ch = 2
+    chunk_frames = 1536  # 32ms @ 48kHz
+
+    # 6개 무음 청크 + 4개 발화 청크 + 6개 무음 청크
+    silence = np.zeros((chunk_frames, ch), dtype=np.float32)
+    speech = np.ones((chunk_frames, ch), dtype=np.float32) * 0.5
+
+    chunks = [silence.copy() for _ in range(6)] + [speech.copy() for _ in range(4)] + [silence.copy() for _ in range(6)]
+    flags = [False] * 6 + [True] * 4 + [False] * 6
+
+    vad = FakeVADDetector(flags)
+    src = FakeChunkSource(chunks)
+    out_file = tmp_path / "test_vad.wav"
+
+    # hangover_sec = 0.096 (3 청크 무음 지속 시 종료)
+    # pre_roll_chunks = 15 (충분한 버퍼: 6개 무음이 전부 보존되어야 함)
+    res = t.record_vad_ring_buffer(
+        out_file,
+        plan(samplerate=sr, channels=ch, fmt="wav"),
+        vad_detector=vad,
+        pcm_source=src,
+        hangover_sec=0.096,
+        pre_roll_chunks=15,
+    )
+
+    assert res is not None
+    assert res.exists()
+
+    with wave.open(str(res), "rb") as wf:
+        assert wf.getnchannels() == ch
+        assert wf.getsampwidth() == 2  # 16비트 PCM
+        assert wf.getframerate() == sr
+        # 6개 프리롤 + 4개 발화 + 3개 행오버 무음 = 13개 청크
+        expected_frames = 13 * chunk_frames
+        assert wf.getnframes() == expected_frames
+
+
+def test_vad_ring_buffer_int16_pcm_integrity(tmp_path):
+    sr = 48000
+    ch = 2
+    chunk_frames = 1536
+
+    # 0.5 진폭의 사인파 청크 2개
+    t_axis = np.arange(chunk_frames) / sr
+    sine_wave = 0.5 * np.sin(2 * np.pi * 440.0 * t_axis)
+    stereo_sine = np.stack([sine_wave] * ch, axis=1).astype(np.float32)
+
+    chunks = [stereo_sine.copy(), stereo_sine.copy()]
+    vad = FakeVADDetector([True, True])  # 즉시 발화
+    src = FakeChunkSource(chunks)
+    out_file = tmp_path / "test_sine.wav"
+
+    res = t.record_vad_ring_buffer(
+        out_file,
+        plan(samplerate=sr, channels=ch, fmt="wav", seconds=0.064),
+        vad_detector=vad,
+        pcm_source=src,
+        hangover_sec=0.032,
+    )
+
+    assert res is not None
+    with wave.open(str(res), "rb") as wf:
+        raw = wf.readframes(wf.getnframes())
+        pcm = np.frombuffer(raw, dtype=np.int16)
+        # 0.5 * 32767 = 약 16383
+        assert np.max(pcm) > 15000
+        assert np.min(pcm) < -15000
+        # 클리핑이나 NaN/오버플로 없음
+        assert np.all(pcm <= 32767)
+        assert np.all(pcm >= -32768)
+
+
+def test_vad_ring_buffer_timeout_when_no_speech(tmp_path):
+    chunk_frames = 1536
+    silence = np.zeros((chunk_frames, 2), dtype=np.float32)
+    chunks = [silence.copy() for _ in range(50)]
+
+    vad = FakeVADDetector([False] * 50)
+    src = FakeChunkSource(chunks)
+    out_file = tmp_path / "timeout.wav"
+
+    res = t.record_vad_ring_buffer(
+        out_file,
+        plan(samplerate=48000, channels=2, fmt="wav"),
+        vad_detector=vad,
+        pcm_source=src,
+        max_wait_sec=0.05,
+    )
+
+    assert res is None
+    assert not out_file.exists()
+
+
+def test_record_once_falls_back_when_vad_unavailable(tmp_path, monkeypatch):
+    recorded_with_cmd = False
+
+    def mock_run(cmd, **kw):
+        nonlocal recorded_with_cmd
+        recorded_with_cmd = True
+        # 가짜 출력 파일 생성 (cmd 에 포함된 .wav 파일 경로)
+        out = next(Path(x) for x in cmd if str(x).endswith(".wav"))
+        out.write_bytes(b"RIFF" + b"\x00" * 40)
+        return type("Proc", (), {"returncode": 0})()
+
+    monkeypatch.setattr(t.subprocess, "run", mock_run)
+    monkeypatch.setattr(t, "available", lambda: {"sox": "/x/sox", "ffmpeg": "/x/ffmpeg"})
+
+    # VAD 활성화 상태이지만 Silero VAD 는 사용 불가능한 상태
+    res = t.record_once(
+        plan(vad=True, backend="auto"),
+        tmp_path,
+        vad_detector=type("UnavailableVAD", (), {"available": False})(),
+    )
+
+    assert res is not None
+    assert recorded_with_cmd, "Silero VAD 가 없을 때 SoX CLI 백엔드로 정상 폴백되어야 합니다"
+

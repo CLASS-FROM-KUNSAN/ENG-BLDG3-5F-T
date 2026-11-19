@@ -67,6 +67,35 @@ class SileroVADDetector:
         """은닉 상태(RNN/GRU state)를 0으로 초기화합니다."""
         self._state = np.zeros((2, 1, 128), dtype=np.float32)
 
+    def step(self, chunk: np.ndarray) -> float:
+        """512 샘플(32ms @ 16kHz 모노, float32) 청크 하나에 대한 발화 확률을 반환합니다.
+
+        은닉 상태(self._state)를 내부적으로 갱신합니다.
+        """
+        if self.session is None or chunk is None or chunk.size == 0:
+            return 0.0
+
+        c = chunk.reshape(1, -1) if chunk.ndim == 1 else chunk
+        if c.shape[1] != 512:
+            c = c[:, :512] if c.shape[1] > 512 else np.pad(c, ((0, 0), (0, 512 - c.shape[1])))
+
+        if np.issubdtype(c.dtype, np.integer):
+            c = c.astype(np.float32) / 32768.0
+        else:
+            c = c.astype(np.float32)
+
+        ort_inputs = {
+            "input": c,
+            "state": self._state,
+            "sr": self._sr,
+        }
+        try:
+            out, self._state = self.session.run(None, ort_inputs)
+            return float(out[0].flat[0])
+        except Exception as exc:
+            log.debug("VAD 추론 오류: %s", exc)
+            return 0.0
+
     def is_speech_present(self, audio_data: np.ndarray, orig_sr: int = 48000) -> bool:
         """오디오 버퍼 전체에서 유의미한 사람 발화가 감지되는지 여부 반환."""
         if self.session is None or audio_data is None or audio_data.size == 0:
@@ -102,19 +131,9 @@ class SileroVADDetector:
         speech_chunks = 0
         for i in range(num_chunks):
             chunk = audio_16k[i * chunk_size : (i + 1) * chunk_size].reshape(1, -1)
-            ort_inputs = {
-                "input": chunk,
-                "state": self._state,
-                "sr": self._sr,
-            }
-            try:
-                out, self._state = self.session.run(None, ort_inputs)
-                prob = float(out[0].flat[0])
-                if prob >= self.threshold:
-                    speech_chunks += 1
-            except Exception as exc:
-                log.debug("VAD 추론 오류: %s", exc)
-                return False
+            prob = self.step(chunk)
+            if prob >= self.threshold:
+                speech_chunks += 1
 
         # 최소 5청크(약 160ms) 이상 발화 감지 시 사람 음성이 존재하는 것으로 판단
         return speech_chunks >= 5
