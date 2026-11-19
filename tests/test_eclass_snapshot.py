@@ -198,7 +198,9 @@ def test_the_structure_check_actually_finds_a_missing_screenshot(monkeypatch):
     import inspect
 
     src = inspect.getsource(C)
-    broken = src.replace("            self._snapshot(listing)\n", "", 1)
+    broken = src.replace(
+        '            self._snapshot(listing, known_names=[r.get("author", "") for r in rows])\n',
+        "", 1)
     assert broken != src, "이 검사의 전제(목록 화면 스크린샷 줄)가 바뀌었습니다"
     real = inspect.getsource
     monkeypatch.setattr(inspect, "getsource",
@@ -292,9 +294,32 @@ def test_message_picture_is_skipped_when_anonymizing_fails(browser, tmp_path, mo
     assert c.stats.shots_failed == 1
 
 
-def test_non_message_pages_are_not_rewritten(browser, tmp_path):
-    """게시글 작성자(교수)는 .md 에도 그대로 있습니다. 화면을 고치면 안 됩니다."""
-    html = PAGE.replace("1주차: 오리엔테이션", f"작성자 {RAW_SENDER}")
+def test_non_message_pages_also_mask_sure_pii_in_the_picture(browser, tmp_path):
+    """쪽지가 아닌 화면에서도 확실한 PII 토큰(이름(사번)·학번)은 그림에서 가립니다.
+
+    .md·.html 과 같은 기준입니다 — 그림에만 '이름 (사번)' 이 남으면 안 됩니다.
+    (사번 없는 제3자 '맨 이름' 은 자동 검출 못 하는 건 그대로입니다.)
+    """
+    html = PAGE.replace("1주차: 오리엔테이션", f"작성자 {RAW_SENDER} 학번 2020123")
     c = _crawler(browser, tmp_path, html)
-    c.save_page_text(COURSE, "syllabus")
-    assert RAW_SENDER in c.br.page.evaluate("document.body.innerText")
+    md = c.save_page_text(COURSE, "syllabus")
+    assert md.with_suffix(".png").exists()
+    shown = c.br.page.evaluate("document.body.innerText")
+    for leak in ("김진욱", "101394", "2020123"):
+        assert leak not in shown, f"그림에 '{leak}' 가 남았습니다"
+    assert "[이름]" in shown and "[ID]" in shown
+
+
+def test_known_names_mask_bare_names_regex_cannot_catch(browser, tmp_path):
+    """사번 없는 '맨 이름' 은 정규식으론 못 잡지만, 목록에서 아는 이름이면
+    그 문자열만 정확히 가립니다. 모르면 그대로 둡니다(본문 손상 방지)."""
+    html = PAGE.replace("1주차: 오리엔테이션", "작성자 이몽룡 / 내용 성춘향 올림")
+    c = _crawler(browser, tmp_path, html)
+    md = tmp_path / "post.md"
+    md.write_text("x", encoding="utf-8")
+
+    # 아는 이름(이몽룡)만 가리고, 모르는 이름(성춘향)은 그대로.
+    assert S.take(c.br.page, md, known_names=["이몽룡"]) is not None
+    shown = c.br.page.evaluate("document.body.innerText")
+    assert "이몽룡" not in shown and "[이름]" in shown
+    assert "성춘향" in shown, "모르는 이름까지 함부로 가리면 안 됩니다"

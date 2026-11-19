@@ -44,6 +44,48 @@ def test_name_columns_cover_common_headers():
         assert h in anon.NAME_COLUMNS
 
 
+# --- mask_name: 구조상 '사람 이름' 인 칸 전체 가리기 --------------------
+def test_mask_name_masks_a_bare_name():
+    assert anon.mask_name("홍길동") == "<NAME>"
+    assert anon.mask_name("홍길동(교수)") == "<NAME>"  # 사번 없는 역할 표기도
+
+
+def test_mask_name_masks_name_with_id():
+    assert anon.mask_name("김진욱 (101394)") == "<NAME>(<ID>)"
+
+
+def test_mask_name_keeps_empty_empty():
+    assert anon.mask_name("") == "" and anon.mask_name("   ") == ""
+
+
+def test_mask_name_masks_own_name():
+    assert anon.mask_name("홍길동", own_names=("홍길동",)) == "<NAME>"
+
+
+# --- mask_filename: 첨부 파일명 속 PII, 파일 시스템 안전 문자 ------------
+def test_mask_filename_masks_student_id_and_keeps_extension():
+    out = anon.mask_filename("20201234_과제제출.zip")
+    assert "20201234" not in out and out.endswith(".zip")
+    assert "[ID]" in out and "과제제출" in out  # 사번만 가리고 내용은 보존
+
+
+def test_mask_filename_masks_own_name():
+    out = anon.mask_filename("20201234_홍길동.hwp", own_names=("홍길동",))
+    assert "홍길동" not in out and "20201234" not in out
+    assert out.endswith(".hwp") and "[이름]" in out and "[ID]" in out
+
+
+def test_mask_filename_uses_filesystem_safe_brackets_not_angle():
+    """파일명에 < > 가 들어가면 Windows 에서 파일을 못 만듭니다."""
+    out = anon.mask_filename("홍길동(101394)_리포트.pdf")
+    assert "<" not in out and ">" not in out
+    assert "[이름]([ID])" in out and out.endswith(".pdf")
+
+
+def test_mask_filename_leaves_clean_names_untouched():
+    assert anon.mask_filename("3주차_강의자료.pdf") == "3주차_강의자료.pdf"
+
+
 # --- crawl_account 전체 흐름(Playwright) ------------------------------
 sync_playwright = pytest.importorskip(
     "playwright.sync_api", reason="playwright 미설치"
