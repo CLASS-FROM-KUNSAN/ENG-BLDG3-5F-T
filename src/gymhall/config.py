@@ -110,6 +110,9 @@ DEFAULTS: dict[str, Any] = {
         },
         "upload": {
             "enabled": True,
+            # 대상 저장소가 public 이면 올리지 않습니다(동급생 이름·화면·파일명
+            # 등 개인정보가 섞일 수 있음). 정말 공개하려면 false 로 끄세요.
+            "block_public": True,
             "exclude_menus": list(SENSITIVE_MENUS),
             "allow_extensions": [],
             "max_file_mb": 0,
@@ -133,6 +136,10 @@ DEFAULTS: dict[str, Any] = {
             "crf": 30,
             "window_title": "",
             "monitor": 0,
+            # 모니터가 여러 개일 때 각각 독립 파일로 녹화합니다.
+            # 예: [1, 2]  -> <stem>_mon1.mkv, <stem>_mon2.mkv
+            # 비우면([]) monitor 단수 설정을 그대로 씁니다.
+            "monitors": [],
             "draw_mouse": True,
         },
         "audio": {
@@ -734,6 +741,19 @@ def validate(cfg: Config) -> None:
             errors.append("recording 이 켜져 있는데 video/audio 가 모두 꺼져 있습니다")
         if audio.get("enabled") and not (audio.get("system_enabled") or audio.get("mic_enabled")):
             errors.append("recording.audio 가 켜져 있는데 system/mic 가 모두 꺼져 있습니다")
+
+        # monitors 목록 검증: 정수 목록이어야 하고, 같은 번호가 중복되면 안 됩니다.
+        monitors_val = cfg.get("recording.video.monitors", [])
+        if not isinstance(monitors_val, list):
+            errors.append("recording.video.monitors 는 정수 목록이어야 합니다 (예: [1, 2])")
+        else:
+            for i, v in enumerate(monitors_val):
+                if not isinstance(v, int) or v <= 0:
+                    errors.append(
+                        f"recording.video.monitors[{i}] = {v!r} 는 1 이상의 정수여야 합니다"
+                    )
+            if len(monitors_val) != len(set(monitors_val)):
+                errors.append("recording.video.monitors 에 같은 번호가 중복됩니다")
 
     if errors:
         bullet = "\n  - ".join(errors)
