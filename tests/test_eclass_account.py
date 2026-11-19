@@ -231,6 +231,18 @@ def test_name_columns_are_masked(crawler, tmp_path):
     assert "<NAME>" in text
 
 
+def test_account_menu_returns_name_column_values_for_screenshot(crawler, server):
+    """이름 열 '맨 이름' 을 .md 에선 가리고, 스크린샷용으로 따로 돌려줍니다.
+
+    사번 없는 맨 이름은 정규식으론 못 잡으니, 이 값을 .png 마스킹의
+    known_names 로 넘겨야 그림에도 안 남습니다(crawl_account 가 그렇게 씀).
+    """
+    crawler.br.goto(server + "/x?mainDTO.menuId=menu_00252")  # 학습 시간표
+    md_text, names = crawler._account_menu_markdown("학습시간표")
+    assert "송지영" in names and "최동수" in names   # 스크린샷용 반환
+    assert "송지영" not in md_text and "<NAME>" in md_text   # .md 에선 가려짐
+
+
 def test_pii_tokens_are_masked(crawler, tmp_path):
     crawler.crawl_account()
     text = _md(tmp_path).read_text(encoding="utf-8")

@@ -1209,8 +1209,13 @@ class Crawler:
                 continue
         return ""
 
-    def _account_menu_markdown(self, label: str) -> str:
-        """현재 페이지(#bodyContent)를 '빠짐 없이' 마크다운으로. 이름 열 마스킹."""
+    def _account_menu_markdown(self, label: str) -> tuple[str, list[str]]:
+        """현재 페이지(#bodyContent)를 '빠짐 없이' 마크다운으로. 이름 열 마스킹.
+
+        돌려주는 두 번째 값은 이름 열에서 뽑은 '맨 이름' 들입니다 — .md 는
+        여기서 가리지만, 같은 화면의 스크린샷(.png)에서도 그 문자열만 정확히
+        가리라고 호출부에 넘겨 주려는 용도입니다.
+        """
         page = self.br.page
         try:
             page.wait_for_load_state("domcontentloaded", timeout=self.br.timeout_ms)
@@ -1241,13 +1246,14 @@ class Crawler:
                }""",
         )
         if not isinstance(data, dict):
-            return f"## {label}\n\n(읽기 실패)\n"
+            return f"## {label}\n\n(읽기 실패)\n", []
         if data.get("blocked"):
-            return f"## {label}\n\n(방화벽 차단 — 수집 안 함)\n"
+            return f"## {label}\n\n(방화벽 차단 — 수집 안 함)\n", []
         if data.get("relogin"):
-            return f"## {label}\n\n(세션 필요 — 건너뜀)\n"
+            return f"## {label}\n\n(세션 필요 — 건너뜀)\n", []
 
         lines = [f"## {label}", ""]
+        names: list[str] = []
         tables = data.get("tables") or []
         for t in tables:
             cap = t.get("caption") or ""
@@ -1262,6 +1268,11 @@ class Crawler:
                 cells = ["<NAME>" if i in name_cols else c.replace("|", "\\|")
                          for i, c in enumerate(r)]
                 lines.append("| " + " | ".join(cells) + " |")
+                # 이름 열의 '맨 이름' 은 스크린샷용으로 모읍니다(글자 2자 이상).
+                for i in name_cols:
+                    v = (r[i] if i < len(r) else "").strip()
+                    if len(v) >= 2 and any(ch.isalpha() for ch in v):
+                        names.append(v)
             lines.append("")
         # 표 밖 텍스트(문의처·안내문 등)도 빠뜨리지 않습니다.
         txt = (data.get("text") or "").strip()
@@ -1269,19 +1280,22 @@ class Crawler:
             lines += [txt, ""]
         elif not tables:
             lines += ["(내용 없음)", ""]
-        return "\n".join(lines)
+        return "\n".join(lines), names
 
     def crawl_account(self) -> None:
         out_dir = self.layout.menu_dir(self.term, "_계정", "계정정보")
         out_dir.mkdir(parents=True, exist_ok=True)
         own = ""
         sections = []
+        known_names: list[str] = []
         for label, tail in ACCOUNT_MENUS:
             try:
                 self.br.goto(self.site.base_url.rstrip("/") + tail)
                 if not own:
                     own = self._account_owner_name()
-                sections.append(self._account_menu_markdown(label))
+                md_text, names = self._account_menu_markdown(label)
+                sections.append(md_text)
+                known_names.extend(names)
             except Exception as exc:
                 sections.append(f"## {label}\n\n(수집 실패: {type(exc).__name__})\n")
                 self.stats.errors.append(f"계정/{label}: {exc}")
@@ -1296,7 +1310,9 @@ class Crawler:
         else:
             fp = out_dir / safe_name("계정정보.md")
             fp.write_text(body + "\n", encoding="utf-8")
-            self._snapshot(fp)
+            # .md 는 이름 열을 가렸지만, 스크린샷(마지막 메뉴 화면)에도 그
+            # '맨 이름' 들이 남지 않게 정확 일치로 넘깁니다.
+            self._snapshot(fp, known_names=known_names)
             self.store.mark_downloaded(state_key, path=str(fp), digest=digest)
             self.stats.posts += 1
         log.info("계정: 메뉴 %d개 수집(계정정보.md, 개인정보 마스킹)", len(ACCOUNT_MENUS))
