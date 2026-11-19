@@ -449,7 +449,8 @@ class Crawler:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def _snapshot(self, md: Path | None, *, senders: Iterable[str] | None = None) -> None:
+    def _snapshot(self, md: Path | None, *, senders: Iterable[str] | None = None,
+                  known_names: Iterable[str] = ()) -> None:
         """방금 쓴 `md` 옆에 지금 화면을 남깁니다.
 
         `.md` 를 실제로 쓴 자리에서만 부릅니다. 내용이 그대로라 `.md` 를
@@ -460,7 +461,8 @@ class Crawler:
             return
         if self.screenshots:
             if snapshot.take(self.br.page, md, senders=senders,
-                             own_name=self._owner_name()) is not None:
+                             own_name=self._owner_name(),
+                             known_names=known_names) is not None:
                 self.stats.shots += 1
             else:
                 self.stats.shots_failed += 1
@@ -1615,8 +1617,9 @@ class Crawler:
             listing = out_dir / safe_name(f"{label}_목록.md")
             listing.write_text(body, encoding="utf-8")
             # 목록 화면만 찍습니다(상세에는 들어가지 않으므로). 여러 장이면
-            # 마지막 장입니다.
-            self._snapshot(listing)
+            # 마지막 장입니다. 목록 화면의 작성자 열 '맨 이름' 은 마지막 장
+            # rows 에서 알고 있으니 그 문자열만 그림에서 가립니다.
+            self._snapshot(listing, known_names=[r.get("author", "") for r in rows])
             self.stats.posts += 1
 
         if total_pages > 1:
@@ -1721,7 +1724,9 @@ class Crawler:
             f"{anon.mask_pii(body, own_names)}\n",
             encoding="utf-8",
         )
-        self._snapshot(md)
+        # 작성자 '맨 이름' 은 정규식으론 못 잡지만 목록 행에서 구조적으로
+        # 알고 있으니, 그 문자열만 그림에서도 가립니다(.md 와 같은 기준).
+        self._snapshot(md, known_names=[row.get("author", "")])
         self.stats.posts += 1
 
         att = self._download_attachments(post_dir / safe_name(stem, max_len=60))
