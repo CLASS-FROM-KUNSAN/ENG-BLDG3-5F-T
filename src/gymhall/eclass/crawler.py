@@ -459,7 +459,8 @@ class Crawler:
         if md is None:
             return
         if self.screenshots:
-            if snapshot.take(self.br.page, md, senders=senders) is not None:
+            if snapshot.take(self.br.page, md, senders=senders,
+                             own_name=self._owner_name()) is not None:
                 self.stats.shots += 1
             else:
                 self.stats.shots_failed += 1
@@ -1705,14 +1706,19 @@ class Crawler:
         stem = f"{row['no']}_{title}" if row["no"] else title
         post_dir = out_dir
         md = self._pending_path(state_key, post_dir, stem)
+        # 개인정보 마스킹: 작성자 칸은 구조상 사람 이름이라 통째로(mask_name),
+        # 제목·본문은 '확실한 PII 토큰'(이름(사번)·학번·이메일·전화·본인 이름)만
+        # (mask_pii) 가립니다. 내용은 그대로 둬 '빠지는 정보' 가 없게 합니다.
+        own = self._owner_name()
+        own_names = (own,) if own else ()
         md.write_text(
-            f"# {row['title']}\n\n"
+            f"# {anon.mask_pii(row['title'], own_names)}\n\n"
             f"- 과목: {course.name}\n"
             f"- 게시판: {MENU_LABELS.get(key, key)}\n"
-            f"- 작성자: {row.get('author','')}\n"
+            f"- 작성자: {anon.mask_name(row.get('author', ''), own_names)}\n"
             f"- 작성일: {row.get('date','')}\n"
             f"- 수집시각: {datetime.now().astimezone():%Y-%m-%d %H:%M:%S}\n\n---\n\n"
-            f"{body}\n",
+            f"{anon.mask_pii(body, own_names)}\n",
             encoding="utf-8",
         )
         self._snapshot(md)
@@ -1923,6 +1929,7 @@ class Crawler:
         """
         out = Attachments()
         saved = out.saved
+        own = self._owner_name()
         links = self._attachment_locators()
         if links is None:
             return out
@@ -1972,6 +1979,7 @@ class Crawler:
                 out.failed.append(label)
 
             for path in got:
+                path = self._mask_attachment_name(path, own)
                 digest = sha256_file(path)
                 if self.store.is_downloaded(f"file:{digest}"):
                     path.unlink(missing_ok=True)
@@ -1982,6 +1990,24 @@ class Crawler:
                 saved.append(path)
                 self.stats.files += 1
         return out
+
+    def _mask_attachment_name(self, path: Path, own: str) -> Path:
+        """첨부 파일명 속 본인 학번·이름 등 확실한 PII 를 가린 이름으로 바꿉니다.
+
+        내용(해시)은 그대로라 중복 판정에 영향이 없습니다. 바꿀 게 없으면
+        원래 경로를, 바꾸다 실패하면도 원래 경로를 돌려줍니다(수집을 막지
+        않습니다).
+        """
+        masked = anon.mask_filename(path.name, own_names=(own,) if own else ())
+        if masked == path.name:
+            return path
+        target = unique_path(path.with_name(masked))
+        try:
+            path.rename(target)
+            return target
+        except Exception as exc:
+            log.debug("첨부 파일명 마스킹 실패(%s): %s", path.name, exc)
+            return path
 
     # -- 메인 루프 ---------------------------------------------------
     # -- 학습현황 --------------------------------------------------------

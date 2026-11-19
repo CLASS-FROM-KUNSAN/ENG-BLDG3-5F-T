@@ -44,6 +44,8 @@ _RE_NAMEID = re.compile(r"[가-힣A-Za-z][가-힣A-Za-z ]{0,19}\s*\(\s*\d{4,10}\
 _RE_EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _RE_PHONE = re.compile(r"\b0\d{1,2}[-\s]?\d{3,4}[-\s]?\d{4}\b")
 _RE_ID = re.compile(r"\b\d{7,10}\b")
+# 파일명용: `_` 가 단어 문자라 \b 경계가 안 서므로, 숫자만 양옆에 없도록 봅니다.
+_RE_ID_FILE = re.compile(r"(?<!\d)\d{7,10}(?!\d)")
 
 # 표에서 이 헤더가 붙은 열은 통째로 <NAME> 으로 가립니다.
 NAME_COLUMNS = frozenset({
@@ -69,3 +71,50 @@ def mask_pii(text: str, own_names: tuple[str, ...] = ()) -> str:
         if len(name) >= 2:
             text = text.replace(name, "<NAME>")
     return text
+
+
+def mask_name(value: str, own_names: tuple[str, ...] = ()) -> str:
+    """'작성자/제출자' 처럼 구조상 사람 이름인 칸 전체를 가립니다.
+
+    `이름(사번)` 꼴이면 사번까지 함께 `<NAME>(<ID>)` 로, 그 외에 글자가
+    남는 '맨 이름'(사번 없는 이름)은 통째로 `<NAME>` 으로 바꿉니다 — 열
+    전체가 사람 이름이라고 아는 자리에서만 씁니다. 자유 본문에는 쓰지
+    않습니다(거기선 맨 이름을 함부로 못 가립니다). 비면 빈 문자열.
+    """
+    v = (value or "").strip()
+    if not v:
+        return ""
+    masked = mask_pii(v, own_names)
+    # mask_pii 가 아무것도 못 바꿨는데 글자가 남아 있으면 '맨 이름' 입니다.
+    if masked == v and re.search(r"[가-힣A-Za-z]", v):
+        return "<NAME>"
+    return masked
+
+
+# 파일명용 플레이스홀더는 대괄호를 씁니다. 파일 시스템에서 < > 는
+# 금지(특히 Windows)라 각괄호를 쓰면 파일을 못 만듭니다.
+def mask_filename(name: str, own_names: tuple[str, ...] = ()) -> str:
+    """첨부 파일명 속 확실한 PII 를 가립니다. 확장자는 보존합니다.
+
+    `20201234_홍길동.zip` 같은 제출물 이름에 담긴 본인 학번·이름이 그대로
+    디스크에 남지 않게 합니다. 내용(해시)은 건드리지 않으므로 중복 판정에
+    영향이 없습니다. 본문과 달리 파일명은 렌더되지 않으니 각괄호 대신 파일
+    시스템 안전 문자(대괄호)를 씁니다. 본문 자유텍스트처럼 사번 없는 제3자
+    '맨 이름' 은 자동 검출하지 못합니다.
+    """
+    if not name:
+        return name
+    stem, dot, ext = name.rpartition(".")
+    base = stem if dot else name
+    base = _RE_NAMEID.sub("[이름]([ID])", base)
+    base = _RE_EMAIL.sub("[이메일]", base)
+    base = _RE_PHONE.sub("[전화]", base)
+    # 파일명은 `20201234_홍길동` 처럼 학번이 밑줄에 붙어 있습니다. `_` 는
+    # 단어 문자라 \b 가 서지 않으므로(그래서 _RE_ID 는 여기선 못 씀) 숫자만
+    # 양옆에 없도록 보는 경계로 7~10자리 숫자열을 가립니다.
+    base = _RE_ID_FILE.sub("[ID]", base)
+    for nm in own_names:
+        nm = (nm or "").strip()
+        if len(nm) >= 2:
+            base = base.replace(nm, "[이름]")
+    return f"{base}.{ext}" if dot else base

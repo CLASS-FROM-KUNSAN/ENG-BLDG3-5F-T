@@ -72,6 +72,38 @@ _VISIBLE_TEXT = """() => {
   return (document.body ? document.body.innerText : '') + '\\n' + vals.join('\\n');
 }"""
 
+# 화면 글자 속 '확실한 PII 토큰'(이름(사번)·이메일·전화·학번/사번)과 본인
+# 이름을 그 자리에서 가립니다. singlefile 의 마스킹과 같은 규칙·같은 대괄호
+# 플레이스홀더입니다(각괄호는 브라우저가 알 수 없는 태그로 보고 숨깁니다).
+# 쪽지의 '보낸이' 는 anonymize_senders 가 먼저 안정적 이름표로 바꾸므로 여기
+# 선 건드릴 게 남지 않습니다. 사번 없는 제3자 '맨 이름' 은 못 가립니다.
+_MASK_PII = r"""(ownName) => {
+  const reNameId = /[가-힣A-Za-z][가-힣A-Za-z ]{0,19}\s*\(\s*\d{4,10}\s*\)/g;
+  const reEmail = /[\w.+-]+@[\w-]+\.[\w.-]+/g;
+  const rePhone = /0\d{1,2}[-\s]?\d{3,4}[-\s]?\d{4}/g;
+  const reId = /\b\d{7,10}\b/g;
+  const mask = (s) => {
+    if (!s) return s;
+    s = s.replace(reNameId, "[이름]([ID])").replace(reEmail, "[이메일]")
+         .replace(rePhone, "[전화]").replace(reId, "[ID]");
+    if (ownName && ownName.length >= 2) s = s.split(ownName).join("[이름]");
+    return s;
+  };
+  if (!document.body) return;
+  const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let n;
+  while ((n = walk.nextNode())) {
+    const p = n.parentNode && n.parentNode.nodeName;
+    if (p === 'STYLE' || p === 'SCRIPT') continue;
+    const v = mask(n.nodeValue);
+    if (v !== n.nodeValue) n.nodeValue = v;
+  }
+  for (const el of document.querySelectorAll('input, textarea')) {
+    const v = mask(el.value || '');
+    if (v !== el.value) el.value = v;
+  }
+}"""
+
 
 def path_for(md: Path) -> Path:
     """`글.md` 옆의 `글.png`."""
@@ -121,16 +153,32 @@ def anonymize_senders(page, known: Iterable[str] = ()) -> bool:
     return True
 
 
-def take(page, md: Path, *, senders: Iterable[str] | None = None) -> Path | None:
+def mask_pii_dom(page, own_name: str = "") -> None:
+    """화면 글자/입력값 속 확실한 PII 토큰과 본인 이름을 그 자리에서 가립니다.
+
+    스크린샷 직전에만 부릅니다(라이브 DOM 을 바꿉니다). 실패해도 수집을
+    막지 않습니다 — 스크린샷은 덤이기 때문입니다.
+    """
+    try:
+        page.evaluate(_MASK_PII, (own_name or "").strip())
+    except Exception as exc:
+        log.debug("화면 PII 마스킹 실패: %s", exc)
+
+
+def take(page, md: Path, *, senders: Iterable[str] | None = None,
+         own_name: str = "") -> Path | None:
     """`md` 옆에 전체 페이지 스크린샷을 남깁니다. 실패하면 None.
 
-    senders 를 주면(쪽지) 보낸이를 익명화한 뒤에 찍고, 익명화를 끝내지
-    못하면 찍지 않습니다.
+    senders 를 주면(쪽지) 보낸이를 안정적 이름표로 익명화한 뒤에 찍고,
+    익명화를 끝내지 못하면 찍지 않습니다. 그 뒤(그리고 쪽지가 아닌
+    화면에서도) 확실한 PII 토큰·본인 이름을 화면에서 가린 다음 찍습니다 —
+    `.md`·`.html` 과 같은 기준으로 그림에도 PII 가 남지 않게 합니다.
     """
     out = path_for(md)
     try:
         if senders is not None and not anonymize_senders(page, senders):
             return None
+        mask_pii_dom(page, own_name)
         page.screenshot(
             path=str(out), full_page=True, type="png",
             mask=[page.locator(SELF_INFO)], animations="disabled",

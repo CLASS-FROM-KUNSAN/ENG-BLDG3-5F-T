@@ -292,9 +292,17 @@ def test_message_picture_is_skipped_when_anonymizing_fails(browser, tmp_path, mo
     assert c.stats.shots_failed == 1
 
 
-def test_non_message_pages_are_not_rewritten(browser, tmp_path):
-    """게시글 작성자(교수)는 .md 에도 그대로 있습니다. 화면을 고치면 안 됩니다."""
-    html = PAGE.replace("1주차: 오리엔테이션", f"작성자 {RAW_SENDER}")
+def test_non_message_pages_also_mask_sure_pii_in_the_picture(browser, tmp_path):
+    """쪽지가 아닌 화면에서도 확실한 PII 토큰(이름(사번)·학번)은 그림에서 가립니다.
+
+    .md·.html 과 같은 기준입니다 — 그림에만 '이름 (사번)' 이 남으면 안 됩니다.
+    (사번 없는 제3자 '맨 이름' 은 자동 검출 못 하는 건 그대로입니다.)
+    """
+    html = PAGE.replace("1주차: 오리엔테이션", f"작성자 {RAW_SENDER} 학번 2020123")
     c = _crawler(browser, tmp_path, html)
-    c.save_page_text(COURSE, "syllabus")
-    assert RAW_SENDER in c.br.page.evaluate("document.body.innerText")
+    md = c.save_page_text(COURSE, "syllabus")
+    assert md.with_suffix(".png").exists()
+    shown = c.br.page.evaluate("document.body.innerText")
+    for leak in ("김진욱", "101394", "2020123"):
+        assert leak not in shown, f"그림에 '{leak}' 가 남았습니다"
+    assert "[이름]" in shown and "[ID]" in shown
