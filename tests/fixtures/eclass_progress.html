@@ -1,0 +1,59 @@
+<!doctype html>
+<!--
+  학습현황(menu_00100) 축약본 — 2026-11 실제 페이지 구조에서 이름·학번·
+  파일명만 자리표시자로 바꿨습니다. 과목 배너(headerListClass/Pro)는 실제처럼
+  #bodyContent 밖에 둡니다(스코핑으로 제외돼야 함). #bodyContent 안에는
+  학생정보(본인 PII, 제외 대상)·활동요약·과제/토론/시험 현황 리스트가 있습니다.
+-->
+<html lang="ko-kr"><head><meta charset="utf-8"><title>eClass 학습현황</title></head>
+<body>
+<div id="headerContent">
+  <table class="headerListClass"><caption>이수과목과 학점</caption>
+    <tbody><tr><td>핵심교양</td><td>3 학점</td></tr></tbody></table>
+  <table class="headerListPro"><caption>담당교수 정보</caption>
+    <tbody><tr><td>교수명</td><td>prof-contact</td></tr></tbody></table>
+</div>
+
+<div id="bodyContent">
+  <h2>학습 현황</h2>
+  <a class="btn" onclick="javascript:reportExcelDown();">엑셀 다운로드</a>
+
+  <table class="boardListBasic"><caption>학생정보 리스트</caption>
+    <thead><tr><th>과 정</th><th>학 과</th><th>학 번</th><th>이 름</th><th>전화번호</th></tr></thead>
+    <tbody><tr><td>정규과정</td><td>자율전공학부</td><td>0000000</td><td>홍길동</td><td>010-0000-0000</td></tr></tbody>
+  </table>
+
+  <table class="boardListInfo"><caption>활동 요약</caption>
+    <thead><tr><th>과 제</th><th>토 론</th><th>시 험</th><th>팀활동</th><th>출석</th><th>게시물</th><th>댓 글</th></tr></thead>
+    <tbody><tr><td>일반 10 / 23</td><td>0 (0)</td><td>0 /0</td><td>0 / 0</td><td>0.0 /0</td><td>0</td><td>0</td></tr></tbody>
+  </table>
+
+  <table class="boardListBasic"><caption>과제현황 리스트</caption>
+    <thead><tr>
+      <th>번 호</th><th>과제명</th><th>제출기간</th><th>제출 여부</th>
+      <th>점수(취득점수/만점점수)</th><th>성적공개</th><th>성적반영</th><th>성적공개일자</th>
+    </tr></thead>
+    <tbody>
+      <tr><td>23</td><td>11/12(목) Helping My Community 녹음 파일 제출</td>
+          <td>2026-11-12 (00:00) ~ 2026-11-12 (23:59)</td><td>제출</td>
+          <td>미공개</td><td>미공개</td><td>공 개</td><td></td></tr>
+      <tr><td>22</td><td>11/12(목) Group Note #6: Group Leader가 제출</td>
+          <td>2026-11-12 (00:00) ~ 2026-11-12 (23:59)</td><td>미제출</td>
+          <td>미공개</td><td>미공개</td><td>공 개</td><td></td></tr>
+      <tr><td>18</td><td>11/5(목) Paragraph Writing Idea Map Worksheet</td>
+          <td>2026-11-05 (09:10) ~ 2026-11-11 (23:59)</td><td>제출</td>
+          <td>미공개</td><td>미공개</td><td>공 개</td><td></td></tr>
+    </tbody>
+  </table>
+
+  <table class="boardListBasic"><caption>토론현황 리스트</caption>
+    <thead><tr><th>번 호</th><th>토론 주제</th><th>작성글</th><th>참여 기간</th></tr></thead>
+    <tbody><tr><td colspan="4">조회된 내용이 없습니다.</td></tr></tbody>
+  </table>
+
+  <table class="boardListBasic"><caption>시험현황 리스트</caption>
+    <thead><tr><th>번 호</th><th>시험명</th><th>응시기간</th><th>응시 여부</th></tr></thead>
+    <tbody><tr><td colspan="4">조회된 내용이 없습니다.</td></tr></tbody>
+  </table>
+</div>
+</body></html>

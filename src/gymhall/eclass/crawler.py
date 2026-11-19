@@ -1813,6 +1813,98 @@ class Crawler:
         return out
 
     # -- 메인 루프 ---------------------------------------------------
+    # -- 학습현황 --------------------------------------------------------
+    # '학습 현황'(menu_00100)은 과목 전체 활동을 한 페이지에 모읍니다:
+    # 활동 요약(과제/토론/시험/팀활동/출석/게시물/댓글) + 과제·토론·시험·
+    # 팀활동·기타활동 '현황 리스트' 표. 과제 현황 표는 모든 과제의 제출여부·
+    # 점수(취득/만점)·성적공개까지 한 줄씩 담아, 제출정보 상세의 요약판입니다.
+    #
+    # 성적·개인정보가 들어가므로 config 에서 SENSITIVE_MENUS 로 '기본 꺼짐 +
+    # 업로드 제외'입니다. 켜면 로컬에만 저장됩니다. 본인 정보(학번/이메일/전화)
+    # 표는 담지 않습니다.
+    #
+    # 과목 밖에서 이 URL 로 바로 가면 '다시 로그인' 스텁이 옵니다. crawl_course
+    # 가 open_course 로 과목에 먼저 들어간 뒤 open_menu 로 오므로 정상입니다.
+    def crawl_progress(self, course: Course) -> None:
+        page = self.br.page
+        # 표가 렌더될 때까지 기다립니다. 과목 세션이 없으면 '다시 로그인'
+        # 안내만 떠서 표가 없습니다 — 그걸 '빈 현황' 으로 조용히 저장하지
+        # 않고 건너뜁니다.
+        try:
+            page.wait_for_selector("#bodyContent table.boardListBasic",
+                                   timeout=self.br.timeout_ms)
+        except Exception:
+            body = ""
+            try:
+                body = page.inner_text("#bodyContent")
+            except Exception:
+                pass
+            if "다시 로그인" in body or "오류가 발생" in body:
+                msg = f"{course.name}/학습현황: 과목 세션이 없어 표가 안 떴습니다(건너뜀)"
+                log.warning("%s", msg)
+                self.stats.errors.append(msg)
+                return
+
+        tables = _eval_json(
+            page,
+            """() => {
+                 const squash = (v) => (v || '').replace(/\\s+/g, ' ').trim();
+                 const root = document.querySelector('#bodyContent') || document.body;
+                 const out = [];
+                 for (const t of root.querySelectorAll(
+                        'table.boardListBasic, table.boardListInfo')) {
+                   const cap = squash((t.querySelector('caption') || {}).innerText);
+                   const heads = Array.from(t.querySelectorAll('thead th'))
+                       .map(th => squash(th.innerText));
+                   const rows = Array.from(t.querySelectorAll('tbody tr'))
+                       .map(tr => Array.from(tr.querySelectorAll('th,td'))
+                               .map(c => squash(c.innerText)))
+                       .filter(r => r.some(Boolean));
+                   out.push({ caption: cap, heads: heads, rows: rows });
+                 }
+                 return JSON.stringify(out);
+               }""",
+        )
+        if not isinstance(tables, list):
+            raise PageReadError(f"학습현황이 리스트가 아닙니다: {type(tables).__name__}")
+
+        # 본인 정보(학번/이메일/전화)·과목 배너 표는 제외.
+        skip = ("학생정보", "이수과목", "담당교수")
+        lines = [f"# {course.name} - 학습현황", "",
+                 "<!-- 성적·개인정보 포함. 로컬 전용(업로드 제외). -->", ""]
+        kept = 0
+        for t in tables:
+            cap = t.get("caption") or ""
+            if any(s in cap for s in skip) or not t.get("rows"):
+                continue
+            kept += 1
+            lines += [f"## {cap or '(제목 없음)'}", ""]
+            heads = t.get("heads") or []
+            if heads:
+                lines.append("| " + " | ".join(heads) + " |")
+                lines.append("|" + "---|" * len(heads))
+            for r in t["rows"]:
+                lines.append("| " + " | ".join(c.replace("|", "\\|") for c in r) + " |")
+            lines.append("")
+
+        if not kept:
+            log.info("%s / 학습현황: 표가 없습니다(수집할 현황 없음).", course.name)
+            return
+        body = "\n".join(lines).strip()
+        digest = sha256_text(body)
+        state_key = f"page:{course.course_id}:progress"
+        out_dir = self._dir(course, "progress")
+        if self.store.data["downloaded"].get(state_key, {}).get("sha256") == digest:
+            self.stats.skipped += 1
+        else:
+            md = out_dir / safe_name("학습현황.md")
+            md.write_text(body + "\n", encoding="utf-8")
+            self._snapshot(md)
+            self.store.mark_downloaded(state_key, path=str(md), digest=digest)
+            self.stats.posts += 1
+        log.info("%s / 학습현황: 현황 표 %d개 저장", course.name, kept)
+        self.store.save()
+
     def crawl_course(self, course: Course) -> None:
         log.info("─" * 50)
         log.info("과목: %s (%s)", course.name, course.course_id)
@@ -1836,6 +1928,8 @@ class Crawler:
                     self.crawl_lecture_list(course)
                 elif key == "assignment":
                     self.crawl_assignments(course)
+                elif key == "progress":
+                    self.crawl_progress(course)
                 else:
                     self.save_page_text(course, key)
             except Exception as exc:
