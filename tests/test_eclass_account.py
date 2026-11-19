@@ -243,6 +243,17 @@ def test_account_menu_returns_name_column_values_for_screenshot(crawler, server)
     assert "송지영" not in md_text and "<NAME>" in md_text   # .md 에선 가려짐
 
 
+def test_known_name_registry_collects_and_masks_free_text(crawler):
+    """구조적으로 알게 된 이름을 모아 자유 본문의 '맨 이름' 까지 가립니다."""
+    crawler._note_names(["김진욱 (101394)", "이영희", "x", "1234567", ""])
+    names = set(crawler._mask_names())
+    assert "김진욱" in names   # '이름(사번)' 에서 이름만 떼어 담음
+    assert "이영희" in names
+    assert "x" not in names and "1234567" not in names   # 2자 미만·숫자 제외
+    masked = anon.mask_pii("담당 이영희, 김진욱 드림", own_names=tuple(names))
+    assert "이영희" not in masked and "김진욱" not in masked and "<NAME>" in masked
+
+
 def test_pii_tokens_are_masked(crawler, tmp_path):
     crawler.crawl_account()
     text = _md(tmp_path).read_text(encoding="utf-8")

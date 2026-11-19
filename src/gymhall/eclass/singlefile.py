@@ -40,6 +40,10 @@ _SERIALIZER = r"""
 async (opts) => {
   const MAX = opts.maxBytes || 3000000;
   const ownName = opts.ownName || "";
+  // 구조적으로 아는 이름들(작성자·이름 열·보낸이). 긴 것부터 치환해 부분
+  // 치환을 막습니다. 사번 없는 '맨 이름' 도 여기 있으면 가립니다.
+  const known = (opts.known || []).filter((k) => k && k.length >= 2)
+                  .sort((a, b) => b.length - a.length);
   const root = document.documentElement.cloneNode(true);  // 라이브 DOM 불변
 
   // --- 1) 개인정보 마스킹(텍스트 노드 + 안전한 속성). data URI 생성 전에. ---
@@ -52,6 +56,7 @@ async (opts) => {
     s = s.replace(reNameId, "[이름]([ID])").replace(reEmail, "[이메일]")
          .replace(rePhone, "[전화]").replace(reId, "[ID]");
     if (ownName && ownName.length >= 2) s = s.split(ownName).join("[이름]");
+    for (const k of known) s = s.split(k).join("[이름]");
     return s;
   };
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -173,13 +178,17 @@ def capture(page, *, own_names: Iterable[str] = (), max_bytes_per_asset: int = 3
 
     실패하면 RuntimeError 를 올립니다(호출부가 수집을 계속하도록 잡습니다).
     """
-    own = next((n for n in own_names if n and len(str(n).strip()) >= 2), "")
+    names = [str(n).strip() for n in own_names if n and len(str(n).strip()) >= 2]
+    own = names[0] if names else ""
     try:
         page.set_default_timeout(timeout_ms)
     except Exception:
         pass
-    html = page.evaluate(_SERIALIZER,
-                         {"maxBytes": int(max_bytes_per_asset), "ownName": str(own).strip()})
+    html = page.evaluate(_SERIALIZER, {
+        "maxBytes": int(max_bytes_per_asset),
+        "ownName": own,
+        "known": names,
+    })
     if not isinstance(html, str) or len(html) < 50:
         raise RuntimeError("직렬화 결과가 비정상입니다")
     return html
