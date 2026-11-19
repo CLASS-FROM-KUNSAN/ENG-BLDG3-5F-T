@@ -162,9 +162,13 @@ def _md_writes_without_snapshot() -> list[str]:
     tree = ast.parse(inspect.getsource(C))
     crawler = next(n for n in tree.body
                    if isinstance(n, ast.ClassDef) and n.name == "Crawler")
+    # _capture_full_html 은 .md 가 아니라 '한 파일짜리 전체 HTML'(스크린샷의
+    # 형제) 을 쓰고, _snapshot 이 그걸 부릅니다. 여기서 또 _snapshot 을
+    # 부르면 무한재귀라, 이 규칙(=.md 쓰면 스크린샷)의 대상이 아닙니다.
+    exempt = {"_capture_full_html"}
     problems: list[str] = []
     for fn in crawler.body:
-        if not isinstance(fn, ast.FunctionDef):
+        if not isinstance(fn, ast.FunctionDef) or fn.name in exempt:
             continue
         written: list[ast.expr] = []
         shot: set[str] = set()
