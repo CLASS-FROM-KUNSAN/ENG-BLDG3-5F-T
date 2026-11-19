@@ -29,7 +29,7 @@ from typing import Any
 from ..logging_setup import get as get_logger
 from ..paths import Layout, safe_name, unique_path
 from ..state import Store, sha256_file, sha256_text
-from . import anon, filedown, snapshot
+from . import anon, filedown, singlefile, snapshot
 from .browser import EclassBrowser
 from .urls import MENU_LABELS, MENU_LINK_TEXTS, RISKY_MENUS, Site
 
@@ -156,6 +156,8 @@ class Stats:
     entries: int = 0
     files_known: int = 0                       # 이미 받아 둬서 이번엔 안 받은 첨부
     shots_failed: int = 0                      # 찍으려다 못 찍은 것(익명화 실패 포함)
+    html_saved: int = 0                        # 한 파일짜리 전체 HTML 캡처 수
+    html_failed: int = 0                       # 전체 HTML 캡처 실패 수
 
     def line(self) -> str:
         base = (f"과목 {self.courses}개 / 페이지 {self.pages} / 글 {self.posts} / "
@@ -296,9 +298,12 @@ class Crawler:
         menu_id_overrides: dict[str, str] | None = None,
         message_boxes: Iterable[str] = ("RECEIVE",),
         screenshots: bool = True,
+        capture_html: bool = True,
     ) -> None:
         self.br = browser
         self.screenshots = bool(screenshots)
+        self.capture_html = bool(capture_html)
+        self._owner: str | None = None   # 로그인 본인 이름(마스킹용), 지연 추출
         self.site = site
         self.layout = layout
         self.store = store
@@ -425,12 +430,49 @@ class Crawler:
         건너뛴 실행에서는 그림도 건너뜁니다 — 그래야 그림과 글이 같은
         시점의 것입니다.
         """
-        if not self.screenshots or md is None:
+        if md is None:
             return
-        if snapshot.take(self.br.page, md, senders=senders) is not None:
-            self.stats.shots += 1
-        else:
-            self.stats.shots_failed += 1
+        if self.screenshots:
+            if snapshot.take(self.br.page, md, senders=senders) is not None:
+                self.stats.shots += 1
+            else:
+                self.stats.shots_failed += 1
+        if self.capture_html:
+            self._capture_full_html(md)
+
+    def _owner_name(self) -> str:
+        """상단 프로필의 로그인 이름(마스킹용). 한 번 찾으면 캐시."""
+        if self._owner:
+            return self._owner
+        for sel in ("li.w230 dl dt.fontB", "dt.fontB"):
+            try:
+                loc = self.br.page.locator(sel).first
+                if loc.count() and (t := loc.inner_text(timeout=600).strip()):
+                    self._owner = t.split("(")[0].strip()
+                    return self._owner
+            except Exception:
+                continue
+        return ""
+
+    def _capture_full_html(self, md: Path) -> None:
+        """md 옆에 자체완결 전체 HTML(한 파일) 을 남깁니다. 개인정보 마스킹.
+
+        과제/첨부 '파일 다운로드' 와 별개입니다 — 그건 그대로 돕니다.
+        캡처가 실패해도 .md 수집은 영향받지 않습니다.
+        """
+        own = self._owner_name()
+        try:
+            html = singlefile.capture(self.br.page, own_names=(own,) if own else ())
+        except Exception as exc:
+            log.debug("전체 HTML 캡처 실패(%s): %s", md.name, exc)
+            self.stats.html_failed += 1
+            return
+        try:
+            md.with_suffix(".html").write_text(html, encoding="utf-8")
+            self.stats.html_saved += 1
+        except Exception as exc:
+            log.debug("전체 HTML 저장 실패(%s): %s", md.name, exc)
+            self.stats.html_failed += 1
 
     def save_page_text(self, course: Course, key: str, *, name: str | None = None) -> Path | None:
         """현재 페이지의 본문을 마크다운으로 저장합니다.

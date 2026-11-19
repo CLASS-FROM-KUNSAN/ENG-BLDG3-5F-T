@@ -92,6 +92,10 @@ DEFAULTS: dict[str, Any] = {
         "message_boxes": ["RECEIVE"],
         # 텍스트(.md) 옆에 같은 이름의 화면 스크린샷(.png)을 남깁니다.
         "screenshots": True,
+        # 텍스트(.md) 옆에 '한 파일짜리' 전체 HTML(.html)도 남깁니다.
+        # 렌더된 DOM + 이미지/CSS/폰트 인라인(SingleFile 방식), 개인정보 마스킹.
+        # 과제/첨부 파일 다운로드는 이와 별개로 그대로 동작합니다.
+        "capture_html": True,
         # 과목 = 레포지터리. 비우면 예전처럼 github.owner/repo 한 곳으로
         # 전부 올립니다. 적기 시작하면 그 목록이 이 PC 의 담당 전부입니다.
         # (수집 대상을 고르는 eclass.courses 와는 다른 것입니다 —
