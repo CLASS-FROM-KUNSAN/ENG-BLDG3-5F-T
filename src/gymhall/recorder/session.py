@@ -104,6 +104,18 @@ class RecordingSession:
         # 이고 None 은 '골랐는데 쓸 게 없다' 입니다. 둘을 섞으면 매
         # 세그먼트마다 다시 시험해 그때마다 1.5초씩 소리가 빕니다.
         self._mic_source: object = _UNSET
+        self._mic_fallback_count = 0
+        self._failed_mics: set[str] = set()
+        self.use_vad = bool(cfg.get("recording.audio.use_vad", False))
+        self._vad_detector = None
+        if self.use_vad:
+            try:
+                from .vad import SileroVADDetector
+
+                self._vad_detector = SileroVADDetector(cfg.get("recording.audio.vad_model_path", ""))
+            except Exception as exc:
+                log.warning("VAD 감지기 초기화 실패(진폭 판정으로 폴백): %s", exc)
+
         self.silence_stop_sec = float(cfg.get("recording.audio.silence_stop_sec", 900))
         self.silence_abort_sec = float(cfg.get("recording.audio.silence_abort_sec", 3600))
         # 장치 무음으로 중단된 세션은 올리지 않습니다.
@@ -138,6 +150,56 @@ class RecordingSession:
                             "녹화를 멈춥니다. python -m gymhall devices 로 "
                             "장치를 확인하세요.")
         return None
+
+    def _invalidate_and_fallback_mic(self, failed_device_name: str = "") -> object | None:
+        """마이크 에러 발생 시 캐시를 무효화하고 살아있는 다른 마이크로 동적 롤백합니다."""
+        if failed_device_name:
+            self._failed_mics.add(failed_device_name.lower())
+
+        self._mic_fallback_count += 1
+        self._mic_source = _UNSET
+
+        if self._mic_fallback_count > 2:
+            log.warning("마이크 롤백 상한(2회)에 도달했습니다. 추가 프로브를 중단하고 마이크를 비활성화합니다.")
+            self._mic_source = None
+            return None
+
+        cfg = self.cfg
+        explicit = str(cfg.get("recording.audio.mic_device", "") or "").strip()
+        if explicit or not cfg.get("recording.audio.mic_auto_select", True):
+            log.warning("mic_device가 고정되어 있거나 auto_select가 꺼져 있어 자동 롤백을 수행하지 않습니다.")
+            self._mic_source = None
+            return None
+
+        new_mic, probes = devices.select_working_mic(
+            duration_sec=float(cfg.get("recording.audio.mic_probe_sec", 1.5)),
+            samplerate=int(cfg.get("recording.audio.samplerate", 48000)),
+            channels=int(cfg.get("recording.audio.channels", 2)),
+            exclude=list(self._failed_mics),
+        )
+        self._log_mic_choice(new_mic, probes)
+        if new_mic is None or getattr(new_mic, "dead", False):
+            log.error("사용 가능한 대체 마이크가 없습니다. 마이크 없이 계속 녹화합니다.")
+            self._mic_source = None
+            return None
+
+        log.info("대체 마이크로 롤백 완료: '%s'", getattr(new_mic, "name", "(기본)"))
+        self._mic_source = new_mic
+        return new_mic
+
+    def _handle_audio_track_errors(self, audio_results: list, result: SessionResult) -> None:
+        """오디오 트랙 결과 중 마이크 에러 발생 시 롤백을 트리거하고 경고를 기록합니다."""
+        for track in audio_results:
+            if track.error:
+                result.warnings.append(f"세그먼트 {track.name}: {track.error}")
+                if track.name == "mic":
+                    result.warnings.append(f"마이크 트랙 실패: {track.error}")
+                    device_name = getattr(track, "device_label", "")
+                    self._invalidate_and_fallback_mic(failed_device_name=device_name)
+            elif track.silent:
+                result.warnings.append(
+                    f"세그먼트 {track.name}: 전 구간 무음 (장치 설정 확인 필요)"
+                )
 
     def _resolve_mic(self):
         """이 세션에서 쓸 마이크. 한 번만 고르고 그대로 씁니다.
@@ -359,6 +421,7 @@ class RecordingSession:
                 realtime_queue=self.realtime_queue,
                 realtime_source=str(cfg.get("transcribe.source_track", "system")),
                 mic_source=self._resolve_mic(),
+                vad_detector=self._vad_detector,
             )
             audio_rec.start(stem)
 
@@ -456,13 +519,7 @@ class RecordingSession:
         else:
             stopped_video_paths = [(None, sfx) for _, sfx in video_paths]
 
-        for track in audio_results:
-            if track.error:
-                result.warnings.append(f"세그먼트 {index} {track.name}: {track.error}")
-            elif track.silent:
-                result.warnings.append(
-                    f"세그먼트 {index} {track.name}: 전 구간 무음 (장치 설정 확인 필요)"
-                )
+        self._handle_audio_track_errors(audio_results, result)
 
         # --- 합치기: 모니터마다 독립 파일 ---
         mux_inputs = [

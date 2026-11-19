@@ -87,6 +87,7 @@ class AudioTrack(threading.Thread):
         silence_peak: float = 1e-5,
         device_label: str = "",
         tap: queue.Queue | None = None,
+        vad_detector=None,
     ) -> None:
         super().__init__(name=f"audio-{name}", daemon=True)
         # 주의: 이 필드 이름을 `_stop` 으로 바꾸지 마세요.
@@ -110,6 +111,7 @@ class AudioTrack(threading.Thread):
         # 통째로 0 이었는데, 로그만 봐서는 알 수 없었습니다.
         self.device_label = str(device_label or "(이름 미상)")
         self.tap = tap  # 실시간 전사로 흘려보낼 큐 (없으면 None)
+        self.vad_detector = vad_detector
         self._stop_event = threading.Event()
         self.result = TrackResult(name=name, path=self.out_path, samplerate=self.samplerate)
 
@@ -156,7 +158,14 @@ class AudioTrack(threading.Thread):
                     self.result.peak = max(self.result.peak, peak)
 
                     block_sec = len(data) / self.samplerate
-                    if peak < self.silence_peak:
+                    is_silent = (peak < self.silence_peak)
+                    if (not is_silent and self.vad_detector is not None
+                            and getattr(self.vad_detector, "available", False)):
+                        # 진폭은 임계값을 넘었지만 VAD 가 음성이 아니라고 판단하면 무음으로 취급 (에어컨/팬 소음 필터링)
+                        is_speech = self.vad_detector.is_speech_present(data, self.samplerate)
+                        is_silent = not is_speech
+
+                    if is_silent:
                         silent_for += block_sec
                         self.result.silent_for = silent_for
                         if not warned and silent_for >= self.silence_warn_sec:
@@ -250,6 +259,7 @@ class AudioRecorder:
     # 세션이 미리 골라 둔 마이크. 주면 리졸버를 부르지 않습니다.
     # 세그먼트마다 다시 고르면 그때마다 소리가 1.5초 빕니다.
     mic_source: object | None = None
+    vad_detector: object | None = None
 
     tracks: list[AudioTrack] = field(default_factory=list)
 
@@ -283,6 +293,7 @@ class AudioRecorder:
                 silence_peak=self.silence_peak,
                 device_label=_source_name(source, device_name),
                 tap=tap,
+                vad_detector=self.vad_detector,
             )
             self.tracks.append(track)
             track.start()

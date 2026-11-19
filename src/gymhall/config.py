@@ -165,6 +165,8 @@ DEFAULTS: dict[str, Any] = {
             "silence_peak": 1e-5,
             "mic_auto_select": True,
             "mic_probe_sec": 1.5,
+            "use_vad": False,
+            "vad_model_path": "",
         },
         "triggers": {
             "manual": True,
