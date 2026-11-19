@@ -124,6 +124,21 @@ MESSAGE_LINK = "td.textLeft a"
 MESSAGE_FILE = "a[onclick*='compressFile'], i.icon-message-color, i[class*='message']"
 MAX_MESSAGE_PAGES = 30
 
+# 계정 레벨(과목 무관) 메뉴. 전부 실제 상단 내비(2026-11)에서 확인한 고정
+# ID 의 moveMenu 또는 menuPage2 입니다 — 추측 ID 를 열거하지 않습니다(WAF 로깅).
+# 내강의실 부모 menu_00026 / 학습도우미 부모 menu_00029.
+ACCOUNT_MENUS: tuple[tuple[str, str], ...] = (
+    ("학습시간표", "/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00252"),
+    ("수강과목", "/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00031"),
+    ("공개강좌", "/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00026&mainDTO.menuId=menu_00035"),
+    ("학습도우미홈", "/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00247"),
+    ("도우미공지", "/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00237"),
+    ("도우미질의응답", "/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00249"),
+    ("행사안내", "/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00250"),
+    ("자주찾는질문", "/Main.do?cmd=moveMenu&mainDTO.parentMenuId=menu_00029&mainDTO.menuId=menu_00215"),
+    ("커뮤니티", "/Main.do?cmd=menuPage2"),
+)
+
 
 @dataclass
 class Course:
@@ -938,6 +953,120 @@ class Crawler:
         n = self.board_page_count()
         return min(n, MAX_MESSAGE_PAGES)
 
+    # -- 계정 레벨 메뉴 -------------------------------------------------
+    # 과목이 아니라 계정에 딸린 메뉴(학습시간표·수강과목·학습도우미 공지/
+    # 질의응답/행사안내/FAQ·커뮤니티·공개강좌). 현재 수집기는 과목 메뉴만
+    # 봐서 이들을 통째로 놓칩니다. run() 에서 과목 루프 밖에서 1회 부릅니다.
+    #
+    # 개인정보(학번/이메일/전화/이름)는 마스킹하되 **메뉴·정보는 하나도
+    # 빼지 않습니다**: 표가 있으면 표를, 없으면 본문 텍스트를 담고, 빈
+    # 메뉴도 '(내용 없음)' 으로 남깁니다. 이름 열은 열 단위로, 그 밖의
+    # 확실한 PII 토큰은 anon.mask_pii 로 가립니다. 제3자 자유텍스트 이름까지
+    # 자동 검출하진 않으므로 결과물은 로컬 전용입니다.
+    def _account_owner_name(self) -> str:
+        """상단 프로필의 로그인 이름. 전역 마스킹에 씁니다."""
+        for sel in ("li.w230 dl dt.fontB", "dt.fontB", ".photoInfo ~ dl dt"):
+            try:
+                loc = self.br.page.locator(sel).first
+                if loc.count() and (t := loc.inner_text(timeout=800).strip()):
+                    return t.split("(")[0].strip()
+            except Exception:
+                continue
+        return ""
+
+    def _account_menu_markdown(self, label: str) -> str:
+        """현재 페이지(#bodyContent)를 '빠짐 없이' 마크다운으로. 이름 열 마스킹."""
+        page = self.br.page
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=self.br.timeout_ms)
+        except Exception:
+            pass
+        page.wait_for_timeout(400)
+        data = _eval_json(
+            page,
+            """() => {
+                 const squash = (v) => (v || '').replace(/\\s+/g, ' ').trim();
+                 const root = document.querySelector('#bodyContent') || document.body;
+                 const tables = Array.from(root.querySelectorAll('table')).map(t => ({
+                   caption: squash((t.querySelector('caption') || {}).innerText),
+                   heads: Array.from(t.querySelectorAll('thead th')).map(th => squash(th.innerText)),
+                   rows: Array.from(t.querySelectorAll('tbody tr'))
+                     .map(tr => Array.from(tr.querySelectorAll('th,td')).map(c => squash(c.innerText)))
+                     .filter(r => r.some(Boolean)),
+                 })).filter(t => t.rows.length);
+                 const full = squash(root.innerText);
+                 // 표 밖 텍스트(표는 구조화해 따로 담으므로 중복을 피해 제거).
+                 const clone = root.cloneNode(true);
+                 clone.querySelectorAll('table').forEach(t => t.remove());
+                 const text_outside = squash(clone.innerText);
+                 const blocked = /Web firewall|웹 방화벽|firewall security/.test(
+                   document.body.innerHTML);
+                 const relogin = /다시 로그인|처리 중 오류/.test(full);
+                 return JSON.stringify({ tables, text: text_outside, blocked, relogin });
+               }""",
+        )
+        if not isinstance(data, dict):
+            return f"## {label}\n\n(읽기 실패)\n"
+        if data.get("blocked"):
+            return f"## {label}\n\n(방화벽 차단 — 수집 안 함)\n"
+        if data.get("relogin"):
+            return f"## {label}\n\n(세션 필요 — 건너뜀)\n"
+
+        lines = [f"## {label}", ""]
+        tables = data.get("tables") or []
+        for t in tables:
+            cap = t.get("caption") or ""
+            if cap:
+                lines += [f"### {cap}", ""]
+            heads = t.get("heads") or []
+            name_cols = {i for i, h in enumerate(heads) if h in anon.NAME_COLUMNS}
+            if heads:
+                lines.append("| " + " | ".join(heads) + " |")
+                lines.append("|" + "---|" * len(heads))
+            for r in t["rows"]:
+                cells = ["<NAME>" if i in name_cols else c.replace("|", "\\|")
+                         for i, c in enumerate(r)]
+                lines.append("| " + " | ".join(cells) + " |")
+            lines.append("")
+        # 표 밖 텍스트(문의처·안내문 등)도 빠뜨리지 않습니다.
+        txt = (data.get("text") or "").strip()
+        if txt:
+            lines += [txt, ""]
+        elif not tables:
+            lines += ["(내용 없음)", ""]
+        return "\n".join(lines)
+
+    def crawl_account(self) -> None:
+        out_dir = self.layout.menu_dir(self.term, "_계정", "계정정보")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        own = ""
+        sections = []
+        for label, tail in ACCOUNT_MENUS:
+            try:
+                self.br.goto(self.site.base_url.rstrip("/") + tail)
+                if not own:
+                    own = self._account_owner_name()
+                sections.append(self._account_menu_markdown(label))
+            except Exception as exc:
+                sections.append(f"## {label}\n\n(수집 실패: {type(exc).__name__})\n")
+                self.stats.errors.append(f"계정/{label}: {exc}")
+        body = ("# 계정 정보 (계정 레벨 · 과목 무관)\n\n"
+                "<!-- 개인정보(학번/이메일/전화/이름)는 마스킹됨(쪽지와 같은 수준). -->\n\n"
+                + "\n".join(sections)).strip()
+        body = anon.mask_pii(body, own_names=(own,) if own else ())
+        digest = sha256_text(body)
+        state_key = "account:info"
+        if self.store.data["downloaded"].get(state_key, {}).get("sha256") == digest:
+            self.stats.skipped += 1
+        else:
+            fp = out_dir / safe_name("계정정보.md")
+            fp.write_text(body + "\n", encoding="utf-8")
+            self._snapshot(fp)
+            self.store.mark_downloaded(state_key, path=str(fp), digest=digest)
+            self.stats.posts += 1
+        log.info("계정: 메뉴 %d개 수집(계정정보.md, 개인정보 마스킹)", len(ACCOUNT_MENUS))
+        self.store.save()
+
     def crawl_messages(self, box: str = "RECEIVE") -> None:
         """쪽지함 하나를 끝까지 긁습니다."""
         out_dir = self.layout.menu_dir(self.term, "_쪽지", MENU_LABELS["message"])
@@ -1672,5 +1801,13 @@ class Crawler:
                     msg = f"쪽지({box}): {exc}"
                     log.error("%s", msg)
                     self.stats.errors.append(msg)
+        # 계정 레벨 메뉴(학습시간표·도우미 공지/질의응답·FAQ 등)도 계정 단위.
+        if self.menus.get("account"):
+            try:
+                self.crawl_account()
+            except Exception as exc:
+                msg = f"계정 메뉴: {exc}"
+                log.error("%s", msg)
+                self.stats.errors.append(msg)
         self.store.save()
         return self.stats
