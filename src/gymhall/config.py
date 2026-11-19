@@ -88,6 +88,7 @@ DEFAULTS: dict[str, Any] = {
             "progress": False,
             "grade": False,
             "message": True,
+            "account": True,   # 계정 레벨 메뉴(학습시간표·도우미 공지/FAQ 등), 개인정보 마스킹
         },
         "message_boxes": ["RECEIVE"],
         # 텍스트(.md) 옆에 같은 이름의 화면 스크린샷(.png)을 남깁니다.
