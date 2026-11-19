@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -171,8 +170,7 @@ def probe_mic(mic, *, duration_sec: float = 1.5,
 
 def select_working_mic(*, duration_sec: float = 1.5,
                        samplerate: int = 48000, channels: int = 2,
-                       mics=_UNSET, default=_UNSET,
-                       exclude: Sequence[str] = ()):
+                       mics=_UNSET, default=_UNSET):
     """살아 있는 마이크 하나를 고릅니다. (장치, 시험결과들) 을 돌려줍니다.
 
     기본 장치를 먼저 시험하고, 죽어 있으면 나머지를 순서대로 봅니다.
@@ -182,8 +180,6 @@ def select_working_mic(*, duration_sec: float = 1.5,
     남는데, 그보다는 시도하고 경고하는 쪽이 낫습니다. 전부 0 이라는
     것은 장치 문제가 아니라 Windows 마이크 권한이 꺼져 있다는
     뜻일 가능성이 큽니다 — 하나만 0 이면 장치, 전부 0 이면 권한.
-
-    exclude 에 적힌 이름(부분 일치)을 가진 장치는 건너뜁니다(장치 롤백용).
 
     mics/default 는 테스트 주입용입니다. 실장치 없이 모든 갈래를
     시험할 수 있어야 합니다(리눅스 CI 에서 이 함수가 한 줄도 안 돌면
@@ -199,19 +195,11 @@ def select_working_mic(*, duration_sec: float = 1.5,
         if default is _UNSET:
             default = sc.default_microphone()
 
-    excl_set = {str(x).strip().lower() for x in exclude if str(x).strip()}
-
-    def _is_excluded(mic) -> bool:
-        if not mic or not excl_set:
-            return False
-        name = str(getattr(mic, "name", "") or "").lower()
-        return any(ex in name for ex in excl_set)
-
     ordered = []
     seen = set()
     for mic in ([default] if default is not None else []) + list(mics):
         name = str(getattr(mic, "name", "") or "")
-        if name in seen or _is_excluded(mic):
+        if name in seen:
             continue
         seen.add(name)
         ordered.append(mic)
@@ -223,9 +211,7 @@ def select_working_mic(*, duration_sec: float = 1.5,
         probes.append(result)
         if not result.dead:
             return mic, probes
-
-    fallback = None if _is_excluded(default) else default
-    return fallback, probes
+    return default, probes
 
 
 def describe() -> str:
