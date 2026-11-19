@@ -221,6 +221,12 @@ discussion = false   # 토론
 # ---------------------------------------------------------------------
 [eclass.upload]
 enabled = true
+# 안전장치: 대상 저장소가 public 이면 올리지 않습니다. eClass 자료에는
+# 동급생 이름·전체 화면(.png)·첨부 파일명 등 개인정보가 섞일 수 있어서,
+# 공개 저장소로 나가는 것을 기본 차단합니다(저장소를 private 로 두세요).
+# 저장소 가시성을 못 읽으면(네트워크 실패 등) 막지 않습니다.
+# 정말 공개하려면 아래를 false 로 끄세요(권장하지 않음).
+block_public = true
 # 업로드에서 제외할 메뉴 (위 [eclass.menus] 키 이름 사용)
 exclude_menus = ["grade", "attendance", "progress"]
 # 확장자 화이트리스트. 비우면 전부 허용.
@@ -302,6 +308,12 @@ enabled = true
 # 번호가 화면 개수보다 크면 경고를 찍고 전체 바탕화면으로 돌아갑니다 —
 # 조용히 1번으로 떨어지면 설정이 틀린 줄 모르고 한 학기를 보냅니다.
 monitor = 0
+
+# 모니터가 두 개일 때 각각 독립 파일로 녹화합니다.
+#   monitors = [1, 2]  ->  <stem>_mon1.mkv, <stem>_mon2.mkv
+#   비워두면([]) 위 monitor 단수 설정을 그대로 씁니다.
+#   번호는 `python -m gymhall devices` 로 확인하세요.
+monitors = []
 
 # 캡처 방식 (Windows)
 #   "gdigrab"  : 호환성 최고, CPU 사용 보통.            [저사양 권장]

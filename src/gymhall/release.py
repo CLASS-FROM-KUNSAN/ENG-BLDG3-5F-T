@@ -334,6 +334,30 @@ class ReleaseUploader:
             )
         raise ReleaseError(f"{self.slug}: 확인 실패 {resp.status_code}")
 
+    def is_public(self) -> bool | None:
+        """레포가 public 이면 True, private/internal 이면 False, 모르면 None.
+
+        올리기 전 '공개 저장소 차단' 가드가 씁니다. dry-run·접근 실패·필드
+        없음은 None(모름) — 호출부는 None 을 '막지 않음' 으로 다룹니다(네트워크
+        한 번 실패했다고 수집 자체를 세우진 않습니다).
+        """
+        if self.dry_run:
+            return None
+        url = f"{API}/repos/{self.owner}/{self.repo}"
+        try:
+            resp = self.session.get(url, timeout=30)
+        except Exception:
+            return None
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        vis = data.get("visibility")
+        if vis:
+            return vis == "public"          # public / private / internal
+        if "private" in data:
+            return data["private"] is False
+        return None
+
     def _owner_is_org(self) -> bool:
         """개인 계정인지 조직인지. 레포 생성 주소가 달라집니다."""
         try:

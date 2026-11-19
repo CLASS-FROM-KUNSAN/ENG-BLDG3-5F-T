@@ -401,6 +401,23 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
                 create_missing=bool(cfg.get("github.create_missing_repos", False)),
                 private=bool(cfg.get("github.repo_private", True)),
             )
+            # 공개 저장소 차단 가드(config 로 켜고 끔). eClass 자료에는 동급생
+            # 이름·화면·파일명 등 개인정보가 섞일 수 있어, 대상 레포가 public
+            # 이면 올리지 않습니다. is_public()==None(모름)이면 막지 않습니다
+            # (네트워크 한 번 실패로 수집을 세우지 않음). 끄려면 config 에서
+            # eclass.upload.block_public = false.
+            is_pub_fn = getattr(uploader, "is_public", None)
+            if bool(cfg.get("eclass.upload.block_public", True)) \
+                    and callable(is_pub_fn) and is_pub_fn() is True:
+                skipped_n = sum(len(v) for v in folders.values())
+                msg = (f"{where}: 대상 저장소가 public 이라 올리지 않았습니다. "
+                       "eClass 자료에는 개인정보가 섞일 수 있습니다. 저장소를 "
+                       "private 로 바꾸거나, 정말 공개하려면 config 의 "
+                       "eclass.upload.block_public = false 로 끄세요.")
+                log.error("%s", msg)
+                failed.append(where)
+                tally["skipped"] += skipped_n
+                continue
             total = sum(len(v) for v in folders.values())
             log.info("[%s] 릴리스 '%s' 로 폴더 %d개 (파일 %d개)",
                      where, tag, len(folders), total)

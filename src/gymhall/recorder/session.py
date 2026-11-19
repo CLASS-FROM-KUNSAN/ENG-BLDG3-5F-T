@@ -9,6 +9,12 @@
 대가:
   세그먼트 사이에 1초 안팎의 공백이 생깁니다. 강의 녹화에서는
   문제가 되지 않지만, 음악이나 연속 측정에는 맞지 않습니다.
+
+다중 모니터 녹화:
+  recording.video.monitors = [1, 2] 처럼 목록을 적으면 각 모니터를
+  독립 프로세스로 동시에 녹화해 별도 파일로 저장합니다.
+  파일명은 <stem>_mon1.<container>, <stem>_mon2.<container> 형식입니다.
+  monitors 가 비어 있으면 기존 단일 monitor 설정을 그대로 씁니다.
 """
 
 from __future__ import annotations
@@ -302,11 +308,18 @@ class RecordingSession:
         work = out_dir / ".work"
         work.mkdir(parents=True, exist_ok=True)
 
-        video_rec = None
-        video_path = None
-        if video_on:
-            # 생성자는 ffmpeg 를 띄우지 않습니다. start() 가 띄웁니다.
-            video_rec = VideoRecorder(
+        # --- 다중 모니터 목록 결정 ---
+        # monitors = [1, 2] 처럼 목록이 있으면 각 모니터를 독립 녹화합니다.
+        # 비어 있으면 기존 단일 monitor 설정을 그대로 씁니다.
+        monitors_list: list[int] = list(cfg.get("recording.video.monitors", []) or [])
+        # 단일 monitor > 0 도 목록으로 올려서 코드를 하나로 씁니다.
+        if not monitors_list:
+            single = int(cfg.get("recording.video.monitor", 0))
+            monitors_list = [single]  # 0 = 전체, 양수 = 그 화면
+
+        # --- VideoRecorder 목록 구성 ---
+        def _make_video_rec(mon_idx: int) -> VideoRecorder:
+            return VideoRecorder(
                 out_dir=work,
                 backend=str(cfg.get("recording.video.backend", "gdigrab")),
                 fps=int(cfg.get("recording.video.fps", 10)),
@@ -315,10 +328,19 @@ class RecordingSession:
                 preset=str(cfg.get("recording.video.preset", "veryfast")),
                 crf=int(cfg.get("recording.video.crf", 30)),
                 window_title=str(cfg.get("recording.video.window_title", "")),
-                monitor=int(cfg.get("recording.video.monitor", 0)),
+                monitor=mon_idx,
                 draw_mouse=bool(cfg.get("recording.video.draw_mouse", True)),
                 container=container,
             )
+
+        # (VideoRecorder, suffix) 쌍 목록
+        # 모니터가 여러 개면 파일명에 _mon<N> suffix 를 붙입니다.
+        multi = len(monitors_list) > 1
+        video_recs: list[tuple[VideoRecorder, str]] = []
+        if video_on:
+            for mon_idx in monitors_list:
+                suffix = f"_mon{mon_idx}" if multi else ""
+                video_recs.append((_make_video_rec(mon_idx), suffix))
 
         audio_rec = None
         if audio_on:
@@ -341,18 +363,61 @@ class RecordingSession:
             audio_rec.start(stem)
 
         # 화면은 소리보다 늦게 켭니다(pre-roll 프라이버시).
-        if video_rec is not None:
+        video_paths: list[tuple[Path | None, str]] = []  # (path, suffix)
+        if video_recs:
             self._wait_for_video_start()
-            video_path = video_rec.start(stem)
+            if multi:
+                # 여러 모니터를 병렬로 띄웁니다.
+                errors_per_rec: list[Exception | None] = [None] * len(video_recs)
+                started_paths: list[Path | None] = [None] * len(video_recs)
+
+                def _start_one(i, vr, _suffix):
+                    try:
+                        started_paths[i] = vr.start(f"{stem}{_suffix}")
+                    except Exception as e:
+                        errors_per_rec[i] = e
+
+                threads = [
+                    threading.Thread(target=_start_one, args=(i, vr, sfx), daemon=True)
+                    for i, (vr, sfx) in enumerate(video_recs)
+                ]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+
+                for i, ((_vr, sfx), err) in enumerate(zip(video_recs, errors_per_rec, strict=True)):
+                    if err is not None:
+                        log.error("모니터 %s 녹화 시작 실패: %s", sfx or "(전체)", err)
+                        result.warnings.append(f"세그먼트 {index} 모니터{sfx} 시작 실패: {err}")
+                        video_recs[i] = (None, sfx)  # type: ignore[assignment]
+                    video_paths.append((started_paths[i], sfx))
+            else:
+                # 단일 모니터 (기존 경로)
+                video_rec, sfx = video_recs[0]
+                try:
+                    p = video_rec.start(f"{stem}{sfx}")
+                    video_paths.append((p, sfx))
+                except Exception as exc:
+                    log.error("화면 녹화 시작 실패: %s", exc)
+                    result.warnings.append(f"세그먼트 {index} 화면 시작 실패: {exc}")
+                    video_paths.append((None, sfx))
+                    video_recs = []
 
         # --- 대기 ---
         end_at = time.time() + minutes * 60
         log.info("세그먼트 %d 녹화 중 (%.1f분)", index, minutes)
         while time.time() < end_at and not self._stop_event.is_set():
             time.sleep(0.5)
-            if video_rec is not None and not video_rec.is_running:
-                log.error("ffmpeg 가 예기치 않게 종료됐습니다. 세그먼트를 마무리합니다.")
-                result.warnings.append(f"세그먼트 {index}: ffmpeg 비정상 종료")
+            # 실행 중인 VideoRecorder 중 하나라도 죽으면 중단합니다.
+            for vr, sfx in video_recs:
+                if vr is not None and not vr.is_running:
+                    log.error("ffmpeg 가 예기치 않게 종료됐습니다%s. 세그먼트를 마무리합니다.",
+                              f" (모니터{sfx})" if multi else "")
+                    result.warnings.append(f"세그먼트 {index}: ffmpeg 비정상 종료{sfx}")
+                    self._stop_event.set()
+                    break
+            if self._stop_event.is_set():
                 break
             verdict = self._silence_verdict(audio_rec)
             if verdict:
@@ -366,9 +431,30 @@ class RecordingSession:
         # --- 정지 ---
         audio_results = audio_rec.stop() if audio_rec else []
         audio_started = audio_rec.started_at if audio_rec else 0.0
-        video_started = video_rec.started_at if video_rec else 0.0
-        if video_rec:
-            video_path = video_rec.stop()
+
+        # 모든 VideoRecorder 를 병렬로 멈춥니다.
+        stopped_video_paths: list[tuple[Path | None, str]] = []
+        if video_recs:
+            if multi:
+                result_holders: list[Path | None] = [None] * len(video_recs)
+
+                def _stop_one(i, vr):
+                    result_holders[i] = vr.stop() if vr is not None else None
+
+                stop_threads = [
+                    threading.Thread(target=_stop_one, args=(i, vr), daemon=True)
+                    for i, (vr, _) in enumerate(video_recs)
+                ]
+                for t in stop_threads:
+                    t.start()
+                for t in stop_threads:
+                    t.join()
+                stopped_video_paths = [(result_holders[i], sfx) for i, (_, sfx) in enumerate(video_recs)]
+            else:
+                vr, sfx = video_recs[0]
+                stopped_video_paths = [(vr.stop() if vr is not None else None, sfx)]
+        else:
+            stopped_video_paths = [(None, sfx) for _, sfx in video_paths]
 
         for track in audio_results:
             if track.error:
@@ -378,35 +464,48 @@ class RecordingSession:
                     f"세그먼트 {index} {track.name}: 전 구간 무음 (장치 설정 확인 필요)"
                 )
 
-        # --- 합치기 ---
-        final = out_dir / f"{stem}.{container}"
+        # --- 합치기: 모니터마다 독립 파일 ---
         mux_inputs = [
             MuxInput(t.path, t.name, t.started_at or audio_started)
             for t in audio_results if t.path.exists() and not t.error
         ]
         wav_copies = {t.name: t.path for t in audio_results if t.path.exists()}
-
         keep_wav = bool(cfg.get("transcribe.enabled", True))
-        try:
-            mux(
-                final, video_path, video_started, mux_inputs,
-                layout=str(cfg.get("recording.audio.track_layout", "separate")),
-                delete_video=True,          # 합친 파일에 그대로 들어갔습니다
-                delete_audio=not keep_wav,  # 전사에 쓸 거면 남깁니다
-            )
-        except Exception as exc:
-            log.error("합치기 실패: %s", exc)
-            result.warnings.append(f"세그먼트 {index} 합치기 실패: {exc}")
-            # 합치기에 실패해도 원본은 남겨 둡니다. 데이터가 더 중요합니다.
-            return Segment(index, work, now, (time.time() - (video_started or time.time())),
-                           [t.name for t in audio_results], wav_copies,
-                           broken=self.broken)
 
-        # 전사를 위해 WAV 를 세그먼트 폴더로 옮깁니다.
-        moved: dict[str, Path] = {}
-        if keep_wav:
+        # 모니터가 여러 개면 모니터마다 mux, 하나면 기존대로.
+        final_paths: list[Path] = []
+        for video_path, sfx in stopped_video_paths:
+            video_started = 0.0
+            if video_recs:
+                for vr, s in video_recs:
+                    if s == sfx and vr is not None:
+                        video_started = vr.started_at
+                        break
+            final = out_dir / f"{stem}{sfx}.{container}"
+            try:
+                mux(
+                    final, video_path, video_started, mux_inputs,
+                    layout=str(cfg.get("recording.audio.track_layout", "separate")),
+                    delete_video=True,
+                    delete_audio=False,  # 마지막 mux 뒤에 한 번만 지웁니다
+                )
+                final_paths.append(final)
+            except Exception as exc:
+                log.error("합치기 실패%s: %s", f" (모니터{sfx})" if multi else "", exc)
+                result.warnings.append(f"세그먼트 {index} 합치기 실패{sfx}: {exc}")
+
+        # WAV 삭제 (전사 불필요) or 이동
+        if not keep_wav:
+            for t in audio_results:
+                if t.path.exists():
+                    try:
+                        t.path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+        else:
             audio_dir = out_dir / "audio"
             audio_dir.mkdir(exist_ok=True)
+            moved: dict[str, Path] = {}
             for name, path in wav_copies.items():
                 if not path.exists():
                     continue
@@ -416,9 +515,9 @@ class RecordingSession:
                     moved[name] = target
                 except OSError:
                     moved[name] = path
+            wav_copies = moved
 
-        # 작업 폴더 정리. 남은 파일이 있으면 지우지 않고 남겨 둡니다
-        # (합치기가 실패했을 때의 원본일 수 있습니다).
+        # 작업 폴더 정리
         try:
             leftover = list(work.iterdir())
             if leftover:
@@ -430,8 +529,14 @@ class RecordingSession:
 
         from .ffmpeg_util import duration_of
 
-        seconds = duration_of(final) or max(0.0, time.time() - (video_started or time.time()))
-        log.info("세그먼트 %d 완료: %s (%.1f분)", index, final.name, seconds / 60)
-        return Segment(index, final, now, seconds,
-                       [t.name for t in audio_results], moved or wav_copies,
+        # 대표 파일(첫 번째 모니터)로 길이를 잽니다.
+        ref_path = final_paths[0] if final_paths else None
+        seconds = duration_of(ref_path) if ref_path else max(0.0, time.time() - (audio_started or time.time()))
+
+        # 합친 파일이 하나면 기존 Segment 그대로, 여러 개면 목록 중 첫 번째로.
+        primary_final = ref_path if ref_path else (out_dir / f"{stem}.{container}")
+        log.info("세그먼트 %d 완료: %s (%.1f분)%s", index, primary_final.name, seconds / 60,
+                 f" + {len(final_paths) - 1}개 추가 파일" if len(final_paths) > 1 else "")
+        return Segment(index, primary_final, now, seconds,
+                       [t.name for t in audio_results], wav_copies,
                        broken=self.broken)
