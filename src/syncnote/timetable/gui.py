@@ -98,6 +98,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import settings_schema
 from ..eclass import catalog as eclass_catalog
 from . import model as M
 
@@ -1461,7 +1462,8 @@ class TimetableWindow(QMainWindow):
 
         f = self.menuBar().addMenu("파일(&F)")
         act(f, "config.toml 열기…", self.open_other, QKeySequence.StandardKey.Open)
-        act(f, "디스크에서 다시 읽기", self.reload_from_disk)
+        act(f, "디스크에서 다시 읽기", self.reload_from_disk, "F5")
+        act(f, "설정 편집…", self.edit_settings, "Ctrl+,")
         act(f, "저장", self.save, QKeySequence.StandardKey.Save)
         act(f, "다가오는 일정 · 공휴일 보기…", self.show_summary, "Ctrl+I")
         f.addSeparator()
@@ -1718,9 +1720,14 @@ class TimetableWindow(QMainWindow):
         return ans == QMessageBox.StandardButton.Discard
 
     def reload_from_disk(self) -> None:
+        """config.toml 과 config.example.toml 을 둘 다 다시 읽습니다."""
         if not self._confirm_discard():
             return
         self._load_into_editor(report_errors=True)
+        ex = (f"{self.example_path.name}(설정 {self.example_count}개)" if self.example_text
+              else (self.example_error or "config.example.toml 없음"))
+        if self.path.exists():
+            self.statusBar().showMessage(f"{self.path.name} 과 {ex} 을 다시 읽었습니다.", 6000)
 
     def _load_into_editor(self, report_errors: bool = False) -> None:
         """확인 없이 파일을 읽어 편집기를 그것으로 바꿉니다(실행 취소 기록도 비움)."""
@@ -1735,6 +1742,7 @@ class TimetableWindow(QMainWindow):
             tt = M.Timetable()
         self.undo.clear()
         self.catalog = self._load_catalog()
+        self._load_example()
         self._set_model(tt)
         self._remember_disk()
         if not self.path.exists():
@@ -1786,31 +1794,84 @@ class TimetableWindow(QMainWindow):
                 return cand
         return None
 
+    def _load_example(self) -> None:
+        """config.example.toml 을 읽어 둡니다(열 때, '디스크에서 다시 읽기' 때).
+        설정 창은 이 읽어 둔 본문을 씁니다 — 예시 파일을 고쳤으면 다시 읽기로 반영."""
+        self.example_path = self._example_path()
+        self.example_text: str | None = None
+        self.example_error = ""
+        self.example_count = 0
+        if self.example_path is None:
+            return
+        try:
+            text = self.example_path.read_text(encoding="utf-8-sig")
+            self.example_count = sum(len(s.fields) for s in settings_schema.parse(text))
+            self.example_text = text
+        except (OSError, UnicodeDecodeError, settings_schema.SchemaError) as exc:
+            self.example_error = f"{self.example_path.name} 을 읽을 수 없습니다: {exc}"
+
+    def _settings_dialog(self, base_text: str | None):
+        from .config_wizard import SettingsDialog
+
+        if self.example_text is None:
+            why = self.example_error or "config.example.toml 을 찾지 못했습니다."
+            QMessageBox.warning(self, "설정 목록 없음", why)
+            return None
+        return SettingsDialog(self, self.example_text, self.path, base_text,
+                              example_name=self.example_path.name)
+
     def _create_config(self) -> bool:
         """config.toml 이 없으면 예시 파일로 설정을 고르게 한 뒤 만듭니다.
         True 면 계속 저장(시간표 블록을 그 뒤에 붙임)."""
-        example = self._example_path()
-        if example is None:
+        if self.example_text is None:
+            why = self.example_error or "바탕으로 쓸 config.example.toml 도 찾지 못했습니다."
             ans = QMessageBox.question(
                 self, "설정 파일 없음",
-                f"{self.path.name} 도, 바탕으로 쓸 config.example.toml 도 찾지 못했습니다.\n"
+                f"{self.path.name} 이 없고, {why}\n"
                 "시간표만 담긴 설정 파일을 만들까요? (다른 설정은 기본값으로 동작)")
             return ans == QMessageBox.StandardButton.Yes
-        from .config_wizard import NewConfigDialog
-
-        try:
-            dlg = NewConfigDialog(self, example, self.path)
-        except (OSError, UnicodeDecodeError, ValueError) as exc:
-            QMessageBox.critical(self, "예시 파일을 읽을 수 없습니다", f"{example}\n{exc}")
-            return False
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        dlg = self._settings_dialog(None)
+        if dlg is None or dlg.exec() != QDialog.DialogCode.Accepted:
             self.statusBar().showMessage("설정 파일을 만들지 않아 저장하지 않았습니다.", 6000)
             return False
-        text = dlg.result_text()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(text, encoding="utf-8")
+        M.write_text(self.path, dlg.result_text())
         self.statusBar().showMessage(
-            f"{example.name} 을 바탕으로 {self.path.name} 을 만들었습니다.", 6000)
+            f"{self.example_path.name} 을 바탕으로 {self.path.name} 을 만들었습니다.", 6000)
+        return True
+
+    def edit_settings(self) -> bool:
+        """파일 → 설정 편집. 파일이 없으면 새로 만들기, 있으면 지금 값을 편집.
+        시간표(편집 중인 것 포함)는 건드리지 않습니다."""
+        if not self.path.exists():
+            if not self._create_config():
+                return False
+            self._remember_disk()
+            self.catalog = self._load_catalog()
+            return True
+        try:
+            raw = self.path.read_bytes()
+            base = raw.decode("utf-8-sig").replace("\r\n", "\n")
+            dlg = self._settings_dialog(base)
+        except (OSError, UnicodeDecodeError, settings_schema.SchemaError) as exc:
+            QMessageBox.critical(self, "설정 파일을 읽을 수 없습니다", f"{self.path}\n{exc}")
+            return False
+        if dlg is None or dlg.exec() != QDialog.DialogCode.Accepted:
+            return False
+        if not dlg.changes():
+            self.statusBar().showMessage("바뀐 설정이 없습니다.", 4000)
+            return True
+        if self.path.read_bytes() != raw:
+            QMessageBox.warning(
+                self, "다른 곳에서 바뀐 파일",
+                f"설정 창을 연 사이 {self.path.name} 이 다른 곳에서 바뀌어 저장하지 않았습니다.\n"
+                "다시 열어 고쳐 주세요.")
+            return False
+        M.write_text(self.path, dlg.result_text(), original=raw)
+        self._remember_disk()                   # 내 저장을 바깥 변경으로 보지 않게
+        self.catalog = self._load_catalog()     # data_dir·course_repos 가 바뀌었을 수 있음
+        self.statusBar().showMessage(
+            f"설정 {len(dlg.changes())}개를 {self.path.name} 에 저장했습니다 "
+            f"(원본은 {self.path.name}.bak).", 6000)
         return True
     def show_summary(self) -> SaveSummary:
         """저장 결과 창. 모달이 아니라 편집을 막지 않고, 하나만 띄웁니다."""

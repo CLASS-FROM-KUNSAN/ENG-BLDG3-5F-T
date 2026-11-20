@@ -142,6 +142,15 @@ REM 또는: python -m syncnote timetable edit [-c config.toml]
     이름만 씁니다.
   - 과목코드가 있으면 녹화 파일이 어느 과목인지 이름이 조금 달라도 정확히 판정됩니다.
 
+**파일 → 설정 편집…(Ctrl+,)** 으로 언제든 설정을 고칠 수 있습니다. config.toml 이
+있으면 지금 값을 보여 주고, 저장하면 바꾼 줄만 고칩니다(주석·시간표 그대로, 원본은
+`.bak`). config.toml 에 없는 항목을 바꾸면 그 섹션 끝에 넣고, 섹션이 없으면 새로
+만듭니다. 창을 연 사이 파일이 다른 곳에서 바뀌었으면 저장하지 않습니다.
+`예시 값으로` 는 config.example.toml 의 값으로 되돌립니다.
+
+`config.example.toml` 은 편집기를 열 때 읽어 둡니다. 예시 파일을 고쳤다면
+**파일 → 디스크에서 다시 읽기(F5)** 로 config.toml 과 함께 다시 읽으세요.
+
 **config.toml 이 아직 없으면** 저장 전에 `새 config.toml 만들기` 창이 뜹니다.
 
 - 설정 목록·기본값·설명·분류를 전부 `config.example.toml` 에서 읽습니다

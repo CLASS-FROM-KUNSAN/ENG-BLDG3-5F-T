@@ -643,13 +643,13 @@ def test_saving_without_config_asks_settings_first_then_writes_full_config(app, 
     from PySide6.QtWidgets import QDialog
 
     from syncnote import config as config_module
-    from syncnote.timetable.config_wizard import NewConfigDialog
+    from syncnote.timetable.config_wizard import SettingsDialog
 
     def fill_and_accept(self):
         self.values["eclass.username"] = "20261234"
         self.values["general.data_dir"] = str(tmp_path / "data")
         return QDialog.DialogCode.Accepted
-    monkeypatch.setattr(NewConfigDialog, "exec", fill_and_accept)
+    monkeypatch.setattr(SettingsDialog, "exec", fill_and_accept)
     w = _new_window(tmp_path, monkeypatch)
     try:
         assert w.save(show_summary=False)
@@ -667,9 +667,9 @@ def test_saving_without_config_asks_settings_first_then_writes_full_config(app, 
 def test_cancelling_settings_does_not_create_the_file(app, tmp_path, monkeypatch):
     from PySide6.QtWidgets import QDialog
 
-    from syncnote.timetable.config_wizard import NewConfigDialog
+    from syncnote.timetable.config_wizard import SettingsDialog
 
-    monkeypatch.setattr(NewConfigDialog, "exec", lambda self: QDialog.DialogCode.Rejected)
+    monkeypatch.setattr(SettingsDialog, "exec", lambda self: QDialog.DialogCode.Rejected)
     w = _new_window(tmp_path, monkeypatch)
     try:
         assert not w.save(show_summary=False)
@@ -680,8 +680,8 @@ def test_cancelling_settings_does_not_create_the_file(app, tmp_path, monkeypatch
 
 
 def test_no_example_anywhere_falls_back_to_timetable_only_after_asking(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(gui.TimetableWindow, "_example_path", lambda self: None)  # 열기 전에
     w = _new_window(tmp_path, monkeypatch)
-    monkeypatch.setattr(gui.TimetableWindow, "_example_path", lambda self: None)
     asked = {}
 
     def yes(*a, **k):
@@ -691,6 +691,86 @@ def test_no_example_anywhere_falls_back_to_timetable_only_after_asking(app, tmp_
     try:
         assert w.save(show_summary=False)
         assert "config.example.toml" in asked["text"] and M.load(w.path).courses
+    finally:
+        w.undo.setClean()
+        w.close()
+
+
+# -- 파일 → 설정 편집 · 다시 읽기 ------------------------------------------
+def _menu_texts(win):
+    return [a.text() for m in win.menuBar().actions() for a in m.menu().actions()]
+
+
+def test_file_menu_has_settings_and_reload(win):
+    texts = _menu_texts(win)
+    assert "설정 편집…" in texts and "디스크에서 다시 읽기" in texts
+
+
+def test_edit_existing_config_changes_only_those_lines(app, win, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from syncnote.timetable.config_wizard import SettingsDialog
+
+    before = win.path.read_text(encoding="utf-8")
+    win.path.write_text("# 내가 단 주석\n[general]\nlog_level = \"INFO\"\n\n" + before,
+                        encoding="utf-8")
+    win.check_disk()
+
+    def edit(self):
+        assert self.edit_mode and self.values["general.log_level"] == "INFO"
+        self.values["general.log_level"] = "DEBUG"
+        self.values["eclass.username"] = "20261234"      # 파일에 없는 항목 → 넣음
+        return QDialog.DialogCode.Accepted
+    monkeypatch.setattr(SettingsDialog, "exec", edit)
+    assert win.edit_settings()
+    text = win.path.read_text(encoding="utf-8")
+    assert "# 내가 단 주석" in text and 'log_level = "DEBUG"' in text
+    assert text.index("[eclass]") < text.index(M.BEGIN)              # 시간표 블록 앞에
+    assert M.load(win.path).courses[0].name == "자료구조"             # 시간표 그대로
+    assert (win.path.parent / "config.toml.bak").exists()
+    data = tomllib_loads(text)          # 이 테스트 설정은 github 등이 비어 전체 검증은 안 함
+    assert data["eclass"]["username"] == "20261234" and data["general"]["log_level"] == "DEBUG"
+    assert win.check_disk() == "same" and win.banner.isHidden()       # 내 저장은 바깥 변경 아님
+
+
+def test_edit_settings_refuses_if_file_changed_meanwhile(app, win, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from syncnote.timetable.config_wizard import SettingsDialog
+
+    def edit_while_someone_writes(self):
+        self.values["general.log_level"] = "DEBUG"
+        win.path.write_text(win.path.read_text(encoding="utf-8") + "\n# 누가 고침\n",
+                            encoding="utf-8")
+        return QDialog.DialogCode.Accepted
+    monkeypatch.setattr(SettingsDialog, "exec", edit_while_someone_writes)
+    warned = {}
+    monkeypatch.setattr(QMessageBox, "warning",
+                        staticmethod(lambda _p, title, text, *a, **k: warned.setdefault("t", text)))
+    assert not win.edit_settings()
+    assert "바뀌어" in warned["t"] and 'log_level = "DEBUG"' not in win.path.read_text(encoding="utf-8")
+
+
+def test_reload_rereads_the_example_too(app, tmp_path, monkeypatch):
+    example = tmp_path / "config.example.toml"
+    example.write_text("[general]\n# 로그 수준\nlog_level = \"INFO\"\n", encoding="utf-8")
+    monkeypatch.setattr(gui.TimetableWindow, "_example_path", lambda self: example)
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.StandardButton.Discard)
+    w = gui.TimetableWindow(tmp_path / "config.toml")
+    try:
+        assert w.example_count == 1
+        example.write_text(example.read_text(encoding="utf-8")
+                           + "# 보관 일수\nlog_retention_days = 30\n", encoding="utf-8")
+        assert w.example_count == 1                       # 다시 읽기 전에는 그대로
+        w.reload_from_disk()
+        assert w.example_count == 2                       # 다시 읽기 → 예시도 새로
+        dlg = w._settings_dialog(None)
+        assert "general.log_retention_days" in dlg.by_dotted
+        dlg.close()
+        example.write_text("[깨짐", encoding="utf-8")
+        w.reload_from_disk()
+        assert w.example_text is None and "읽을 수 없습니다" in w.example_error
     finally:
         w.undo.setClean()
         w.close()

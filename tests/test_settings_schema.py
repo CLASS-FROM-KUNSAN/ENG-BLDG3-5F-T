@@ -123,7 +123,7 @@ def test_apply_changes_only_those_lines_and_keeps_comments():
 
 
 def test_apply_refuses_unknown_keys():
-    with pytest.raises(S.SchemaError, match="없는 설정"):
+    with pytest.raises(S.SchemaError, match="없는 항목"):
         S.apply(SMALL, {"alpha.nope": 1})
 
 
@@ -141,3 +141,38 @@ def test_problems_use_the_real_validator_and_point_at_fields():
     assert any("github.tag_strategy" in p for p in bad)
     hit = [f.dotted for p in bad for f in S.fields_in(p, fields)]
     assert "github.tag_strategy" in hit and "github.tag_strategy_eclass" not in hit
+
+
+EXISTING = """# 내 설정
+[alpha]
+name = "내 이름"   # 손으로 단 주석
+
+# >>> syncnote 시간표 편집기 (이 아래부터 END 까지는 편집기가 다시 씁니다) >>>
+[[recording.timetable]]
+name = "자료구조"
+day = "mon"
+start = "09:00"
+end = "10:00"
+# <<< syncnote 시간표 편집기 <<<
+"""
+
+
+def test_apply_to_existing_config_inserts_missing_keys_and_sections():
+    known = {"alpha.name", "alpha.count", "beta.enabled"}
+    new = S.apply(EXISTING, {"alpha.name": "바뀜", "alpha.count": 5, "beta.enabled": False},
+                  known=known)
+    assert '# 내 설정' in new and '# 손으로 단 주석' in new
+    lines = new.splitlines()
+    assert lines.index("count = 5") == lines.index('name = "바뀜"  # 손으로 단 주석') + 1
+    assert lines.index("[beta]") < lines.index(next(ln for ln in lines if ln.startswith("# >>>")))
+    data = tomllib.loads(new)
+    assert data["alpha"] == {"name": "바뀜", "count": 5} and data["beta"] == {"enabled": False}
+    assert data["recording"]["timetable"][0]["name"] == "자료구조"      # 시간표 그대로
+    assert S.apply(EXISTING, {}, known=known) == EXISTING
+
+
+def test_current_values_reads_leaf_keys():
+    vals = S.current_values(EXISTING)
+    assert vals["alpha.name"] == "내 이름" and "recording.timetable" in vals
+    with pytest.raises(S.SchemaError):
+        S.current_values("[깨짐")

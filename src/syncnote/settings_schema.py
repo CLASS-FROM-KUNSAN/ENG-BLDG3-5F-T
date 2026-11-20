@@ -323,26 +323,59 @@ def _get(data: dict, dotted: str) -> Any:
     return node
 
 
-def apply(text: str, changes: dict[str, Any]) -> str:
-    """예시 본문에서 changes 의 키 줄만 값을 바꿔 넣은 새 본문.
+def _leaf_values(data: dict, prefix: str = "") -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in data.items():
+        dotted = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            out.update(_leaf_values(v, dotted))
+        else:
+            out[dotted] = v
+    return out
 
-    주석·순서·다른 줄은 그대로. 여러 줄 값은 한 줄로 바꿔 씁니다. 결과를
-    다시 읽어 바꾼 값은 새 값, 나머지는 예시 값과 같은지 확인합니다.
+
+def current_values(text: str) -> dict[str, Any]:
+    """설정 본문의 '값 하나짜리' 키들(점 표기). 읽을 수 없으면 SchemaError."""
+    try:
+        return _leaf_values(tomllib.loads(text))
+    except tomllib.TOMLDecodeError as exc:
+        raise SchemaError(f"설정 파일이 올바른 TOML 이 아닙니다: {exc}") from exc
+
+
+_MANAGED_BLOCK = "# >>> syncnote 시간표 편집기"   # timetable.model.BEGIN 의 앞부분
+
+
+def apply(text: str, changes: dict[str, Any], known: set[str] | None = None) -> str:
+    """설정 본문(예시든 기존 config.toml 이든)에 changes 를 넣은 새 본문.
+
+    - 본문에 있는 키: 그 줄의 값만 바꿈(주석·순서·다른 줄은 그대로, 여러 줄
+      값은 한 줄로).
+    - 본문에 없는 키(known 에 있을 때만): 그 섹션의 마지막 키 아래에 넣고,
+      섹션이 없으면 새 섹션을 만듭니다. 시간표 편집기 블록보다 앞에 둡니다.
+    결과를 다시 읽어 바꾼 값은 새 값, 나머지 값은 원래 값과 같은지 확인합니다.
     """
-    original = tomllib.loads(text)
+    try:
+        original = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise SchemaError(f"설정 파일이 올바른 TOML 이 아닙니다: {exc}") from exc
     lines = text.splitlines()
     out: list[str] = []
     section = ""
     in_array = False
     done: set[str] = set()
+    seen_sections: dict[str, int] = {"": -1}     # 섹션 → 그 섹션 마지막 키 줄(out 기준)
+    block_at: int | None = None
     i = 0
     while i < len(lines):
         raw = lines[i]
         s = raw.strip()
+        if block_at is None and s.startswith(_MANAGED_BLOCK):
+            block_at = len(out)
         if _ARRAY_HEADER.match(s):
             in_array = True
         elif _HEADER.match(s):
             section, in_array = _HEADER.match(s).group(1), False
+            seen_sections.setdefault(section, len(out))   # 키가 없으면 머리 줄 바로 뒤
         k = _KEY.match(raw) if not s.startswith("#") else None
         if k and not in_array:
             dotted = f"{section}.{k.group(1)}" if section else k.group(1)
@@ -354,31 +387,55 @@ def apply(text: str, changes: dict[str, Any]) -> str:
                     new += f"  # {inline}"
                 out.append(new)
                 done.add(dotted)
-                i = end + 1
-                continue
-            out.extend(lines[i:end + 1])
+            else:
+                out.extend(lines[i:end + 1])
+            seen_sections[section] = len(out) - 1
             i = end + 1
             continue
         out.append(raw)
         i += 1
-    missing = set(changes) - done
-    if missing:
-        raise SchemaError(f"예시 파일에 없는 설정입니다: {sorted(missing)}")
-    result = "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+    missing = [d for d in changes if d not in done]
+    unknown = [d for d in missing if known is None or d not in known]
+    if unknown:
+        raise SchemaError(f"설정 목록에 없는 항목입니다: {sorted(unknown)}")
+    # 없는 키 넣기: 아래쪽부터 넣어야 앞쪽 위치가 안 밀립니다.
+    by_section: dict[str, list[str]] = {}
+    for d in missing:
+        sec, _, key = d.rpartition(".")
+        by_section.setdefault(sec, []).append(f"{key} = {render(changes[d])}")
+    inserts: list[tuple[int, list[str]]] = []
+    tail: list[str] = []
+    for sec, kv in by_section.items():
+        if sec in seen_sections:
+            inserts.append((seen_sections[sec] + 1, kv))
+        else:
+            tail += ["", f"[{sec}]", *kv]
+    for pos, kv in sorted(inserts, key=lambda t: -t[0]):
+        out[pos:pos] = kv
+        if block_at is not None and pos <= block_at:
+            block_at += len(kv)
+    if tail:
+        pos = block_at if block_at is not None else len(out)
+        out[pos:pos] = tail + ([""] if block_at is not None else [])
+    result = "\n".join(out) + ("\n" if text.endswith("\n") or tail else "")
 
     try:
         parsed = tomllib.loads(result)
     except tomllib.TOMLDecodeError as exc:
         raise SchemaError(f"만든 설정이 올바른 TOML 이 아닙니다: {exc}") from exc
     for dotted, want in changes.items():
-        if _get(parsed, dotted) != want:
+        try:
+            got = _get(parsed, dotted)
+        except KeyError:
+            raise SchemaError(f"{dotted} 를 넣었는데 다시 읽으니 없습니다") from None
+        if got != want:
             raise SchemaError(f"{dotted} 를 바꿔 넣었는데 다시 읽으니 값이 다릅니다")
-    for sec in parse(text):
-        for f in sec.fields:
-            if f.dotted not in changes and _get(parsed, f.dotted) != _get(original, f.dotted):
-                raise SchemaError(f"{f.dotted} 가 의도치 않게 바뀌었습니다")
+    after = _leaf_values(parsed)
+    for dotted, was in _leaf_values(original).items():
+        if dotted not in changes and after.get(dotted, object()) != was:
+            raise SchemaError(f"{dotted} 가 의도치 않게 바뀌었습니다")
     return result
-
 
 def problems(text: str) -> list[str]:
     """이 본문을 config.toml 로 쓰면 나올 설정 오류 목록(실제 검증 그대로)."""
