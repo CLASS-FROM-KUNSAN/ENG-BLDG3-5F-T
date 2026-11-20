@@ -155,3 +155,16 @@ def test_record_start_dry_run_says_recording_still_happens():
     help_text = next(a.help for a in start._actions
                      if "--dry-run" in a.option_strings)
     assert "녹화" in help_text, help_text
+
+
+def test_timetable_edit_without_pyside_explains_which_python(monkeypatch, capsys, tmp_path):
+    """PySide6 가 없으면 '어느 파이썬에' 깔지까지 알려 주고 1 로 끝납니다."""
+    import sys
+
+    from syncnote import cli
+
+    monkeypatch.setitem(sys.modules, "syncnote.timetable.gui", None)   # import 실패 흉내
+    rc = cli.main(["-c", str(tmp_path / "config.toml"), "timetable", "edit"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "PySide6" in out and sys.executable in out and "-m pip install PySide6" in out
