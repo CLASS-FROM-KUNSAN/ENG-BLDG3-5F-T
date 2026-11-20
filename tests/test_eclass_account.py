@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from gymhall.eclass import anon
+from syncnote.eclass import anon
 
 
 # --- 마스킹 단위 테스트(브라우저 불필요) ------------------------------
@@ -177,10 +177,10 @@ class _Shim:
 
 @pytest.fixture
 def crawler(browser, server, tmp_path):
-    from gymhall.eclass import crawler as C
-    from gymhall.eclass.urls import Site
-    from gymhall.paths import Layout
-    from gymhall.state import Store
+    from syncnote.eclass import crawler as C
+    from syncnote.eclass.urls import Site
+    from syncnote.paths import Layout
+    from syncnote.state import Store
 
     pg = browser.new_page()
     c = C.Crawler(_Shim(pg), Site(base_url=server), Layout(tmp_path),

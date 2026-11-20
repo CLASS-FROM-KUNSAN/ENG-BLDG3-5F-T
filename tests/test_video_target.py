@@ -17,8 +17,8 @@ import time
 
 import pytest
 
-from gymhall.recorder import monitors as M
-from gymhall.recorder.video import VideoRecorder
+from syncnote.recorder import monitors as M
+from syncnote.recorder.video import VideoRecorder
 
 
 def mon(i, x=0, y=0, w=1920, h=1080, primary=False):
@@ -157,8 +157,8 @@ class Cfg:
 
 
 def session(tmp_path, **kw):
-    from gymhall.paths import Layout
-    from gymhall.recorder.session import RecordingSession
+    from syncnote.paths import Layout
+    from syncnote.recorder.session import RecordingSession
 
     return RecordingSession(Cfg(), Layout(tmp_path), "수업", **kw)
 
@@ -222,7 +222,7 @@ def test_audio_is_not_delayed(tmp_path):
     """
     import inspect
 
-    from gymhall.recorder.session import RecordingSession
+    from syncnote.recorder.session import RecordingSession
 
     src = inspect.getsource(RecordingSession._record_segment)
     assert src.index("audio_rec.start(") < src.index("video_rec.start("), \
@@ -243,7 +243,7 @@ def test_audio_is_not_delayed(tmp_path):
 def test_input_args_dispatches_to_the_windows_builder(monkeypatch):
     import os as os_mod
 
-    from gymhall.recorder import video as V
+    from syncnote.recorder import video as V
 
     monkeypatch.setattr(os_mod, "name", "nt")
     monkeypatch.setattr(V, "enumerate_monitors",
@@ -257,7 +257,7 @@ def test_input_args_passes_the_monitor_list_through(monkeypatch):
     """목록을 안 넘기면 monitor 설정이 통째로 죽습니다."""
     import os as os_mod
 
-    from gymhall.recorder import video as V
+    from syncnote.recorder import video as V
 
     monkeypatch.setattr(os_mod, "name", "nt")
     monkeypatch.setattr(V, "enumerate_monitors", lambda: [])
@@ -281,7 +281,7 @@ def test_a_broken_monitor_api_does_not_stop_recording(monkeypatch):
     """
     import os as os_mod
 
-    from gymhall.recorder import monitors as MM
+    from syncnote.recorder import monitors as MM
 
     monkeypatch.setattr(os_mod, "name", "nt")
     monkeypatch.setattr(MM, "_win_monitors",
@@ -291,25 +291,25 @@ def test_a_broken_monitor_api_does_not_stop_recording(monkeypatch):
     assert args[-1] == "desktop", "예외 때문에 녹화가 통째로 죽었습니다"
 
 
-# conftest 가 gymhall 로거를 WARNING 으로 묶어 둡니다. logger 를 안
+# conftest 가 syncnote 로거를 WARNING 으로 묶어 둡니다. logger 를 안
 # 적으면 caplog 가 root 만 낮춰서 INFO 가 레벨 검사에서 먼저 죽고,
 # 테스트는 "로그가 없다" 가 아니라 "못 봤다" 로 빨개집니다.
 def test_ddagrab_says_monitor_zero_means_primary(caplog):
     """gdigrab 의 desktop 과 뜻이 다릅니다. 모르면 보조 모니터를 찾아 헤맵니다."""
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         cmd([mon(1), mon(2, x=1920)], backend="ddagrab", monitor=0)
     assert "주 모니터 하나만" in caplog.text, caplog.text
 
 
 def test_gdigrab_desktop_says_nothing_of_the_sort(caplog):
     """gdigrab 의 desktop 은 전체 화면이 맞으므로 안내가 틀립니다."""
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         cmd([mon(1)], backend="gdigrab", monitor=0)
     assert "주 모니터 하나만" not in caplog.text
 
 
 def test_ddagrab_with_a_monitor_number_says_nothing(caplog):
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         args = cmd([mon(1), mon(2, x=1920)], backend="ddagrab", monitor=2)
     assert "output_idx=1" in args[-1]
     assert "주 모니터 하나만" not in caplog.text
@@ -324,7 +324,7 @@ def test_manual_record_start_gets_no_pre_roll():
     """
     import inspect
 
-    from gymhall import cli
+    from syncnote import cli
 
     src = inspect.getsource(cli.cmd_record_start)
     assert "video_not_before" not in src, "수동 녹화에 pre-roll 이 붙었습니다"
@@ -339,7 +339,7 @@ def test_watch_mode_gets_no_pre_roll_either():
     """watch 는 '프로그램이 떴다' 가 시작 신호입니다. 당길 앞이 없습니다."""
     import inspect
 
-    from gymhall import cli
+    from syncnote import cli
 
     assert "video_not_before" not in inspect.getsource(cli.cmd_record_watch)
 
@@ -352,7 +352,7 @@ def test_watch_mode_gets_no_pre_roll_either():
 #
 # 그래서 "맞는지" 가 아니라 "사용자에게 알리는지" 를 검사합니다.
 def test_ddagrab_warns_when_a_monitor_number_may_not_match(caplog):
-    with caplog.at_level("WARNING", logger="gymhall"):
+    with caplog.at_level("WARNING", logger="syncnote"):
         cmd([mon(1, primary=True), mon(2, x=1920)], backend="ddagrab", monitor=2)
     assert "드라이버가 정한 순서" in caplog.text, caplog.text
     assert "gdigrab" in caplog.text, "대안을 안 알려 줍니다"
@@ -362,13 +362,13 @@ def test_ddagrab_warns_when_a_monitor_number_may_not_match(caplog):
 
 def test_a_single_monitor_needs_no_such_warning(caplog):
     """화면이 하나면 번호가 0 하나뿐이라 틀릴 수가 없습니다."""
-    with caplog.at_level("WARNING", logger="gymhall"):
+    with caplog.at_level("WARNING", logger="syncnote"):
         cmd([mon(1, primary=True)], backend="ddagrab", monitor=1)
     assert "드라이버가 정한 순서" not in caplog.text
 
 
 def test_gdigrab_never_warns_about_driver_order(caplog):
     """gdigrab 은 좌표로 잘라내므로 이 문제가 없습니다."""
-    with caplog.at_level("WARNING", logger="gymhall"):
+    with caplog.at_level("WARNING", logger="syncnote"):
         cmd([mon(1, primary=True), mon(2, x=1920)], backend="gdigrab", monitor=2)
     assert "드라이버가 정한 순서" not in caplog.text

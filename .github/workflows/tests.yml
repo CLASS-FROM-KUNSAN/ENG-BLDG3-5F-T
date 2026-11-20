@@ -60,7 +60,7 @@ jobs:
           python - <<'PY'
           import sys; sys.path.insert(0, "src")
           from pathlib import Path
-          from gymhall import config
+          from syncnote import config
           text = Path("config.example.toml").read_text(encoding="utf-8")
           text = text.replace('username = ""', 'username = "TEST"', 1)
           Path("ci.toml").write_text(text, encoding="utf-8")
@@ -149,5 +149,5 @@ jobs:
           REM 같은 초에 몰리면 묵은 .pyc 가 그대로 쓰입니다. 그러면
           REM 테스트가(변이 테스트까지) 거짓으로 통과합니다.
           set PYTHONDONTWRITEBYTECODE=1
-          python -m gymhall --help
+          python -m syncnote --help
           python -m pytest -q

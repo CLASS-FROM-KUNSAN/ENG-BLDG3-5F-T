@@ -182,7 +182,7 @@ def run_backup(*, home: Path, uploader, state: HomeState, layout: Layout, machin
 
     def changed() -> Iterator[tuple[Path, int, int]]:
         """바뀐 파일만. 같은 크기·시각이면 해시도 계산하지 않습니다(경로 인덱스 조회)."""
-        # gymhall 데이터 폴더가 홈 아래 있으면 뺍니다(녹화는 따로 올라가고, 정리도 보호합니다).
+        # syncnote 데이터 폴더가 홈 아래 있으면 뺍니다(녹화는 따로 올라가고, 정리도 보호합니다).
         for path, size, mtime_ns in iter_home(
                 home, exclude_names=exclude_names, skip_dirs=[layout.root],
                 on_excluded=excluded.add, on_unreadable=unreadable.add):
@@ -282,7 +282,7 @@ def run_backup(*, home: Path, uploader, state: HomeState, layout: Layout, machin
         state.commit()
         log.info("사슬 고리 seq %d 를 올렸습니다: %s/%s (%s) — 파일 %d개, 묶음 %d개",
                  cur.seq, tag, mname, sha[:12], len(cur.entries), len(cur.bundles))
-        # gymhall.log 에는 파일 수가 많은 폴더 20개까지만. 전체는 home-chain.log 에 있습니다.
+        # syncnote.log 에는 파일 수가 많은 폴더 20개까지만. 전체는 home-chain.log 에 있습니다.
         groups = sorted(_group(e.path for e in cur.entries).items(),
                         key=lambda kv: (-len(kv[1]), kv[0]))
         for folder, files in groups[:_LOG_FOLDERS]:

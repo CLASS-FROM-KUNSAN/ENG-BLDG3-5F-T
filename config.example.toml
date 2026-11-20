@@ -1,11 +1,11 @@
 # =====================================================================
-#  GYM-W-HALL-2F  설정 파일
+#  Sync Note  설정 파일
 # ---------------------------------------------------------------------
 #  이 파일을 config.toml 로 복사한 뒤 값을 고치세요.
 #    copy config.example.toml config.toml
 #
 #  config.toml 은 .gitignore 에 등록되어 있어 커밋되지 않습니다.
-#  비밀번호/토큰은 여기 적지 말고 `python -m gymhall secrets set` 으로
+#  비밀번호/토큰은 여기 적지 말고 `python -m syncnote secrets set` 으로
 #  Windows 자격증명 관리자(DPAPI)에 저장하세요.
 # =====================================================================
 
@@ -15,7 +15,7 @@
 # ---------------------------------------------------------------------
 [general]
 # 모든 산출물이 저장되는 최상위 폴더.
-# 비워두면 %LOCALAPPDATA%\gym-w-hall-2f 를 씁니다.
+# 비워두면 %LOCALAPPDATA%\sync-note 를 씁니다.
 # 장소를 옮겨 다니며 쓸 때는 OneDrive/드롭박스 폴더를 피하세요(동기화 충돌).
 data_dir = ""
 
@@ -92,7 +92,7 @@ base_url  = "https://eclass.kunsan.ac.kr"
 login_url = "https://eclass.kunsan.ac.kr/"
 
 # 학번(아이디). 비밀번호는 여기 적지 마세요.
-#   python -m gymhall secrets set eclass
+#   python -m syncnote secrets set eclass
 username = ""
 
 # 브라우저 표시 여부. 처음 설정할 때는 false 로 두고 눈으로 확인하세요.
@@ -238,7 +238,7 @@ max_file_mb = 0
 # ---------------------------------------------------------------------
 # [eclass.menu_ids]
 #   eClass 좌측 메뉴는 내부적으로 menu_00092 같은 고정 ID 를 씁니다.
-#   이 값들은 소스코드(src/gymhall/eclass/urls.py)에 이미 들어 있으므로
+#   이 값들은 소스코드(src/syncnote/eclass/urls.py)에 이미 들어 있으므로
 #   보통은 비워 두면 됩니다.
 #
 #   학교가 LMS 를 개편해 수집이 안 될 때만 채우세요. 새 ID 는
@@ -301,7 +301,7 @@ enabled = true
 #   0 = 전체 바탕화면(기본). 모니터가 둘이면 둘을 가로로 이어 붙인
 #       그림이 나옵니다 — 빔프로젝터 쪽이 절반 크기로 줄고, 교탁
 #       화면에 떠 있는 메일까지 같이 올라갑니다.
-#   1,2,... = 그 화면만. 번호는 `python -m gymhall devices` 로 확인.
+#   1,2,... = 그 화면만. 번호는 `python -m syncnote devices` 로 확인.
 #
 # window_title 을 적어 두면 이 값은 무시됩니다(창 하나가 화면 하나보다
 # 좁으니 더 좁은 쪽이 이깁니다).
@@ -312,7 +312,7 @@ monitor = 0
 # 모니터가 두 개일 때 각각 독립 파일로 녹화합니다.
 #   monitors = [1, 2]  ->  <stem>_mon1.mkv, <stem>_mon2.mkv
 #   비워두면([]) 위 monitor 단수 설정을 그대로 씁니다.
-#   번호는 `python -m gymhall devices` 로 확인하세요.
+#   번호는 `python -m syncnote devices` 로 확인하세요.
 monitors = []
 
 # 캡처 방식 (Windows)
@@ -357,7 +357,7 @@ channels   = 2
 # --- 트랙 1: 시스템 소리 (스피커로 나가는 소리 = 온라인 강의 소리) ---
 system_enabled = true
 # 비우면 현재 기본 재생 장치를 자동으로 씁니다.
-# 특정 장치를 고르려면 `python -m gymhall devices` 로 이름을 확인하세요.
+# 특정 장치를 고르려면 `python -m syncnote devices` 로 이름을 확인하세요.
 system_device = ""
 system_gain_db = 0.0
 
@@ -438,9 +438,9 @@ watch_stop_grace_sec = 60
 # ---------------------------------------------------------------------
 # [recording.terminal] 터미널 녹음기 — FFmpeg / SoX / arecord
 #
-#   python -m gymhall audio record            지금 바로 (아래 값대로)
-#   python -m gymhall audio record --vad      소리가 날 때만 (SoX)
-#   python -m gymhall audio tools             설치된 도구와 실행될 명령 보기
+#   python -m syncnote audio record            지금 바로 (아래 값대로)
+#   python -m syncnote audio record --vad      소리가 날 때만 (SoX)
+#   python -m syncnote audio tools             설치된 도구와 실행될 명령 보기
 #
 # 화면 없이 **소리만** 받습니다. macOS·Linux 에서도 돌고, cron 이나
 # 작업 스케줄러에 그대로 걸 수 있습니다. 자세한 내용은
@@ -530,10 +530,10 @@ vad_stop_sec  = 3.0
 # =====================================================================
 #  2-1. 실시간 오디오 송출 (Tailscale 망 안에서만)
 #
-#   python -m gymhall stream start          지금 송출 (링크 -> GitHub 이슈)
-#   python -m gymhall stream schedule       시간표대로 수업마다 송출
-#   python -m gymhall stream link           링크가 어떻게 만들어질지 미리 보기
-#   python -m gymhall stream cleanup        비정상 종료로 남은 tailscale serve 정리
+#   python -m syncnote stream start          지금 송출 (링크 -> GitHub 이슈)
+#   python -m syncnote stream schedule       시간표대로 수업마다 송출
+#   python -m syncnote stream link           링크가 어떻게 만들어질지 미리 보기
+#   python -m syncnote stream cleanup        비정상 종료로 남은 tailscale serve 정리
 #
 # 소리를 mp3/aac 로 인코딩해 내장 서버(또는 Icecast)로 내보내고,
 # Tailscale 로 같은 tailnet 의 기기만 들을 수 있게 합니다. 링크가 생길
@@ -546,7 +546,7 @@ vad_stop_sec  = 3.0
 [stream]
 # "builtin" : 내장 HTTP 오디오 서버. 설치할 것이 없습니다.          [권장]
 # "icecast" : Icecast(오픈소스 스트리밍 서버)로 밉니다. Icecast 를 따로
-#             띄워 두고  python -m gymhall secrets set icecast  로 소스
+#             띄워 두고  python -m syncnote secrets set icecast  로 소스
 #             비밀번호를 저장하세요. 접속 토큰은 쓰지 않습니다.
 server = "builtin"
 
@@ -590,7 +590,7 @@ token_bytes = 16
 # [[recording.timetable]] 의 수업 시간 안이면 그 수업이 끝나는 시각에 끝나고,
 # 그 전에는 아래 어떤 조건(최대 송출 시간, 청취자 없음, 장애)으로도 멈추지
 # 않습니다. 수업 밖에서 켠 송출이 수업 시간에 들어가면 그 수업을 넘겨받습니다.
-# `python -m gymhall stream schedule` 은 시간표대로 기다렸다가 수업마다 송출합니다.
+# `python -m syncnote stream schedule` 은 시간표대로 기다렸다가 수업마다 송출합니다.
 follow_timetable = true
 # 송출할 수업 이름만 고르기 (비우면 시간표 전체). 예: ["자료구조", "운영체제"]
 timetable_slots = []
@@ -682,7 +682,7 @@ comment_on_rollback = false
 # =====================================================================
 #  2-2. 활동 기록 — PDF 폼 "필드 값"(키 입력 아님)
 #
-#   python -m gymhall activity gate      이 기기가 봉인 저장을 허용받는지 점검
+#   python -m syncnote activity gate      이 기기가 봉인 저장을 허용받는지 점검
 #
 # 녹음/녹화와 같은 타임라인에, PDF 폼에 입력한 값을 전사처럼 봉인 저장합니다.
 # 키 입력을 가로채지 않습니다 — 어댑터가 커밋된 "필드 값"만 읽습니다.
@@ -817,7 +817,7 @@ compute_type = "int8"
 cpu_threads = 0
 
 # 전사를 녹화 직후 바로 돌릴지, 아니면 대기열에 쌓아뒀다가
-# 나중에 `python -m gymhall transcribe queue` 로 한 번에 돌릴지.
+# 나중에 `python -m syncnote transcribe queue` 로 한 번에 돌릴지.
 #   "immediate" : 녹화 종료 직후 실행
 #   "queue"     : 대기열에만 넣음 (배터리/발열에 유리)  [저사양 권장]
 mode = "queue"
@@ -882,7 +882,7 @@ extra_phrases = []
 # ---------------------------------------------------------------------
 [transcribe.openai]
 # engine = "openai" 일 때만 사용.
-# API 키는 여기 적지 말고: python -m gymhall secrets set openai
+# API 키는 여기 적지 말고: python -m syncnote secrets set openai
 model = "whisper-1"
 # 파일이 25MB를 넘으면 잘라서 보냅니다.
 chunk_minutes = 10
@@ -891,7 +891,7 @@ chunk_minutes = 10
 # ---------------------------------------------------------------------
 [backup.home]
 # 강의실 PC 의 홈 디렉터리(%USERPROFILE%)를 매일 GitHub 릴리스에 올립니다.
-#   python -m gymhall backup home      (예약 작업: HomeBackup)
+#   python -m syncnote backup home      (예약 작업: HomeBackup)
 # 릴리스 이름은 home-2026-11-13 처럼 날짜별이라 e-class/녹화와 섞이지 않습니다.
 #
 # 제외되는 것:
@@ -931,7 +931,7 @@ exclude_names = [
 # 올라간 파일을 로컬에서 지웁니다(디렉터리는 남김).  예약 작업: HomePrune
 # 로컬 기록이 아니라 GitHub 에 올라간 해시 사슬을 내려받아 확인하고,
 # 지우기 직전에 파일 해시가 사슬의 값과 같을 때만 지웁니다.
-# 지운 목록: %LOCALAPPDATA%\gym-w-hall-2f\logs\home-prune.log
+# 지운 목록: %LOCALAPPDATA%\sync-note\logs\home-prune.log
 enabled = false
 
 # 올린 지 이 시간이 지난 것만 지웁니다.

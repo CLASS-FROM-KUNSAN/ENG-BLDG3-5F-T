@@ -12,9 +12,9 @@ import urllib.request
 
 import pytest
 
-from gymhall import cli
-from gymhall import config as cfgmod
-from gymhall.stream import capture, hub, live, notify, tailnet
+from syncnote import cli
+from syncnote import config as cfgmod
+from syncnote.stream import capture, hub, live, notify, tailnet
 
 STATUS = {
     "BackendState": "Running",
@@ -355,7 +355,7 @@ def test_cli_flags_override_config():
 # ---------------------------------------------------------------------------
 from datetime import datetime, timedelta  # noqa: E402
 
-from gymhall.recorder import schedule as sched  # noqa: E402
+from syncnote.recorder import schedule as sched  # noqa: E402
 
 
 class FakeEncoder:
@@ -538,7 +538,7 @@ class FakeMicEncoder(FakeEncoder):
 
 
 def test_stream_mic_silent_zero_triggers_switch_to_alternate_mic(monkeypatch):
-    from gymhall.recorder import devices
+    from syncnote.recorder import devices
 
     sess = fake_session(
         monkeypatch,
@@ -575,7 +575,7 @@ def test_stream_mic_silent_zero_triggers_switch_to_alternate_mic(monkeypatch):
 
 
 def test_stream_mic_switch_refused_when_device_explicitly_fixed(monkeypatch):
-    from gymhall.recorder import devices
+    from syncnote.recorder import devices
 
     # 장치가 명시되어 있고 fallback_default_device = False 인 고정 상태
     sess = fake_session(
@@ -603,7 +603,7 @@ def test_stream_mic_switch_refused_when_device_explicitly_fixed(monkeypatch):
 
 
 def test_stream_mic_all_dead_triggers_backoff_and_safe_recovery(monkeypatch):
-    from gymhall.recorder import devices
+    from syncnote.recorder import devices
 
     sess = fake_session(
         monkeypatch,

@@ -135,7 +135,7 @@ def pick(monitors: list[Monitor], want: int) -> Monitor | None:
             return m
     log.warning(
         "monitor=%d 로 설정했는데 화면이 %d개뿐입니다. 전체 바탕화면을 잡습니다. "
-        "python -m gymhall devices 로 번호를 확인하세요.",
+        "python -m syncnote devices 로 번호를 확인하세요.",
         want, len(monitors),
     )
     return None

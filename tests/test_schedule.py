@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from gymhall.recorder import schedule as S
+from syncnote.recorder import schedule as S
 
 TIMETABLE = [
     {"name": "자료구조", "day": "mon", "start": "09:00", "end": "10:50"},

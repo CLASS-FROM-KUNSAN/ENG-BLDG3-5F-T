@@ -13,11 +13,11 @@ PC 에서 나는 소리(또는 마이크)를 실시간으로 내보내고, **같
 ```
 
 ```sh
-python -m gymhall stream link       # 먼저: Tailscale 상태와 만들어질 링크 점검
-python -m gymhall stream start      # 송출 시작 (Ctrl+C 로 멈춤)
-python -m gymhall stream schedule   # 시간표대로 수업마다 송출
-python -m gymhall stream start --dry-run   # 이슈는 만들지 않고 내용만 출력
-python -m gymhall stream cleanup    # 강제 종료로 남은 tailscale serve 끄기
+python -m syncnote stream link       # 먼저: Tailscale 상태와 만들어질 링크 점검
+python -m syncnote stream start      # 송출 시작 (Ctrl+C 로 멈춤)
+python -m syncnote stream schedule   # 시간표대로 수업마다 송출
+python -m syncnote stream start --dry-run   # 이슈는 만들지 않고 내용만 출력
+python -m syncnote stream cleanup    # 강제 종료로 남은 tailscale serve 끄기
 ```
 
 Windows 는 `scripts\stream_now.bat`, macOS·Linux 는 `scripts/stream_now.sh`.
@@ -34,9 +34,9 @@ Windows 는 `scripts\stream_now.bat`, macOS·Linux 는 `scripts/stream_now.sh`.
 1. **Tailscale** 설치 후 로그인 (`tailscale up`). 듣는 기기도 같은 tailnet 에.
 2. 관리 콘솔(DNS 탭)에서 **MagicDNS** 와 **HTTPS Certificates** 켜기 —
    `serve` 모드에 필요합니다.
-3. **GitHub 토큰** (`python -m gymhall secrets set github`). 이슈 쓰기 권한이
+3. **GitHub 토큰** (`python -m syncnote secrets set github`). 이슈 쓰기 권한이
    있어야 합니다(classic: `repo`, fine-grained: Issues read/write).
-4. `python -m gymhall stream link` 로 점검.
+4. `python -m syncnote stream link` 로 점검.
 
 ---
 
@@ -69,7 +69,7 @@ Windows 는 `scripts\stream_now.bat`, macOS·Linux 는 `scripts/stream_now.sh`.
 | `ffmpeg` | ffmpeg 가 장치를 직접 엶 (dshow / avfoundation / pulse) | soundcard 가 없는 맥·리눅스 |
 | `auto` | soundcard 가 있으면 soundcard | 기본 |
 
-`device` 는 비우면 기본 장치입니다. 이름은 `python -m gymhall devices` 로 확인.
+`device` 는 비우면 기본 장치입니다. 이름은 `python -m syncnote devices` 로 확인.
 
 ---
 
@@ -137,8 +137,8 @@ on_change = "comment"
 `config.toml` 의 `[[recording.timetable]]` 이 송출의 시작과 끝을 정합니다.
 
 ```sh
-python -m gymhall stream schedule          # 시간표대로 기다렸다가 수업마다 송출
-python -m gymhall stream schedule --show   # 송출할 수업만 보기
+python -m syncnote stream schedule          # 시간표대로 기다렸다가 수업마다 송출
+python -m syncnote stream schedule --show   # 송출할 수업만 보기
 ```
 
 - 수업 시간 안이면 송출은 **그 수업이 끝나는 시각에 끝납니다.** 그 전에는
@@ -219,6 +219,6 @@ python -m gymhall stream schedule --show   # 송출할 수업만 보기
 | `HTTPS 443 포트를 이미 다른 것이 쓰고 있습니다` | 기존 serve/funnel. `https_port = 10000` 처럼 바꾸기 |
 | `serve/funnel 은 MagicDNS 이름이 필요합니다` | 관리 콘솔 DNS 탭에서 MagicDNS·HTTPS 켜기, 또는 `mode = "direct"` |
 | direct 모드인데 다른 기기에서 안 열림 | Windows 방화벽에서 Python 의 개인/공용 네트워크 허용 |
-| 링크는 열리는데 무음 | `source`/`device` 확인 (`python -m gymhall devices`) |
-| 강제 종료 뒤 serve 가 남음 | `python -m gymhall stream cleanup` |
+| 링크는 열리는데 무음 | `source`/`device` 확인 (`python -m syncnote devices`) |
+| 강제 종료 뒤 serve 가 남음 | `python -m syncnote stream cleanup` |
 | 이슈가 안 올라옴 | 로그 확인: public 저장소, 토큰 권한, 이슈 기능 꺼짐 |

@@ -1,11 +1,11 @@
-/* gymhall 활동 기록 — 웹 뷰어 콘텐츠 스크립트 (A/B 어댑터)
+/* syncnote 활동 기록 — 웹 뷰어 콘텐츠 스크립트 (A/B 어댑터)
  *
  * 본인 PDF 웹 뷰어(acrobat.adobe.com 등)에서 채운 폼 필드 값을 읽어 배경
  * 서비스워커 → 네이티브 호스트로 보냅니다. 키 입력은 가로채지 않고 필드
  * 커밋(change/blur) 값만 봅니다. 자격증명은 **DOM 신호로 제외**합니다.
  *
  * 분류 로직(classify/scan)은 chrome API 와 무관한 순수 함수라, Playwright 로
- * 실제 브라우저 DOM 에 대해 자동 검증합니다(window.__gymhallScan). 라이브 전송은
+ * 실제 브라우저 DOM 에 대해 자동 검증합니다(window.__syncnoteScan). 라이브 전송은
  * 확장 컨텍스트(chrome.runtime 존재)에서만 붙습니다.
  *
  * 정직한 한계: acrobat.adobe.com 은 Adobe 의 독자 웹앱이라 필드 DOM 구조가
@@ -31,7 +31,7 @@
   ];
 
   function siteSelector() {
-    var host = String(window.__gymhallProfileHost || location.hostname || "").toLowerCase();
+    var host = String(window.__syncnoteProfileHost || location.hostname || "").toLowerCase();
     for (var i = 0; i < SITE_PROFILES.length; i++) {
       if (SITE_PROFILES[i].match.test(host)) return SITE_PROFILES[i].fieldSelector;
     }
@@ -115,8 +115,8 @@
   }
 
   // 자동 검증용(순수 로직).
-  window.__gymhallScan = function () { return scan(document); };
-  window.__gymhallClassify = classify;
+  window.__syncnoteScan = function () { return scan(document); };
+  window.__syncnoteClassify = classify;
 
   // 라이브 전송 — 확장 컨텍스트에서만.
   if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {

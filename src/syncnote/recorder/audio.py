@@ -171,7 +171,7 @@ class AudioTrack(threading.Thread):
                         if not warned and silent_for >= self.silence_warn_sec:
                             log.warning(
                                 "[%s] %.0f초 동안 무음입니다. 장치 선택이 잘못됐을 수 있습니다. "
-                                "python -m gymhall devices 로 확인하세요.",
+                                "python -m syncnote devices 로 확인하세요.",
                                 self.track_name, silent_for,
                             )
                             warned = True
@@ -208,7 +208,7 @@ class AudioTrack(threading.Thread):
                 log.warning(
                     "[%s] 전 구간 무음입니다. 잡은 장치는 '%s' 였습니다. "
                     "이게 의도한 장치가 아니면 config.toml 의 %s_device 에 "
-                    "이름 일부를 적으세요(python -m gymhall devices 로 확인).",
+                    "이름 일부를 적으세요(python -m syncnote devices 로 확인).",
                     self.track_name, self.device_label, self.track_name,
                 )
                 # '조용했다' 와 '아무것도 안 왔다' 는 다른 고장입니다.

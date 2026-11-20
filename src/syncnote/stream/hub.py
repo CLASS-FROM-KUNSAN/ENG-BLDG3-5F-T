@@ -137,7 +137,7 @@ def make_server(hub: Hub, *, host: str, port: int, path: str, codec: str, token:
     ctype = CONTENT_TYPES[codec]
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "gymhall-stream"
+        server_version = "syncnote-stream"
         sys_version = ""
 
         def log_message(self, fmt, *args):  # noqa: A003 - http.server 의 이름

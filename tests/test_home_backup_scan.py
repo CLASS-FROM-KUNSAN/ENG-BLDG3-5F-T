@@ -14,8 +14,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from gymhall.backup import scan as scan_mod
-from gymhall.backup.scan import (
+from syncnote.backup import scan as scan_mod
+from syncnote.backup.scan import (
     DEFAULT_EXCLUDE_NAMES,
     FILE_ATTRIBUTE_OFFLINE,
     FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS,
@@ -124,11 +124,11 @@ def test_files_are_sorted_by_relative_path(tmp_path):
     assert rels == sorted(rels)
 
 
-def test_skip_dirs_excludes_the_gymhall_data_folder(tmp_path):
+def test_skip_dirs_excludes_the_syncnote_data_folder(tmp_path):
     home = tmp_path / "h"
-    _w(home / "gymhall-data/recordings/a.mkv")
+    _w(home / "syncnote-data/recordings/a.mkv")
     _w(home / "Documents/a.txt")
-    res = scan_home(home, exclude_names=[], skip_dirs=[home / "gymhall-data"])
+    res = scan_home(home, exclude_names=[], skip_dirs=[home / "syncnote-data"])
     assert _rels(home, res) == {"Documents/a.txt"}
 
 
@@ -370,7 +370,7 @@ def test_a_lone_surrogate_directory_is_not_descended(tmp_path, monkeypatch):
 
 
 def test_default_exclude_names_come_from_config():
-    from gymhall.config import DEFAULTS
+    from syncnote.config import DEFAULTS
 
     assert DEFAULTS["backup"]["home"]["exclude_names"] == DEFAULT_EXCLUDE_NAMES
     assert DEFAULT_EXCLUDE_NAMES is not DEFAULTS["backup"]["home"]["exclude_names"]

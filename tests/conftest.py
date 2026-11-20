@@ -35,7 +35,7 @@ sys.path.insert(0, str(REPO / "src"))
 @pytest.fixture(scope="session", autouse=True)
 def _quiet_logging():
     """로그가 테스트 출력을 덮지 않게 파일로만 보냅니다."""
-    from gymhall.logging_setup import setup
+    from syncnote.logging_setup import setup
 
     setup(Path(tempfile.mkdtemp()) / "logs", level="WARNING", console=False)
 

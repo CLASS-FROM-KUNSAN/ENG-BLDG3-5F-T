@@ -25,9 +25,9 @@ sync_playwright = pytest.importorskip(
     "playwright.sync_api", reason="playwright 미설치"
 ).sync_playwright
 
-from gymhall.eclass import anon  # noqa: E402
-from gymhall.eclass import crawler as C  # noqa: E402
-from gymhall.eclass.urls import Site  # noqa: E402
+from syncnote.eclass import anon  # noqa: E402
+from syncnote.eclass import crawler as C  # noqa: E402
+from syncnote.eclass.urls import Site  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
 MESSAGES = "eclass_message_list.html"
@@ -173,8 +173,8 @@ class _Shim:
 
 @pytest.fixture
 def crawler(browser, server, tmp_path):
-    from gymhall.paths import Layout
-    from gymhall.state import Store
+    from syncnote.paths import Layout
+    from syncnote.state import Store
 
     pg = browser.new_page()
     pg.goto(f"{server}/{MESSAGES}")
@@ -236,8 +236,8 @@ class _BadPage:
 
 
 def _crawler_with(page, tmp_path):
-    from gymhall.paths import Layout
-    from gymhall.state import Store
+    from syncnote.paths import Layout
+    from syncnote.state import Store
 
     return C.Crawler(_Shim(page), Site(), Layout(tmp_path),
                      Store.open(tmp_path / "s.json"), term="2026-2", menus={})
@@ -279,12 +279,12 @@ def test_page_signature_tolerates_a_read_failure(tmp_path):
 # --- 첨부 실패와 '완료' 를 섞지 않기 -----------------------------------
 # 리뷰 지적: 첨부를 못 받아도 게시글을 mark_downloaded 로 기록하면,
 # 다음 실행이 그 글을 건너뛰어 실패한 첨부를 영영 다시 받지 않습니다.
-from gymhall.eclass.crawler import Attachments  # noqa: E402
+from syncnote.eclass.crawler import Attachments  # noqa: E402
 
 
 def _c(tmp_path):
-    from gymhall.paths import Layout
-    from gymhall.state import Store
+    from syncnote.paths import Layout
+    from syncnote.state import Store
 
     return C.Crawler(_Shim(_BadPage()), Site(), Layout(tmp_path),
                      Store.open(tmp_path / "s.json"), term="2026-2", menus={})

@@ -5,7 +5,7 @@
 
 그다음 **로그 파일**을 보세요. 작업 스케줄러로 돌리면 창이 안 뜨므로
 로그가 유일한 단서입니다. 위치는 `doctor.bat` 이 알려 주는 데이터 폴더의
-`logs\gymhall.log` 입니다.
+`logs\syncnote.log` 입니다.
 
 ---
 
@@ -109,7 +109,7 @@ scripts\eclass_probe.bat
 1. `scripts\eclass_probe.bat` 실행
 2. 결과 폴더의 `02-home-after-login.html` 에서
    `select[name="courseDTO.courseId"]` 가 아직 있는지 확인
-3. 없다면 `src/gymhall/eclass/crawler.py` 의 `list_courses()` 선택자 수정
+3. 없다면 `src/syncnote/eclass/crawler.py` 의 `list_courses()` 선택자 수정
 
 ### 특정 메뉴가 수집되지 않습니다
 
@@ -126,7 +126,7 @@ scripts\eclass_probe.bat
 직접 보세요.
 
 ```bat
-.venv\Scripts\python -m gymhall --log-level DEBUG eclass sync --no-headless --no-upload
+.venv\Scripts\python -m syncnote --log-level DEBUG eclass sync --no-headless --no-upload
 ```
 
 ### 같은 파일을 계속 다시 받습니다
@@ -187,7 +187,7 @@ split_size_mb = 800   # 작게 쪼개면 한 번에 올리는 양이 줄어듭�
 처음 쓸 때 수백 MB ~ 수 GB 를 받습니다. 인터넷이 되는 곳에서 미리:
 
 ```bat
-.venv\Scripts\python -m gymhall transcribe warmup
+.venv\Scripts\python -m syncnote transcribe warmup
 ```
 
 ### 너무 느립니다
@@ -229,7 +229,7 @@ vad_filter  = true     # 무음 구간을 건너뜁니다
 
 ### 작업이 실행되지 않습니다
 
-1. 작업 스케줄러에서 `GYM-W-HALL-2F` 폴더의 작업을 마우스 오른쪽 클릭
+1. 작업 스케줄러에서 `Sync Note` 폴더의 작업을 마우스 오른쪽 클릭
    → **실행** 으로 직접 돌려 봅니다.
 2. "마지막 실행 결과" 코드를 봅니다.
 3. 그래도 모르겠으면 `.vbs` 를 거치지 않고 `.bat` 을 직접 실행해
@@ -251,7 +251,7 @@ vad_filter  = true     # 무음 구간을 건너뜁니다
 ## 그래도 안 되면
 
 ```bat
-.venv\Scripts\python -m gymhall --log-level DEBUG <명령>
+.venv\Scripts\python -m syncnote --log-level DEBUG <명령>
 ```
 
 으로 돌린 로그를 이슈에 붙여 주세요. **로그에서 학번, 이름, 토큰이

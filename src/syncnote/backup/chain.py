@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 SCHEMA = 1
-KIND = "gymhall-home-chain"
+KIND = "syncnote-home-chain"
 
 
 class ChainError(Exception):

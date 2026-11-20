@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from gymhall.transcribe.language import (
+from syncnote.transcribe.language import (
     describe,
     parse,
     restrict,

@@ -1,5 +1,5 @@
 @echo off
 call "%~dp0_common.bat"
-"%PY%" -m gymhall record schedule --show
+"%PY%" -m syncnote record schedule --show
 echo.
 pause

@@ -211,7 +211,7 @@ class VideoRecorder:
                 log.error("ffmpeg 강제 종료. 영상 끝부분이 잘릴 수 있습니다.")
                 self._proc.kill()
 
-        handle = getattr(self._proc, "_gymhall_stderr", None)
+        handle = getattr(self._proc, "_syncnote_stderr", None)
         if handle is not None:
             try:
                 handle.close()

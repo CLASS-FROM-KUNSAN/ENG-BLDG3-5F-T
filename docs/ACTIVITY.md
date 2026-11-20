@@ -7,7 +7,7 @@
 > **책임 고지.** 이 기능은 **당신 전용 기기에서만** 쓰세요. 기기를 공유하면 타인의
 > 입력까지 담길 수 있습니다. 결과물은 **private 저장소에만** 두세요.
 
-> **구현 상태.** **구현됨** (`src/gymhall/activity/`): 하드웨어/OS 게이트 + 정책 엔진 +
+> **구현 상태.** **구현됨** (`src/syncnote/activity/`): 하드웨어/OS 게이트 + 정책 엔진 +
 > SQLite 봉인 저장소(AES-GCM) + DEK 관리(DPAPI) + ingest 파이프라인 + 네이티브 메시징
 > 길이-프레이밍 + **C(Acrobat) 사이드카 워처(받는 쪽)**.
 > \+ **브라우저 확장**(`extension/`: content/background) + 네이티브 호스트 등록.
@@ -43,7 +43,7 @@
 
 봉인 저장은 이 게이트를 통과해야만 시작합니다. 하나라도 실패하면 저장 API 가
 `GateError` 를 던지고, 메모리 버퍼는 폐기, **임시 평문 파일은 만들어지지 않습니다.**
-`python -m gymhall activity gate` 로 지금 점검할 수 있습니다.
+`python -m syncnote activity gate` 로 지금 점검할 수 있습니다.
 
 | 이유코드 | 검사(비관리자로 읽음) | 통과 조건 |
 |---|---|---|
@@ -168,9 +168,9 @@ retention_days = 0
 
 ## 9. 명령
 ```
-python -m gymhall activity gate                 이 기기가 봉인 저장을 허용받는지 점검
-python -m gymhall activity export [--break-glass] 봉인 로그를 복호해 JSONL 로(읽기 게이트 적용)
-python -m gymhall activity watch-acrobat [--once] 데스크톱 Acrobat 사이드카 감시→봉인 (C)
+python -m syncnote activity gate                 이 기기가 봉인 저장을 허용받는지 점검
+python -m syncnote activity export [--break-glass] 봉인 로그를 복호해 JSONL 로(읽기 게이트 적용)
+python -m syncnote activity watch-acrobat [--once] 데스크톱 Acrobat 사이드카 감시→봉인 (C)
 ```
 (브라우저로 받는 캡처 명령/호스트 등록은 A 확장 증분에서 추가.)
 

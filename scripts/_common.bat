@@ -29,4 +29,4 @@ REM 동봉 ffmpeg 가 있으면 PATH 에 추가
 if exist "%REPO%\tools\ffmpeg\bin\ffmpeg.exe" set "PATH=%REPO%\tools\ffmpeg\bin;%PATH%"
 
 REM config.toml 위치를 명시 (작업 스케줄러는 작업 폴더가 엉뚱할 수 있음)
-if exist "%REPO%\config.toml" set "GYMHALL_CONFIG=%REPO%\config.toml"
+if exist "%REPO%\config.toml" set "SYNCNOTE_CONFIG=%REPO%\config.toml"

@@ -3,7 +3,7 @@
 모델은 처음 쓸 때 자동으로 내려받습니다(수백 MB ~ 수 GB).
 네트워크가 없는 강의실에서 처음 돌리면 실패하므로,
 설치 직후 한 번은 인터넷이 되는 곳에서 돌려 두세요.
-  python -m gymhall transcribe warmup
+  python -m syncnote transcribe warmup
 """
 
 from __future__ import annotations

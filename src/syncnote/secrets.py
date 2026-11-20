@@ -15,7 +15,7 @@ import getpass
 import os
 from dataclasses import dataclass
 
-SERVICE = "gym-w-hall-2f"
+SERVICE = "sync-note"
 
 
 @dataclass(frozen=True)
@@ -28,10 +28,10 @@ class Slot:
 
 
 SLOTS: dict[str, Slot] = {
-    "eclass": Slot("eclass_password", "GYMHALL_ECLASS_PASSWORD", "Eclass 로그인 비밀번호"),
+    "eclass": Slot("eclass_password", "SYNCNOTE_ECLASS_PASSWORD", "Eclass 로그인 비밀번호"),
     "github": Slot("github_token", "GITHUB_TOKEN", "GitHub Personal Access Token (repo 권한)"),
     "openai": Slot("openai_api_key", "OPENAI_API_KEY", "OpenAI API 키"),
-    "icecast": Slot("icecast_source_password", "GYMHALL_ICECAST_PASSWORD",
+    "icecast": Slot("icecast_source_password", "SYNCNOTE_ICECAST_PASSWORD",
                     "Icecast 소스 비밀번호 (stream.server = \"icecast\" 일 때만)"),
 }
 
@@ -80,7 +80,7 @@ def get(slot_name: str, required: bool = True) -> str | None:
     if required:
         raise SecretsError(
             f"{slot.label} 을(를) 찾을 수 없습니다.\n"
-            f"  저장:   python -m gymhall secrets set {slot_name}\n"
+            f"  저장:   python -m syncnote secrets set {slot_name}\n"
             f"  또는 환경변수 {slot.env} 를 설정하세요."
         )
     return None

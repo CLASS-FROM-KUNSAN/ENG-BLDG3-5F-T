@@ -14,6 +14,6 @@ ignore = [
 [lint.per-file-ignores]
 # CLI 핸들러는 argparse 가 넘기는 공통 시그니처(args)를 받습니다.
 # 쓰지 않는 핸들러도 같은 모양이어야 배선이 단순해집니다.
-"src/gymhall/cli.py" = ["ARG001"]
+"src/syncnote/cli.py" = ["ARG001"]
 # ARG004: 가짜 객체는 실제 API 시그니처를 흉내 내야 해서 쓰지 않는 인자가 생깁니다.
 "tests/*" = ["ARG001", "ARG004", "ARG005", "B011", "SIM117", "PTH"]

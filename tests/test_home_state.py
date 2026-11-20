@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from gymhall.backup.chain import Link
-from gymhall.backup.homestate import FileRow, HomeState, PendingRow
+from syncnote.backup.chain import Link
+from syncnote.backup.homestate import FileRow, HomeState, PendingRow
 
 
 def _p(path, seq, sha="a" * 64):

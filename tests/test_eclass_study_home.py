@@ -26,8 +26,8 @@ sync_playwright = pytest.importorskip(
     "playwright.sync_api", reason="playwright 미설치"
 ).sync_playwright
 
-from gymhall.eclass.crawler import Crawler  # noqa: E402
-from gymhall.eclass.urls import Site, parse_course_option  # noqa: E402
+from syncnote.eclass.crawler import Crawler  # noqa: E402
+from syncnote.eclass.urls import Site, parse_course_option  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
 STUDY_HOME = FIXTURES / "eclass_study_home.html"
@@ -188,8 +188,8 @@ class _Shim:
 
 @pytest.fixture
 def crawler(browser, server, tmp_path):
-    from gymhall.paths import Layout
-    from gymhall.state import Store
+    from syncnote.paths import Layout
+    from syncnote.state import Store
 
     pg = browser.new_page()
     pg.goto(f"{server}/{STUDY_HOME.name}")
@@ -265,7 +265,7 @@ def test_failing_to_step_is_warned_not_silent(crawler, caplog):
 def test_step_week_does_not_raise_when_nothing_moves(crawler):
     """못 넘기면 False 일 뿐, 예외로 올라가면 과목 전체가 날아갑니다.
 
-    (왜 멈췄는지는 debug 로그에 남지만, gymhall 로거는 propagate 를
+    (왜 멈췄는지는 debug 로그에 남지만, syncnote 로거는 propagate 를
      꺼 두어서 caplog 로 보이지 않습니다. 여기서는 계약만 봅니다.)
     """
     assert crawler._step_week(Crawler.CURRICULUM_NEXT) is False

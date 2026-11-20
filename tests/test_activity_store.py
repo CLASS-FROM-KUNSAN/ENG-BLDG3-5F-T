@@ -14,7 +14,7 @@ pytest.importorskip("cryptography", reason="cryptography 미설치")
 
 from cryptography.exceptions import InvalidTag  # noqa: E402
 
-from gymhall.activity.store import SealedStore  # noqa: E402
+from syncnote.activity.store import SealedStore  # noqa: E402
 
 DEK = b"\x01" * 32
 
@@ -73,7 +73,7 @@ def test_wrong_dek_cannot_read(tmp_path):
 
 @pytest.mark.skipif(os.name != "nt", reason="DPAPI 는 Windows 전용")
 def test_kms_dek_roundtrip_via_dpapi(tmp_path):
-    from gymhall.activity import kms
+    from syncnote.activity import kms
 
     path = tmp_path / "dek.bin"
     dek1 = kms.load_or_create(path)

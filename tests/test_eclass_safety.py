@@ -20,10 +20,10 @@ from pathlib import Path
 
 import pytest
 
-from gymhall.eclass.crawler import Course, Crawler
-from gymhall.eclass.urls import RISKY_MENUS, Site
-from gymhall.paths import Layout
-from gymhall.state import Store
+from syncnote.eclass.crawler import Course, Crawler
+from syncnote.eclass.urls import RISKY_MENUS, Site
+from syncnote.paths import Layout
+from syncnote.state import Store
 
 ALL_MENUS = {
     "lecture_list": True, "syllabus": True, "notice": True,

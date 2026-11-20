@@ -246,7 +246,7 @@ class Session:
 
             password = secrets.get("icecast", required=False) or ""
             if not password:
-                raise StreamError("Icecast 소스 비밀번호가 없습니다.  python -m gymhall secrets set icecast")
+                raise StreamError("Icecast 소스 비밀번호가 없습니다.  python -m syncnote secrets set icecast")
             out = capture.icecast_url(host=s.ic_host, port=s.ic_port, mount=s.ic_mount,
                                       user=s.ic_user, password=password)
             ctype = hub.CONTENT_TYPES[s.codec]
@@ -501,7 +501,7 @@ class Session:
 
             if not self._try_start() and not self._recover("시작 직후 소리가 나오지 않음"):
                 reason = "시작하지 못함"
-                log.error("송출을 시작하지 못했습니다. 장치 설정을 확인하세요 (python -m gymhall devices).")
+                log.error("송출을 시작하지 못했습니다. 장치 설정을 확인하세요 (python -m syncnote devices).")
                 return 1
 
             if s.ts_enabled and s.ts_require_online and not (node and node.running and node.online):

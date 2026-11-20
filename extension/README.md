@@ -1,4 +1,4 @@
-# gymhall 활동 기록 — 브라우저 확장 (웹 PDF 뷰어)
+# syncnote 활동 기록 — 브라우저 확장 (웹 PDF 뷰어)
 
 본인 PDF 웹 뷰어(`acrobat.adobe.com` 등)에서 채운 **폼 필드 값**을 읽어 로컬
 봉인 저장소로 보냅니다. 키 입력을 가로채지 않고 필드 커밋 값만 봅니다.
@@ -29,8 +29,8 @@ background.js   네이티브 메시징(connectNative)으로 로컬 호스트에 
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\register_host.ps1 -ExtensionId <로드한_확장_ID>
    ```
-   호스트 매니페스트(`extension\host\com.gymhall.activity.json`)와 HKCU 레지스트리
-   키를 만듭니다(런처 = `scripts\activity_host.bat` → `python -m gymhall.activity.native_host`).
+   호스트 매니페스트(`extension\host\com.syncnote.activity.json`)와 HKCU 레지스트리
+   키를 만듭니다(런처 = `scripts\activity_host.bat` → `python -m syncnote.activity.native_host`).
    지우려면 `-Remove`. **등록 로직은 실기에서 매니페스트·레지스트리 기록까지 검증했습니다**;
    브라우저↔호스트 실제 전송은 아래 수동 확인으로 봅니다.
 3. `config.toml` 에서 `activity.enabled=true`, `machine_is_private=true`,
@@ -41,14 +41,14 @@ background.js   네이티브 메시징(connectNative)으로 로컬 호스트에 
 확장 로직·네이티브 호스트·정책·봉인 저장소는 **각각 자동 검증**됐습니다(Playwright·
 pytest). 유일하게 자동화 안 된 건 Chrome 의 네이티브 메시징 전송 자체입니다. 한 번 확인:
 1. 허용 오리진의 웹 PDF 뷰어에서 폼에 값을 입력(커밋).
-2. `python -m gymhall activity export` → 그 값이 봉인되어 복호됨, 비밀번호 필드는 없음.
+2. `python -m syncnote activity export` → 그 값이 봉인되어 복호됨, 비밀번호 필드는 없음.
 
 ## 라이브 확인 (acrobat.adobe.com)
 그 사이트에서 폼 PDF 를 연 뒤, 개발자도구 콘솔에 붙여 넣으면 "무엇을 담고 무엇을
 제외할지"를 저장 없이 미리 봅니다(제외 로직만 실행):
 ```js
 // content.js 를 붙여 넣은 뒤:
-__gymhallScan()   // { captured:[...], skipped:[...] }
+__syncnoteScan()   // { captured:[...], skipped:[...] }
 ```
 `captured` 가 비어 있으면 Adobe 가 폼을 표준 DOM 으로 노출하지 않는다는 뜻이고,
 그 경우 선택자 보강이나 다른 접근이 필요합니다.

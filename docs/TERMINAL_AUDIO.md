@@ -9,12 +9,12 @@
 - 셋 중 **SoX** 는 소리가 날 때만 녹음하는 **소리 감지(VAD)** 를 합니다.
 
 ```sh
-python -m gymhall audio tools                 # 설치된 도구와 실행될 명령 보기
-python -m gymhall audio record                # [recording.terminal] 설정대로 한 번
-python -m gymhall audio record -t 60 -f mp3   # 60초, mp3
-python -m gymhall audio record --vad          # 소리가 나면 시작, 3초 조용하면 끝 (SoX)
-python -m gymhall audio record --vad --loop   # 위를 계속 반복 (상시 감시)
-python -m gymhall audio record --print        # 실행하지 않고 명령만 출력
+python -m syncnote audio tools                 # 설치된 도구와 실행될 명령 보기
+python -m syncnote audio record                # [recording.terminal] 설정대로 한 번
+python -m syncnote audio record -t 60 -f mp3   # 60초, mp3
+python -m syncnote audio record --vad          # 소리가 나면 시작, 3초 조용하면 끝 (SoX)
+python -m syncnote audio record --vad --loop   # 위를 계속 반복 (상시 감시)
+python -m syncnote audio record --print        # 실행하지 않고 명령만 출력
 ```
 
 `--print` 가 내놓는 줄은 그 도구의 순수한 명령이라, 이 프로젝트 없이
@@ -98,7 +98,7 @@ ALSA 의 기본 도구라 대부분의 배포판에 이미 있습니다(`alsa-ut
 
 ```sh
 arecord -f cd -d 60 output.wav           # CD 음질로 60초
-python -m gymhall audio record -b arecord -t 60
+python -m syncnote audio record -b arecord -t 60
 ```
 
 wav 만 쓰고, `-d` 는 정수 초만 받습니다(1.2초는 2초로 올림합니다).
@@ -181,7 +181,7 @@ powershell -ExecutionPolicy Bypass -File scripts\register_tasks.ps1 -AudioAt 09:
 직접 걸고 싶다면:
 
 ```bat
-schtasks /Create /TN "GYM-W-HALL-2F\TerminalAudio" /SC DAILY /ST 09:00 ^
+schtasks /Create /TN "Sync Note\TerminalAudio" /SC DAILY /ST 09:00 ^
   /TR "wscript.exe \"C:\path\repo\scripts\hidden.vbs\" \"C:\path\repo\scripts\record_audio.bat\" -t 3000"
 ```
 
@@ -192,7 +192,7 @@ schtasks /Create /TN "GYM-W-HALL-2F\TerminalAudio" /SC DAILY /ST 09:00 ^
 ## 무엇을 하지 않나
 
 - **전사 대기열에 넣지 않고, 릴리스에 올리지 않습니다.** 받은 파일은
-  로컬에 남습니다. 올리려면 `python -m gymhall upload <파일>` 을 쓰세요.
+  로컬에 남습니다. 올리려면 `python -m syncnote upload <파일>` 을 쓰세요.
 - **`record start` 와 자리를 다투지 않습니다.** 녹화 잠금을 잡지 않으므로
   둘을 동시에 돌리면 같은 마이크를 두 프로그램이 엽니다.
   (Windows 는 대개 둘 다 받고, 일부 USB 장치는 하나만 받습니다.)

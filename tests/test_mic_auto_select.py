@@ -18,8 +18,8 @@ import time
 import numpy as np
 import pytest
 
-from gymhall.paths import Layout
-from gymhall.recorder import devices
+from syncnote.paths import Layout
+from syncnote.recorder import devices
 
 
 class _Rec:
@@ -154,7 +154,7 @@ class Cfg:
 
 
 def session(tmp_path, **cfg):
-    from gymhall.recorder.session import RecordingSession
+    from syncnote.recorder.session import RecordingSession
 
     base = {"recording.audio.mic_enabled": True,
             "recording.audio.mic_auto_select": True,
@@ -221,7 +221,7 @@ def test_choosing_nothing_is_remembered_too(tmp_path, monkeypatch):
 # --- 고른 장치가 실제로 열리는가 (원칙 1 + 6) ----------------------------
 def test_the_chosen_mic_is_the_one_actually_opened(tmp_path, monkeypatch):
     """AudioRecorder 가 mic_source 를 무시하고 리졸버를 부르면 빨개집니다."""
-    from gymhall.recorder.audio import AudioRecorder
+    from syncnote.recorder.audio import AudioRecorder
 
     chosen = FakeMic("인텔", level=0.5)
     monkeypatch.setattr(devices, "resolve_mic_source",
@@ -235,7 +235,7 @@ def test_the_chosen_mic_is_the_one_actually_opened(tmp_path, monkeypatch):
 
 
 def test_without_a_chosen_mic_the_resolver_still_runs(tmp_path, monkeypatch):
-    from gymhall.recorder import audio as audio_mod
+    from syncnote.recorder import audio as audio_mod
 
     used = []
     monkeypatch.setattr(audio_mod.devices, "resolve_mic_source",
@@ -250,7 +250,7 @@ def test_without_a_chosen_mic_the_resolver_still_runs(tmp_path, monkeypatch):
 
 def test_the_system_track_is_never_replaced(tmp_path, monkeypatch):
     """루프백은 재생 중인 게 없으면 정확히 0 이 정상입니다. 오탐의 원천입니다."""
-    from gymhall.recorder import audio as audio_mod
+    from syncnote.recorder import audio as audio_mod
 
     sys_mic = FakeMic("스피커 루프백", level=0.5)
     monkeypatch.setattr(audio_mod.devices, "resolve_system_source",
@@ -267,30 +267,30 @@ def test_the_system_track_is_never_replaced(tmp_path, monkeypatch):
 # --- 로그 ----------------------------------------------------------------
 def test_all_dead_blames_permissions_not_the_device(tmp_path, caplog):
     """하나만 0 이면 장치 문제, 전부 0 이면 권한 문제입니다."""
-    from gymhall.recorder.session import RecordingSession
+    from syncnote.recorder.session import RecordingSession
 
     probes = [devices.ProbeResult("가상1", 0.0),
               devices.ProbeResult("가상2", 0.0)]
-    with caplog.at_level("ERROR", logger="gymhall"):
+    with caplog.at_level("ERROR", logger="syncnote"):
         RecordingSession._log_mic_choice(FakeMic("가상1"), probes)
     assert "개인 정보" in caplog.text and "마이크에 액세스" in caplog.text
 
 
 def test_a_replacement_says_what_to_put_in_the_config(tmp_path, caplog):
-    from gymhall.recorder.session import RecordingSession
+    from syncnote.recorder.session import RecordingSession
 
     probes = [devices.ProbeResult("마이크 배열 (Audio Share)", 0.0),
               devices.ProbeResult("인텔® 스마트 사운드", 0.00089)]
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         RecordingSession._log_mic_choice(FakeMic("인텔"), probes)
     assert "Audio Share" in caplog.text and "인텔" in caplog.text
     assert "mic_device" in caplog.text, "어디를 고치라는 건지 안 알려 줍니다"
 
 
 def test_a_normal_default_does_not_nag(caplog):
-    from gymhall.recorder.session import RecordingSession
+    from syncnote.recorder.session import RecordingSession
 
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         RecordingSession._log_mic_choice(
             FakeMic("인텔"), [devices.ProbeResult("인텔", 0.5)])
     assert not any(r.levelname in ("WARNING", "ERROR") for r in caplog.records)

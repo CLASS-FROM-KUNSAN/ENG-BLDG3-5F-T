@@ -12,5 +12,5 @@ REM  창 없이 돌리려면 register_tasks.ps1 -AudioAt 09:00 을 쓰세요.
 REM  파일 이름에 날짜와 시각이 들어가므로 매일 돌려도 덮어쓰지 않습니다.
 REM =====================================================================
 call "%~dp0_common.bat"
-"%PY%" -m gymhall audio record %*
+"%PY%" -m syncnote audio record %*
 exit /b %ERRORLEVEL%

@@ -300,8 +300,8 @@ args = VideoRecorder(..., monitor=2)._input_args()
 - **`python` 이 아니라 `py` 입니다.** 이 PC 들에서 `python` 은
   `C:\Windows\system32\python` 으로 잡히는데 진짜 인터프리터가
   아니라 아무 출력 없이 끝납니다. Microsoft Store 스텁이거나 PATH
-  오염입니다. 문서의 `python -m gymhall …` 은 그 PC 에서 조용히
-  실패하므로 `py -m gymhall …` 로 읽으세요.
+  오염입니다. 문서의 `python -m syncnote …` 은 그 PC 에서 조용히
+  실패하므로 `py -m syncnote …` 로 읽으세요.
 - **`--dry-run` 은 녹화를 합니다.** 업로드만 흉내 냅니다. 전사
   대기열에도 실제로 들어갑니다. 2026-11-13 에 이것 때문에 무음
   테스트 파일 한 건이 대기열에 남았습니다.
@@ -319,10 +319,10 @@ args = VideoRecorder(..., monitor=2)._input_args()
 
 ---
 
-## caplog 에는 logger="gymhall" 을 적으세요
+## caplog 에는 logger="syncnote" 을 적으세요
 
 `conftest.py` 가 `logging_setup.setup(level="WARNING")` 을 부르고,
-그게 `gymhall` 로거에 자체 수준을 겁니다. 그래서
+그게 `syncnote` 로거에 자체 수준을 겁니다. 그래서
 
 ```python
 with caplog.at_level("INFO"):        # 루트만 바뀝니다 — INFO 가 안 잡힙니다
@@ -332,7 +332,7 @@ INFO 로그가 레벨 검사에서 **먼저 죽어** caplog 에 도달하지 않
 테스트는 "로그가 없다" 가 아니라 "못 봤다" 로 빨개집니다.
 
 ```python
-with caplog.at_level("INFO", logger="gymhall"):   # 이렇게
+with caplog.at_level("INFO", logger="syncnote"):   # 이렇게
 ```
 
 로그 문구를 검사하는 테스트 전부에 해당합니다.
@@ -464,7 +464,7 @@ preview 전용인 데다 `subprocess(text=True)` 는 안 봅니다.
 **한 신호가 고장나면 그 신호로는 고장을 못 봅니다.** 판정에는 서로
 다른 경로에서 온 신호를 쓰세요.
 
-`rg "return 0" src/gymhall/cli.py` 로 훑어 나온 것 셋:
+`rg "return 0" src/syncnote/cli.py` 로 훑어 나온 것 셋:
 
 | 자리 | 조용한 0 |
 |---|---|
@@ -521,7 +521,7 @@ cd - && git worktree remove /tmp/mut --force
 
 ```python
 import os, pathlib, sys
-if pathlib.Path.cwd() == pathlib.Path(os.environ.get("GYMHALL_MAIN", "")):
+if pathlib.Path.cwd() == pathlib.Path(os.environ.get("SYNCNOTE_MAIN", "")):
     sys.exit("작업 트리에서 돌리지 마세요. git worktree 를 쓰세요.")
 ```
 

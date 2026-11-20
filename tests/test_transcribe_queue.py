@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from gymhall.transcribe.batch import QUEUE_FILE, Queue
+from syncnote.transcribe.batch import QUEUE_FILE, Queue
 
 
 def make_queue(tmp_path) -> Queue:
@@ -107,8 +107,8 @@ class FakeConfig:
 
 
 def test_enqueue_picks_requested_track(tmp_path):
-    from gymhall.paths import Layout
-    from gymhall.transcribe.batch import enqueue_segment
+    from syncnote.paths import Layout
+    from syncnote.transcribe.batch import enqueue_segment
 
     layout = Layout(tmp_path)
     layout.ensure()
@@ -121,8 +121,8 @@ def test_enqueue_picks_requested_track(tmp_path):
 
 
 def test_enqueue_both_tracks(tmp_path):
-    from gymhall.paths import Layout
-    from gymhall.transcribe.batch import enqueue_segment
+    from syncnote.paths import Layout
+    from syncnote.transcribe.batch import enqueue_segment
 
     layout = Layout(tmp_path)
     layout.ensure()
@@ -133,8 +133,8 @@ def test_enqueue_both_tracks(tmp_path):
 
 
 def test_enqueue_noop_when_disabled(tmp_path):
-    from gymhall.paths import Layout
-    from gymhall.transcribe.batch import enqueue_segment
+    from syncnote.paths import Layout
+    from syncnote.transcribe.batch import enqueue_segment
 
     layout = Layout(tmp_path)
     layout.ensure()
@@ -145,8 +145,8 @@ def test_enqueue_noop_when_disabled(tmp_path):
 
 def test_enqueue_noop_when_track_absent(tmp_path):
     """마이크만 녹음했는데 system 을 전사하라고 하면 조용히 넘어갑니다."""
-    from gymhall.paths import Layout
-    from gymhall.transcribe.batch import enqueue_segment
+    from syncnote.paths import Layout
+    from syncnote.transcribe.batch import enqueue_segment
 
     layout = Layout(tmp_path)
     layout.ensure()
@@ -182,9 +182,9 @@ class _Model:
 
 def test_transcribe_file_drops_hallucinations(tmp_path):
     """파일로 떨어지는 결과에 상투어가 남으면 안 됩니다."""
-    from gymhall.transcribe.batch import transcribe_file
-    from gymhall.transcribe.cleanup import Cleaner
-    from gymhall.transcribe.engine import EngineSpec
+    from syncnote.transcribe.batch import transcribe_file
+    from syncnote.transcribe.cleanup import Cleaner
+    from syncnote.transcribe.engine import EngineSpec
 
     audio = tmp_path / "a.wav"
     audio.write_bytes(b"\0" * 100)
@@ -210,9 +210,9 @@ def test_transcribe_file_drops_hallucinations(tmp_path):
 def test_cleanup_counts_land_in_json_meta(tmp_path):
     import json
 
-    from gymhall.transcribe.batch import transcribe_file
-    from gymhall.transcribe.cleanup import Cleaner
-    from gymhall.transcribe.engine import EngineSpec
+    from syncnote.transcribe.batch import transcribe_file
+    from syncnote.transcribe.cleanup import Cleaner
+    from syncnote.transcribe.engine import EngineSpec
 
     audio = tmp_path / "a.wav"
     audio.write_bytes(b"\0" * 100)
@@ -229,9 +229,9 @@ def test_cleanup_counts_land_in_json_meta(tmp_path):
 
 def test_disabled_cleaner_keeps_hallucinations(tmp_path):
     """끄면 그대로 남아야 합니다 — 사용자가 끌 수 있다는 것을 보장."""
-    from gymhall.transcribe.batch import transcribe_file
-    from gymhall.transcribe.cleanup import Cleaner
-    from gymhall.transcribe.engine import EngineSpec
+    from syncnote.transcribe.batch import transcribe_file
+    from syncnote.transcribe.cleanup import Cleaner
+    from syncnote.transcribe.engine import EngineSpec
 
     audio = tmp_path / "a.wav"
     audio.write_bytes(b"\0" * 100)
@@ -254,8 +254,8 @@ def test_queue_carries_language(tmp_path):
 
 
 def test_enqueue_segment_passes_language(tmp_path):
-    from gymhall.paths import Layout
-    from gymhall.transcribe.batch import enqueue_segment
+    from syncnote.paths import Layout
+    from syncnote.transcribe.batch import enqueue_segment
 
     layout = Layout(tmp_path)
     layout.ensure()
@@ -291,8 +291,8 @@ class _ModelLang:
 )
 def test_language_setting_reaches_the_model(tmp_path, setting, expected):
     """영어 수업에 ko 가 넘어가면 소리 나는 대로 한글을 뱉습니다."""
-    from gymhall.transcribe.batch import transcribe_file
-    from gymhall.transcribe.engine import EngineSpec
+    from syncnote.transcribe.batch import transcribe_file
+    from syncnote.transcribe.engine import EngineSpec
 
     audio = tmp_path / "a.wav"
     audio.write_bytes(b"\0" * 100)
@@ -305,8 +305,8 @@ def test_language_setting_reaches_the_model(tmp_path, setting, expected):
 def test_detected_language_lands_in_meta(tmp_path):
     import json
 
-    from gymhall.transcribe.batch import transcribe_file
-    from gymhall.transcribe.engine import EngineSpec
+    from syncnote.transcribe.batch import transcribe_file
+    from syncnote.transcribe.engine import EngineSpec
 
     audio = tmp_path / "a.wav"
     audio.write_bytes(b"\0" * 100)

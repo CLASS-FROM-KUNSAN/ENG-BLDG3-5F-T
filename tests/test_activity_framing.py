@@ -8,7 +8,7 @@ import struct
 
 import pytest
 
-from gymhall.activity import framing
+from syncnote.activity import framing
 
 
 def test_write_then_read_roundtrip():

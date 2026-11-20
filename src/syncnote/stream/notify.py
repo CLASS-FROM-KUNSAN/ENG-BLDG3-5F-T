@@ -47,7 +47,7 @@ DEFAULT_BODY = """\
 - 같은 **Tailscale 망(tailnet)** 에 들어와 있는 기기에서만 열립니다.
 - 브라우저, VLC, 휴대폰 Tailscale 앱 + 브라우저로 들을 수 있습니다.
 {token_note}
-> 이 이슈는 `gymhall stream start` 가 자동으로 만들었습니다.
+> 이 이슈는 `syncnote stream start` 가 자동으로 만들었습니다.
 """
 
 

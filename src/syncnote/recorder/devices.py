@@ -1,7 +1,7 @@
 """오디오 장치 목록.
 
 장치 이름을 잘못 적어 3시간을 무음으로 녹음하는 사고가 가장 흔합니다.
-녹화를 걸기 전에 반드시 `python -m gymhall devices` 로 확인하세요.
+녹화를 걸기 전에 반드시 `python -m syncnote devices` 로 확인하세요.
 """
 
 from __future__ import annotations
@@ -90,7 +90,7 @@ def resolve_system_source(name: str = ""):
                 return sc.get_microphone(id=str(spk.name), include_loopback=True)
         raise ValueError(
             f"시스템 오디오 장치를 찾지 못했습니다: {name!r}\n"
-            "python -m gymhall devices 로 정확한 이름을 확인하세요."
+            "python -m syncnote devices 로 정확한 이름을 확인하세요."
         )
     spk = sc.default_speaker()
     return sc.get_microphone(id=str(spk.name), include_loopback=True)
@@ -104,7 +104,7 @@ def resolve_mic_source(name: str = ""):
                 return mic
         raise ValueError(
             f"마이크를 찾지 못했습니다: {name!r}\n"
-            "python -m gymhall devices 로 정확한 이름을 확인하세요."
+            "python -m syncnote devices 로 정확한 이름을 확인하세요."
         )
     return sc.default_microphone()
 

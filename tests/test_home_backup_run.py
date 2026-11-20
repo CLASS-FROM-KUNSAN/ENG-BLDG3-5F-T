@@ -13,20 +13,20 @@ from pathlib import Path
 
 import pytest
 
-from gymhall.backup import bundle as bundle_mod
-from gymhall.backup.bundle import plan_bundles, write_bundle
-from gymhall.backup.chain import (
+from syncnote.backup import bundle as bundle_mod
+from syncnote.backup.bundle import plan_bundles, write_bundle
+from syncnote.backup.chain import (
     Link,
     entries_of,
     parse_manifest,
     walk_chain,
 )
-from gymhall.backup.homestate import HomeState
-from gymhall.backup.run import CHAIN_LOG, run_backup
-from gymhall.backup.scan import DEFAULT_EXCLUDE_NAMES
-from gymhall.paths import Layout
-from gymhall.release import ReleaseError
-from gymhall.state import sha256_file
+from syncnote.backup.homestate import HomeState
+from syncnote.backup.run import CHAIN_LOG, run_backup
+from syncnote.backup.scan import DEFAULT_EXCLUDE_NAMES
+from syncnote.paths import Layout
+from syncnote.release import ReleaseError
+from syncnote.state import sha256_file
 
 MiB = 1024 * 1024
 PREFIX = "pc1_"
@@ -227,7 +227,7 @@ def test_unchanged_files_are_skipped_without_hashing(env, monkeypatch):
         raise AssertionError("바뀌지 않은 파일을 다시 읽었습니다")
 
     monkeypatch.setattr(bundle_mod, "write_bundle", boom)
-    import gymhall.backup.run as run_mod
+    import syncnote.backup.run as run_mod
 
     monkeypatch.setattr(run_mod, "write_bundle", boom)
     monkeypatch.setattr(run_mod, "sha256_file", boom)
@@ -333,9 +333,9 @@ def test_excluded_things_never_reach_the_zip(env):
     assert res.excluded >= 4
 
 
-def test_the_gymhall_data_folder_under_home_is_not_backed_up(tmp_path):
+def test_the_syncnote_data_folder_under_home_is_not_backed_up(tmp_path):
     home = tmp_path / "home"
-    layout = Layout(home / "gymhall-data")
+    layout = Layout(home / "syncnote-data")
     layout.ensure()
     _w(layout.recordings / "2026-11-13/a.mkv")
     _w(home / "Documents/a.txt")
@@ -351,7 +351,7 @@ def test_dry_run_touches_no_network_state_or_chain_log(env, caplog):
     home, layout, store = env
     _w(home / "Documents/과제/a.hwp")
     up = FakeUploader()
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         res = _run(env, up, dry_run=True)
     assert up.calls == [] and up.releases == []
     assert store.get_head() is None and store.file_count() == 0
@@ -489,7 +489,7 @@ def test_bundle_reads_in_chunks_not_whole_files(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 @pytest.fixture
 def small_links(monkeypatch):
-    import gymhall.backup.run as run_mod
+    import syncnote.backup.run as run_mod
 
     monkeypatch.setattr(run_mod, "MAX_LINK_ENTRIES", 3)
     return 3
@@ -558,7 +558,7 @@ def test_a_link_never_exceeds_the_cap_when_bundles_do_not_fill_it(env, small_lin
 
 def test_a_run_that_dies_midway_keeps_completed_links(env, small_links, monkeypatch):
     """스캔 도중 죽어도(전원, 예외) 이미 닫힌 고리는 commit 돼 있어야 합니다."""
-    import gymhall.backup.run as run_mod
+    import syncnote.backup.run as run_mod
 
     home, layout, store = env
     real = run_mod.iter_home
@@ -621,7 +621,7 @@ def test_incremental_lookup_is_per_path_not_a_full_load(env, monkeypatch):
 # 리뷰 반영: 이름 충돌, 사전 점검, 연속 실패, 임시 폴더, 서로게이트
 # ---------------------------------------------------------------------------
 def test_names_carry_a_per_run_nonce(env):
-    from gymhall.backup.run import bundle_asset, manifest_asset, new_nonce
+    from syncnote.backup.run import bundle_asset, manifest_asset, new_nonce
 
     assert bundle_asset("p_", 3, "ab12cd", 7) == "p_home-000003-ab12cd-007.zip"
     assert manifest_asset("p_", 3, "ab12cd") == "p_home-chain-000003-ab12cd.json"
@@ -664,7 +664,7 @@ def test_an_existing_manifest_name_is_never_replaced(env):
 
 
 def test_unreachable_release_stops_before_scanning(env, monkeypatch):
-    import gymhall.backup.run as run_mod
+    import syncnote.backup.run as run_mod
 
     home, _, _ = env
     _w(home / "a.txt")
@@ -688,7 +688,7 @@ def test_dry_run_does_not_need_the_release(env):
 
 
 def test_three_consecutive_failures_abort_but_chain_what_went_up(env, monkeypatch):
-    import gymhall.backup.run as run_mod
+    import syncnote.backup.run as run_mod
 
     home, _, store = env
     for i in range(8):
@@ -767,7 +767,7 @@ def test_each_run_gets_a_fresh_nonce_by_default(env):
 
 
 def test_a_lone_surrogate_name_does_not_kill_the_run(env, monkeypatch, caplog):
-    import gymhall.backup.scan as scan_mod
+    import syncnote.backup.scan as scan_mod
 
     home, _, store = env
     _w(home / "ok.txt", b"ok")
@@ -814,17 +814,17 @@ def test_a_lone_surrogate_name_does_not_kill_the_run(env, monkeypatch, caplog):
         return real(folder)
 
     monkeypatch.setattr(scan_mod.os, "scandir", _fake_scandir)
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         res = _run(env, FakeUploader())
     assert res.ok and res.uploaded_files == 1 and res.unreadable == 1
     assert {r[0] for r in store.conn.execute("SELECT path FROM files")} == {"ok.txt"}
 
 
-def test_gymhall_log_lists_at_most_20_folders_per_link(env, caplog):
+def test_syncnote_log_lists_at_most_20_folders_per_link(env, caplog):
     home, layout, _ = env
     for i in range(25):
         _w(home / f"f{i:02d}/a.txt")
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         _run(env, FakeUploader())
     folder_lines = [r for r in caplog.messages if r.startswith("  f") and r.endswith("1개")]
     assert len(folder_lines) == 20
@@ -846,7 +846,7 @@ def test_disk_full_while_zipping_fails_one_bundle_not_the_run(env, monkeypatch):
     이미 올린 묶음은 사슬에 안 붙은 채 매일 같은 자리에서 다시 죽었습니다."""
     import errno
 
-    import gymhall.backup.run as run_mod
+    import syncnote.backup.run as run_mod
 
     home, _, store = env
     _two_bundles(home)

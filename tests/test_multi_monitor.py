@@ -12,8 +12,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gymhall.paths import Layout
-from gymhall.recorder.session import RecordingSession
+from syncnote.paths import Layout
+from syncnote.recorder.session import RecordingSession
 
 
 # ---------------------------------------------------------------------------
@@ -94,8 +94,8 @@ def _make_fake_vr_class(created: list[int]):
 
 def _run_segment(tmp_path, cfg_data, *, mux_side_effect=None):
     """_record_segment 를 패치된 환경에서 실행하고 (mux 호출 경로 목록, created 목록)을 반환."""
-    from gymhall.recorder import ffmpeg_util as fu
-    from gymhall.recorder import session as sess_mod
+    from syncnote.recorder import ffmpeg_util as fu
+    from syncnote.recorder import session as sess_mod
 
     mux_calls: list[Path] = []
     created: list[int] = []
@@ -120,7 +120,7 @@ def _run_segment(tmp_path, cfg_data, *, mux_side_effect=None):
 
         import datetime as dt_mod
 
-        from gymhall.recorder.session import SessionResult
+        from syncnote.recorder.session import SessionResult
         result = SessionResult(label="테스트수업", started_at=dt_mod.datetime.now())
         s._record_segment(1, tmp_path, 0.001, "mkv", True, True, result)
 
@@ -195,7 +195,7 @@ class TestConfigValidation:
         """DEFAULTS 에 monitors 를 덮어 씌워 validate 까지 돌립니다."""
         import copy
 
-        from gymhall import config as cfg_mod
+        from syncnote import config as cfg_mod
 
         data = copy.deepcopy(cfg_mod.DEFAULTS)
         data["recording"]["video"]["monitors"] = monitors_val
@@ -214,22 +214,22 @@ class TestConfigValidation:
         self._load_with([1, 2])
 
     def test_non_list_is_rejected(self):
-        from gymhall.config import ConfigError
+        from syncnote.config import ConfigError
         with pytest.raises(ConfigError, match="monitors"):
             self._load_with("1,2")
 
     def test_zero_in_list_is_rejected(self):
-        from gymhall.config import ConfigError
+        from syncnote.config import ConfigError
         with pytest.raises(ConfigError, match="monitors"):
             self._load_with([0, 1])
 
     def test_negative_in_list_is_rejected(self):
-        from gymhall.config import ConfigError
+        from syncnote.config import ConfigError
         with pytest.raises(ConfigError, match="monitors"):
             self._load_with([-1, 1])
 
     def test_duplicate_in_list_is_rejected(self):
-        from gymhall.config import ConfigError
+        from syncnote.config import ConfigError
         with pytest.raises(ConfigError, match="중복"):
             self._load_with([1, 1])
 
@@ -245,8 +245,8 @@ def test_two_recorders_start_in_parallel(tmp_path):
     start_threads: list[int] = []
     lock = threading.Lock()
 
-    from gymhall.recorder import ffmpeg_util as fu
-    from gymhall.recorder import session as sess_mod
+    from syncnote.recorder import ffmpeg_util as fu
+    from syncnote.recorder import session as sess_mod
 
     class ThreadTrackingVR:
         def __init__(self, *, monitor, **_kw):
@@ -288,7 +288,7 @@ def test_two_recorders_start_in_parallel(tmp_path):
 
         import datetime as dt_mod
 
-        from gymhall.recorder.session import SessionResult
+        from syncnote.recorder.session import SessionResult
         result = SessionResult(label="테스트수업", started_at=dt_mod.datetime.now())
         s._record_segment(1, tmp_path, 0.001, "mkv", True, True, result)
 

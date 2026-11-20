@@ -21,7 +21,7 @@ sync_playwright = pytest.importorskip(
     "playwright.sync_api", reason="playwright 미설치"
 ).sync_playwright
 
-from gymhall.eclass import crawler as C  # noqa: E402
+from syncnote.eclass import crawler as C  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PROGRESS = "eclass_progress.html"
@@ -78,9 +78,9 @@ class _Shim:
 
 
 def _crawler(browser, tmp_path, page):
-    from gymhall.eclass.urls import Site
-    from gymhall.paths import Layout
-    from gymhall.state import Store
+    from syncnote.eclass.urls import Site
+    from syncnote.paths import Layout
+    from syncnote.state import Store
 
     return C.Crawler(_Shim(page), Site(), Layout(tmp_path),
                      Store.open(tmp_path / "state.json"), term="2026-2", menus={})

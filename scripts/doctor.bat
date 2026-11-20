@@ -1,5 +1,5 @@
 @echo off
 call "%~dp0_common.bat"
-"%PY%" -m gymhall doctor
+"%PY%" -m syncnote doctor
 echo.
 pause

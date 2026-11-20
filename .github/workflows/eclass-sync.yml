@@ -133,7 +133,7 @@ jobs:
           # 치환 결과가 실제로 반영됐는지 설정을 읽어 확인합니다.
           # "바꿨다고 믿는 것" 과 "바뀐 것" 은 다릅니다.
           sys.path.insert(0, "src")
-          from gymhall import config as cfg_mod
+          from syncnote import config as cfg_mod
 
           cfg = cfg_mod.load("config.toml")
           problems = []
@@ -151,7 +151,7 @@ jobs:
 
       - name: 설정 검증
         if: steps.gate.outputs.ready == 'true'
-        run: PYTHONPATH=src python -m gymhall config check
+        run: PYTHONPATH=src python -m syncnote config check
 
       - name: 이전 수집 상태 복원
         if: steps.gate.outputs.ready == 'true'
@@ -171,13 +171,13 @@ jobs:
       - name: 수집 및 업로드
         if: steps.gate.outputs.ready == 'true'
         env:
-          GYMHALL_ECLASS_PASSWORD: ${{ secrets.ECLASS_PASSWORD }}
+          SYNCNOTE_ECLASS_PASSWORD: ${{ secrets.ECLASS_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHONPATH: src
         run: |
           ARGS=""
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then ARGS="--no-upload"; fi
-          python -m gymhall --log-level INFO eclass sync $ARGS
+          python -m syncnote --log-level INFO eclass sync $ARGS
 
       - name: 실패 시 로그 남기기
         if: failure()

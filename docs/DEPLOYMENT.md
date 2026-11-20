@@ -12,7 +12,7 @@
 0 아닌 바이트가 **하나도** 없었습니다.
 
 ```bat
-.venv\Scripts\python -m gymhall devices
+.venv\Scripts\python -m syncnote devices
 ```
 
 목록에서 실제 장치를 찾아 `config.toml` 에 이름 일부를 적습니다.
@@ -28,7 +28,7 @@ system_device = ""           # 비우면 기본 스피커의 루프백 (보통 �
 1분만 녹화해 보고 레벨을 봅니다.
 
 ```bat
-.venv\Scripts\python -m gymhall record start -l 마이크테스트 -m 1 --no-upload
+.venv\Scripts\python -m syncnote record start -l 마이크테스트 -m 1 --no-upload
 ```
 
 > `--dry-run` 은 **녹화를 합니다.** 업로드만 흉내 냅니다. 녹화 자체를
@@ -81,7 +81,7 @@ Windows 설정 > 개인 정보 및 보안 > **마이크** > "데스크톱 앱이
 잡습니다. 판서 쪽이 절반으로 줄고, 교탁 화면의 메일까지 같이 올라갑니다.
 
 ```bat
-.venv\Scripts\python -m gymhall devices
+.venv\Scripts\python -m syncnote devices
 ```
 
 화면 목록에서 번호를 확인하고 적습니다.
@@ -179,7 +179,7 @@ min_age_hours = 24        # 올라간 지 이만큼 지난 것만 지웁니다
 - 지금 파일의 SHA-256 이 올라간 것과 같아야 합니다(그사이 고쳤으면 남깁니다).
 - 실제로 열리는 파일 이름이 매니페스트의 경로와 같아야 합니다. `a.` · `a ` ·
   `LONGDI~1` 같은 Windows 별칭은 다른 파일을 가리키므로 지우지 않습니다.
-- 홈 밖, 정션 너머, gymhall 설치 폴더·데이터 폴더·설정 파일은 지우지 않습니다.
+- 홈 밖, 정션 너머, syncnote 설치 폴더·데이터 폴더·설정 파일은 지우지 않습니다.
 - 파일만 지웁니다. **폴더는 그대로 둡니다.**
 
 **알아 둘 것**
@@ -197,7 +197,7 @@ min_age_hours = 24        # 올라간 지 이만큼 지난 것만 지웁니다
   에셋은 덮어쓰지 않으므로 서로의 백업을 지우지는 않습니다. 다만 두 PC 의
   사슬이 같은 PC 것처럼 섞여 보입니다.
 
-올린 것은 로그 폴더(`%LOCALAPPDATA%\gym-w-hall-2f\logs`)의 `home-chain.log` 에
+올린 것은 로그 폴더(`%LOCALAPPDATA%\sync-note\logs`)의 `home-chain.log` 에
 디렉터리별로, 지운 것은 `home-prune.log` 에 지운 순서대로 한 줄에 하나씩
 남습니다.
 처음 켤 때는 `backup prune --dry-run` 으로 지울 목록을 먼저 보세요.
@@ -219,4 +219,4 @@ min_age_hours = 24        # 올라간 지 이만큼 지난 것만 지웁니다
 | `backup prune` | 사슬 확인에 실패했거나(아무것도 지우지 않음), GitHub 에서 묶음을 확인하지 못한 파일이 있거나, 지우는 중 오류가 있었을 때 |
 
 작업 스케줄러의 "마지막 실행 결과" 가 `0x0` 이 아니면 로그를 보세요.
-로그는 `%LOCALAPPDATA%\gym-w-hall-2f\logs` 에 있습니다.
+로그는 `%LOCALAPPDATA%\sync-note\logs` 에 있습니다.

@@ -17,9 +17,9 @@ echo  [0] 끝내기
 echo.
 set /p CHOICE="번호를 고르세요: "
 
-if "%CHOICE%"=="1" "%PY%" -m gymhall secrets set eclass
-if "%CHOICE%"=="2" "%PY%" -m gymhall secrets set github
-if "%CHOICE%"=="3" "%PY%" -m gymhall secrets set openai
-if "%CHOICE%"=="4" "%PY%" -m gymhall secrets status
+if "%CHOICE%"=="1" "%PY%" -m syncnote secrets set eclass
+if "%CHOICE%"=="2" "%PY%" -m syncnote secrets set github
+if "%CHOICE%"=="3" "%PY%" -m syncnote secrets set openai
+if "%CHOICE%"=="4" "%PY%" -m syncnote secrets status
 echo.
 pause

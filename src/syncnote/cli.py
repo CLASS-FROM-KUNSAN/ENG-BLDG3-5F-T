@@ -1,20 +1,20 @@
 """명령줄 진입점.
 
-  python -m gymhall doctor                환경 점검 (제일 먼저 돌려 보세요)
-  python -m gymhall devices               오디오 장치 목록
-  python -m gymhall secrets set eclass    비밀번호 저장
-  python -m gymhall eclass probe          페이지 구조 탐색
-  python -m gymhall eclass sync           자료 수집 + 업로드
-  python -m gymhall record start          수동 녹화
-  python -m gymhall record schedule       시간표 대기
-  python -m gymhall record watch          프로그램 감지 대기
-  python -m gymhall audio record          소리만 녹음 (FFmpeg / SoX / arecord)
-  python -m gymhall audio tools           터미널 녹음 도구 점검
-  python -m gymhall stream start          실시간 송출 (Tailscale, 링크 -> 이슈)
-  python -m gymhall stream schedule       시간표대로 수업마다 송출
-  python -m gymhall stream link           송출 링크 미리 보기
-  python -m gymhall transcribe queue      대기열 전사
-  python -m gymhall upload <경로>         임의 파일 업로드
+  python -m syncnote doctor                환경 점검 (제일 먼저 돌려 보세요)
+  python -m syncnote devices               오디오 장치 목록
+  python -m syncnote secrets set eclass    비밀번호 저장
+  python -m syncnote eclass probe          페이지 구조 탐색
+  python -m syncnote eclass sync           자료 수집 + 업로드
+  python -m syncnote record start          수동 녹화
+  python -m syncnote record schedule       시간표 대기
+  python -m syncnote record watch          프로그램 감지 대기
+  python -m syncnote audio record          소리만 녹음 (FFmpeg / SoX / arecord)
+  python -m syncnote audio tools           터미널 녹음 도구 점검
+  python -m syncnote stream start          실시간 송출 (Tailscale, 링크 -> 이슈)
+  python -m syncnote stream schedule       시간표대로 수업마다 송출
+  python -m syncnote stream link           송출 링크 미리 보기
+  python -m syncnote transcribe queue      대기열 전사
+  python -m syncnote upload <경로>         임의 파일 업로드
 """
 
 from __future__ import annotations
@@ -421,7 +421,7 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
             total = sum(len(v) for v in folders.values())
             log.info("[%s] 릴리스 '%s' 로 폴더 %d개 (파일 %d개)",
                      where, tag, len(folders), total)
-            with tempfile.TemporaryDirectory(prefix="gymhall-zip-") as work:
+            with tempfile.TemporaryDirectory(prefix="syncnote-zip-") as work:
                 bundles: list[Path] = []
                 rows: list[tuple[str, str, int, int]] = []
                 for name, members in sorted(folders.items()):
@@ -613,7 +613,7 @@ def _run_recording_locked(cfg, layout: Layout, label: str, *, minutes: float | N
     print(result.summary())
     queued = len(Queue(layout.state / QUEUE_FILE))
     if queued:
-        print(f"전사 대기 {queued}건.  python -m gymhall transcribe queue  로 처리하세요.")
+        print(f"전사 대기 {queued}건.  python -m syncnote transcribe queue  로 처리하세요.")
     return result
 
 
@@ -1452,7 +1452,7 @@ def cmd_activity_watch_acrobat(args) -> int:
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="gymhall",
+        prog="syncnote",
         description="Eclass 자료 수집 + 화면/음성 녹화 + 전사 + GitHub 릴리스 업로드",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,

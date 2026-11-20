@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "gymhall activity (PDF web forms)",
+  "name": "syncnote activity (PDF web forms)",
   "version": "0.1.0",
   "description": "본인 PDF 웹 뷰어 폼 입력을 로컬 봉인 저장소로. 자격증명 제외, 시크릿창 차단.",
   "permissions": ["nativeMessaging"],

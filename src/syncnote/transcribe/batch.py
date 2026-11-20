@@ -4,7 +4,7 @@
   저사양 노트북에서 녹화 직후 바로 전사를 돌리면 발열과 배터리
   소모가 심합니다. 대기열에 쌓아 두었다가 충전기에 꽂았을 때
   한 번에 돌리는 쪽이 현실적입니다.
-    python -m gymhall transcribe queue
+    python -m syncnote transcribe queue
 """
 
 from __future__ import annotations

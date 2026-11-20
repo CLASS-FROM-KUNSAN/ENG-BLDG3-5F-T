@@ -6,7 +6,7 @@ import subprocess
 import sys
 import textwrap
 
-from gymhall.backup.lock import exclusive
+from syncnote.backup.lock import exclusive
 
 
 def test_second_holder_in_another_process_is_refused(tmp_path):
@@ -15,9 +15,9 @@ def test_second_holder_in_another_process_is_refused(tmp_path):
         assert got
         code = textwrap.dedent(f"""
             import sys
-            sys.path.insert(0, {str(__import__('gymhall').__path__[0] + '/..')!r})
+            sys.path.insert(0, {str(__import__('syncnote').__path__[0] + '/..')!r})
             from pathlib import Path
-            from gymhall.backup.lock import exclusive
+            from syncnote.backup.lock import exclusive
             with exclusive(Path({str(lock)!r})) as got:
                 print("GOT" if got else "BUSY")
         """)
@@ -32,9 +32,9 @@ def test_lock_released_when_holder_dies(tmp_path):
     lock = tmp_path / "x.lock"
     code = textwrap.dedent(f"""
         import os, sys
-        sys.path.insert(0, {str(__import__('gymhall').__path__[0] + '/..')!r})
+        sys.path.insert(0, {str(__import__('syncnote').__path__[0] + '/..')!r})
         from pathlib import Path
-        from gymhall.backup.lock import exclusive
+        from syncnote.backup.lock import exclusive
         with exclusive(Path({str(lock)!r})) as got:
             assert got
             os._exit(0)   # 정리 없이 죽음
@@ -48,9 +48,9 @@ def test_wait_gives_up(tmp_path):
     lock = tmp_path / "x.lock"
     code = textwrap.dedent(f"""
         import sys, time
-        sys.path.insert(0, {str(__import__('gymhall').__path__[0] + '/..')!r})
+        sys.path.insert(0, {str(__import__('syncnote').__path__[0] + '/..')!r})
         from pathlib import Path
-        from gymhall.backup.lock import exclusive
+        from syncnote.backup.lock import exclusive
         with exclusive(Path({str(lock)!r})) as got:
             print("held", flush=True)
             time.sleep(5)

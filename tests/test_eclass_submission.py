@@ -27,7 +27,7 @@ sync_playwright = pytest.importorskip(
     "playwright.sync_api", reason="playwright 미설치"
 ).sync_playwright
 
-from gymhall.eclass import crawler as C  # noqa: E402
+from syncnote.eclass import crawler as C  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
 LIST = "eclass_assignment_submit_list.html"
@@ -66,9 +66,9 @@ class _Shim:
 
 
 def _mk(browser, tmp_path, url):
-    from gymhall.eclass.urls import Site
-    from gymhall.paths import Layout
-    from gymhall.state import Store
+    from syncnote.eclass.urls import Site
+    from syncnote.paths import Layout
+    from syncnote.state import Store
 
     pg = browser.new_page()
     pg.goto(url)
