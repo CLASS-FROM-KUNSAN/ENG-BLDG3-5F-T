@@ -387,12 +387,38 @@ class Crawler:
 
     def filter_courses(self, courses: list[Course], include: list[str],
                        exclude: list[str]) -> list[Course]:
-        def matches(course: Course, needles: list[str]) -> bool:
+        def hit(course: Course, needle: str) -> bool:
             hay = f"{course.name} {course.course_id}".lower()
-            return any(str(n).strip().lower() in hay for n in needles if str(n).strip())
+            return needle.lower() in hay
+
+        def matches(course: Course, needles: list[str]) -> bool:
+            return any(hit(course, str(n).strip()) for n in needles if str(n).strip())
 
         if include:
-            courses = [c for c in courses if matches(c, include)]
+            # 1) 이름 일부로 걸리는 셀렉터는 예전처럼 걸리는 과목 전부.
+            # 2) 하나도 안 걸린 셀렉터만 퍼지 매칭(띄어쓰기·음절 순서 무관)으로
+            #    최고 일치 과목 하나. 임계값 미만이면 버리고, 전체로 폴백하지 않음.
+            from . import coursematch
+
+            needles = [str(n).strip() for n in include if str(n).strip()]
+            picked: set[str] = set()
+            fuzzy: list[str] = []
+            for n in needles:
+                hits = [c for c in courses if hit(c, n)]
+                if hits:
+                    picked.update(c.course_id for c in hits)
+                else:
+                    fuzzy.append(n)
+            if fuzzy:
+                res = coursematch.select(courses, fuzzy, id_of=lambda c: c.course_id,
+                                         name_of=lambda c: c.name)
+                for line in res.report:
+                    log.info("과목 매칭: %s", line)
+                for m in res.matches:
+                    if m.course is None:
+                        self.stats.errors.append(f"과목 셀렉터 매칭 실패: {m.selector!r}")
+                picked.update(c.course_id for c in res.selected)
+            courses = [c for c in courses if c.course_id in picked]
         if exclude:
             courses = [c for c in courses if not matches(c, exclude)]
         return courses

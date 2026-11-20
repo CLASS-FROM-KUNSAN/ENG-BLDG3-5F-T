@@ -279,8 +279,12 @@ def cmd_eclass_sync(args) -> int:
             screenshots=bool(cfg.get("eclass.screenshots", True)),
             capture_html=bool(cfg.get("eclass.capture_html", True)),
         )
+        # Actions 등에서 SYNCNOTE_ECLASS_COURSES 를 주면 config 보다 우선
+        # (콤마·세미콜론·줄바꿈 구분, 띄어쓰기·음절 순서 무관 퍼지 매칭).
+        from .eclass.coursematch import split_selectors
+        env_courses = split_selectors(os.environ.get("SYNCNOTE_ECLASS_COURSES", ""))
         stats = crawler.run(
-            list(cfg.get("eclass.courses", [])),
+            env_courses or list(cfg.get("eclass.courses", [])),
             list(cfg.get("eclass.exclude_courses", [])),
         )
 
@@ -325,6 +329,7 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
     from .release import (
         ReleaseError,
         _human,
+        bundle_filename,
         group_by_top_folder,
         iter_files,
         machine_prefix,
@@ -425,7 +430,8 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
                 bundles: list[Path] = []
                 rows: list[tuple[str, str, int, int]] = []
                 for name, members in sorted(folders.items()):
-                    zip_path = Path(work) / f"{name}.zip"
+                    # 과목이면 main_, 쪽지·계정 등이면 sub_ (해시 앞에 남음)
+                    zip_path = Path(work) / bundle_filename(name)
                     if make_archive(root, members, zip_path) is None:
                         continue
                     size = zip_path.stat().st_size
