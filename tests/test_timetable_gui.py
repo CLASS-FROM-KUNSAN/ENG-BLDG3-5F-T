@@ -792,7 +792,21 @@ def _with_overlap(win, extra):
     win._apply(new, "t")
 
 
+def _set_policy(win, policy):
+    text = win.path.read_text(encoding="utf-8")
+    win.path.write_text(f"[recording]\noverlap = \"{policy}\"\n\n" + text, encoding="utf-8")
+    win.check_disk()
+
+
+def test_default_merge_policy_does_not_warn_lost_time(app, win):
+    _with_overlap(win, M.Course("영어2", ["mon"], "09:30", "11:00"))
+    assert win.rec_params["policy"] == "merge" and win.lost == []
+    assert not _red(_block(win, "영어2", "mon"))
+    assert "하나로 이어서" in win.statusBar().currentMessage()
+
+
 def test_first_policy_warns_only_the_class_that_loses_time(app, win):
+    _set_policy(win, "first")
     _with_overlap(win, M.Course("영어2", ["mon"], "09:30", "11:00"))   # 자료구조 09:00~10:00 과 겹침
     msg = win.statusBar().currentMessage()
     assert "영어2 09:30~10:00 (30분) 녹화 안 됨" in msg and "앞 수업 우선" in msg

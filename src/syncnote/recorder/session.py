@@ -85,10 +85,18 @@ class RecordingSession:
         video_not_before: float = 0.0,
         realtime_queue: queue.Queue | None = None,
         on_segment_done: Callable[[Segment], None] | None = None,
+        meta=None,
     ) -> None:
         self.cfg = cfg
         self.layout = layout
         self.label = safe_name(label)
+        # 파일 안에 넣을 메타데이터(recorder.meta.RecordingMeta). 안 주면 최소한
+        # 이름·시각·'수동' 만이라도 남깁니다 — 모든 녹화 파일에 항상 남기는 것이 원칙.
+        if meta is None:
+            from .meta import RecordingMeta
+
+            meta = RecordingMeta(label=label, trigger="manual")
+        self.meta = meta
         # 이 녹화가 어느 과목인지. None 이면 과목 폴더 없이 예전 경로 그대로고,
         # 업로드도 하지 않습니다(어느 레포로 갈지 모르므로).
         self.course = course
@@ -486,6 +494,7 @@ class RecordingSession:
                 break
 
         # --- 정지 ---
+        ended_at = time.time()
         audio_results = audio_rec.stop() if audio_rec else []
         audio_started = audio_rec.started_at if audio_rec else 0.0
 
@@ -539,6 +548,7 @@ class RecordingSession:
                     layout=str(cfg.get("recording.audio.track_layout", "separate")),
                     delete_video=True,
                     delete_audio=False,  # 마지막 mux 뒤에 한 번만 지웁니다
+                    meta=self.meta, segment_index=index, ended_at=ended_at,
                 )
                 final_paths.append(final)
             except Exception as exc:

@@ -35,13 +35,15 @@ def test_rolls_only_overlap_is_split_between_classes_without_losing_class_time()
 
 
 def test_first_keeps_earlier_class_and_later_starts_after():
-    ws, lost = S.plan_day(_slots(("A", "09:00", "10:30"), ("B", "10:00", "11:00")), MON, 2, 3)
+    ws, lost = S.plan_day(_slots(("A", "09:00", "10:30"), ("B", "10:00", "11:00")), MON, 2, 3,
+                          "first")
     assert _win(ws) == [("A", "08:58", "10:30"), ("B", "10:30", "11:03")]
     assert _lost(lost) == [("B", "10:00", "10:30", "A")] and lost[0].minutes == 30
 
 
 def test_first_drops_a_class_fully_inside_another():
-    ws, lost = S.plan_day(_slots(("A", "09:00", "10:30"), ("B", "09:30", "10:00")), MON, 2, 3)
+    ws, lost = S.plan_day(_slots(("A", "09:00", "10:30"), ("B", "09:30", "10:00")), MON, 2, 3,
+                          "first")
     assert _win(ws) == [("A", "08:58", "10:33")]
     assert _lost(lost) == [("B", "09:30", "10:00", "A")]
 
@@ -68,22 +70,25 @@ def test_merge_records_one_file_with_both_names():
 
 def test_chain_of_three_under_first():
     ws, lost = S.plan_day(_slots(("A", "09:00", "10:30"), ("B", "10:00", "11:00"),
-                                 ("C", "10:45", "12:00")), MON, 2, 3)
+                                 ("C", "10:45", "12:00")), MON, 2, 3, "first")
     assert _win(ws) == [("A", "08:58", "10:30"), ("B", "10:30", "11:00"), ("C", "11:00", "12:03")]
     assert _lost(lost) == [("B", "10:00", "10:30", "A"), ("C", "10:45", "11:00", "B")]
 
 
 def test_same_start_is_decided_by_name_and_reported():
-    ws, lost = S.plan_day(_slots(("나", "09:00", "10:00"), ("가", "09:00", "10:00")), MON, 0, 0)
+    ws, lost = S.plan_day(_slots(("나", "09:00", "10:00"), ("가", "09:00", "10:00")), MON, 0, 0,
+                          "first")
     assert _win(ws) == [("가", "09:00", "10:00")] and _lost(lost) == [("나", "09:00", "10:00", "가")]
 
 
 def test_next_window_follows_the_plan_and_video_start():
     sl = _slots(("A", "09:00", "10:30"), ("B", "10:00", "11:00"))
-    a = S.next_window(sl, now=datetime(2026, 11, 23, 8, 0), pre_roll_min=2, post_roll_min=3)
+    a = S.next_window(sl, now=datetime(2026, 11, 23, 8, 0), pre_roll_min=2, post_roll_min=3,
+                      policy="first")
     assert (a.name, f"{a.start:%H:%M}", f"{a.end:%H:%M}", f"{a.video_from:%H:%M}") == (
         "A", "08:58", "10:30", "09:00")                  # 화면은 진짜 수업 시작에
-    b = S.next_window(sl, now=datetime(2026, 11, 23, 10, 30), pre_roll_min=2, post_roll_min=3)
+    b = S.next_window(sl, now=datetime(2026, 11, 23, 10, 30), pre_roll_min=2, post_roll_min=3,
+                      policy="first")
     assert (b.name, f"{b.start:%H:%M}", f"{b.video_from:%H:%M}") == ("B", "10:30", "10:30")
     m = S.next_window(sl, now=datetime(2026, 11, 23, 8, 0), pre_roll_min=2, post_roll_min=3,
                       policy="merge")
@@ -102,7 +107,8 @@ def test_overlap_report_and_text():
     assert len(rep) == 1 and rep[0][0] == 0
     text = S.describe_lost(*rep[0], "first")
     assert text == "월 영어2 10:00~10:30 (30분) 녹화 안 됨 — 자료구조 녹화 중 · 정책: 앞 수업 우선"
-    assert "겹치는 수업" in S.describe(sl, pre_roll_min=2, post_roll_min=3)
+    assert "겹치는 수업" in S.describe(sl, pre_roll_min=2, post_roll_min=3, policy="first")
+    assert "겹치는 수업" not in S.describe(sl, pre_roll_min=2, post_roll_min=3)   # 기본 merge
     assert S.overlap_report(sl, 2, 3, "merge", today=date(2026, 11, 20)) == []
 
 
@@ -149,3 +155,23 @@ def test_record_schedule_uses_the_overlap_plan(monkeypatch, tmp_path):
     assert 100 < seen["minutes"] < 106
     assert abs(seen["video_not_before"] - base.timestamp()) < 1          # 진짜 수업 시작
     # 기다림을 건너뛰었으니 길이는 지금 ~ 창 끝(B 끝 + post 3분) = 앞둔 10분 + 93분 안팎
+
+
+def test_default_policy_is_one_take_merge():
+    """기본값: 겹치면 앞 수업 시작부터 뒤 수업 끝까지 한 번에(원테이크), 잃는 시간 없음."""
+    from syncnote import config as C
+
+    assert S.DEFAULT_POLICY == "merge" and C.DEFAULTS["recording"]["overlap"] == "merge"
+    ws, lost = S.plan_day(_slots(("A", "09:00", "10:30"), ("B", "10:00", "11:00")), MON, 2, 3)
+    assert _win(ws) == [("A + B", "08:58", "11:03")] and lost == []
+    w = S.next_window(_slots(("A", "09:00", "10:30"), ("B", "10:00", "11:00")),
+                      now=datetime(2026, 11, 23, 8, 0), pre_roll_min=2, post_roll_min=3)
+    assert [(s.name, f"{a:%H:%M}", f"{b:%H:%M}") for s, a, b in w.classes] == [
+        ("A", "09:00", "10:30"), ("B", "10:00", "11:00")]          # 수업별 예정 시각
+
+
+def test_slot_reads_editor_columns():
+    sl = S.parse([{"name": "자료구조", "day": "mon", "start": "09:00", "end": "10:00",
+                   "course_id": "C1", "room": "공학관 401호", "professor": "김교수"}])[0]
+    assert (sl.course_id, sl.room, sl.professor) == ("C1", "공학관 401호", "김교수")
+    assert str(sl) == "월 09:00-10:00  자료구조"                     # 표시는 그대로

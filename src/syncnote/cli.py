@@ -644,10 +644,55 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
     return on_done
 
 
+def _recording_meta(cfg, label: str, trigger: str, *, occ=None, course=None,
+                    language: str | None = None, when=None):
+    """녹화 파일 안에 남길 메타데이터. 시간표 녹화는 계획의 수업들(겹치면 둘 이상),
+    수동·감지 녹화는 지금 시간표에 걸린 수업(있으면)을 담습니다."""
+    from . import __version__
+    from .recorder import schedule as sched
+    from .recorder.meta import ClassMeta, RecordingMeta
+
+    when = when or datetime.now()
+    pre = float(cfg.get("recording.pre_roll_minutes", 0) or 0)
+    post = float(cfg.get("recording.post_roll_minutes", 0) or 0)
+    classes = list(getattr(occ, "classes", ()) or ())
+    if not classes and occ is None:
+        # 수동·감지: 지금 진행 중인 시간표 수업
+        try:
+            for sl in sched.parse(cfg.get("recording.timetable", []) or []):
+                if sl.weekday == when.weekday():
+                    cs, ce = sl.occurrence(when.date())
+                    if cs <= when < ce:
+                        classes.append((sl, cs, ce))
+        except Exception:  # noqa: BLE001 — 메타데이터는 부가 정보, 녹화를 막지 않음
+            classes = []
+    metas = []
+    for i, (sl, cs, ce) in enumerate(classes):
+        # 과목(레포)은 이 녹화의 첫 수업 것입니다. 합친 녹화의 둘째 수업에 그 과목을
+        # 붙이면 다른 과목으로 잘못 표시되므로, 둘째부터는 시간표에 적힌 것만.
+        c = course if i == 0 else None
+        metas.append(ClassMeta(
+            name=sl.name, start=cs, end=ce,
+            course_id=str(getattr(sl, "course_id", "") or getattr(c, "id", "") or ""),
+            course_name=str(getattr(c, "name", "") or ""),
+            repo=str(getattr(c, "slug", "") or ""),
+            room=str(getattr(sl, "room", "") or ""),
+            professor=str(getattr(sl, "professor", "") or ""),
+            language=str(getattr(sl, "language", "") or language or "")))
+    return RecordingMeta(
+        label=label, trigger=trigger, classes=metas,
+        policy=str(cfg.get("recording.overlap", sched.DEFAULT_POLICY)) if len(metas) > 1 else "",
+        window_start=getattr(occ, "start", None), window_end=getattr(occ, "end", None),
+        pre_roll_min=pre if trigger == "schedule" else 0.0,
+        post_roll_min=post if trigger == "schedule" else 0.0,
+        machine=str(getattr(cfg, "machine_label", "") or ""), version=__version__)
+
+
 def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
                    upload: bool, dry_run: bool, stop_when=None,
                    language: str | None = None, course=None,
-                   stop_on_silence: bool = False, video_not_before: float = 0.0):
+                   stop_on_silence: bool = False, video_not_before: float = 0.0,
+                   meta=None):
     from .recorder import lock as rec_lock
 
     # 한 PC 에서 녹화는 한 번에 하나만. RecordSchedule 과 RecordWatch 는
@@ -667,7 +712,7 @@ def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
             cfg, layout, label, minutes=minutes, upload=upload,
             dry_run=dry_run, stop_when=stop_when, language=language,
             course=course, stop_on_silence=stop_on_silence,
-            video_not_before=video_not_before,
+            video_not_before=video_not_before, meta=meta,
         )
     finally:
         guard.__exit__(None, None, None)
@@ -677,7 +722,7 @@ def _run_recording_locked(cfg, layout: Layout, label: str, *, minutes: float | N
                           upload: bool, dry_run: bool, stop_when=None,
                           language: str | None = None, course=None,
                           stop_on_silence: bool = False,
-                          video_not_before: float = 0.0):
+                          video_not_before: float = 0.0, meta=None):
     from .recorder.session import RecordingSession
     from .transcribe import realtime
 
@@ -695,6 +740,8 @@ def _run_recording_locked(cfg, layout: Layout, label: str, *, minutes: float | N
         on_segment_done=_post_segment_factory(cfg, layout, store, label,
                                               upload=upload, dry_run=dry_run,
                                               language=language, course=course),
+        meta=meta if meta is not None else _recording_meta(
+            cfg, label, "manual", course=course, language=language),
     )
 
     if stop_when is not None:
@@ -742,7 +789,9 @@ def cmd_record_start(args) -> int:
     # 끝납니다. 사용자가 직접 누른 명령이니 더더욱 알려야 합니다.
     result = _run_recording(cfg, layout, label, minutes=args.minutes,
                             upload=not args.no_upload, dry_run=args.dry_run,
-                            language=args.language, course=course)
+                            language=args.language, course=course,
+                            meta=_recording_meta(cfg, label, "manual", course=course,
+                                                 language=args.language))
     if result is None:
         log.error("녹화를 하나도 하지 못했습니다(다른 녹화가 돌고 있습니다).")
         return 1
@@ -788,7 +837,7 @@ def cmd_record_schedule(args) -> int:
     pre = float(cfg.get("recording.pre_roll_minutes", 0))
     post = float(cfg.get("recording.post_roll_minutes", 0))
     # 겹치는 수업은 정책대로 나눈 '녹화 창' 을 따릅니다(시간표 편집기 경고와 같은 계산).
-    policy = str(cfg.get("recording.overlap", "first"))
+    policy = str(cfg.get("recording.overlap", sched.DEFAULT_POLICY))
 
     print(sched.describe(slots, off, pre_roll_min=pre, post_roll_min=post, policy=policy))
     if args.show:
@@ -826,7 +875,9 @@ def cmd_record_schedule(args) -> int:
         result = _run_recording(cfg, layout, nxt.name, minutes=minutes,
                                 upload=not args.no_upload, dry_run=args.dry_run,
                                 language=nxt.slot.language, course=course,
-                                stop_on_silence=True, video_not_before=video_at)
+                                stop_on_silence=True, video_not_before=video_at,
+                                meta=_recording_meta(cfg, nxt.name, "schedule", occ=nxt,
+                                                     course=course))
         if result is None:
             log.error("[%s] 녹화를 시작하지 못했습니다(다른 녹화가 돌고 있습니다). "
                       "이 수업은 녹화되지 않았습니다.", nxt.name)
@@ -871,6 +922,7 @@ def cmd_record_watch(args) -> int:
             cfg, layout, label, minutes=None,
             upload=not args.no_upload, dry_run=args.dry_run,
             stop_when=watcher.wait_until_gone,
+            meta=_recording_meta(cfg, label, "watch", course=course, language=args.language),
             language=args.language, course=course,
             stop_on_silence=True,
         )
@@ -1431,7 +1483,7 @@ def cmd_stream_schedule(args) -> int:
     s = _stream_settings(cfg, args)
     slots = live.timetable(cfg, s)
     off = sched.holidays(cfg.get("recording.holidays", []))
-    policy = str(cfg.get("recording.overlap", "first"))
+    policy = str(cfg.get("recording.overlap", sched.DEFAULT_POLICY))
     print(sched.describe(slots, off, pre_roll_min=s.pre_roll_minutes,
                          post_roll_min=s.post_roll_minutes, policy=policy)
           .replace("다음 녹화", "다음 송출"))

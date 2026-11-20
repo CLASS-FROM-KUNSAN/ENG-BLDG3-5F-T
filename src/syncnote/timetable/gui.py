@@ -1212,7 +1212,7 @@ class TimetableWindow(QMainWindow):
         self.show_weekend = False
         self.summary: SaveSummary | None = None
         self.catalog: list[eclass_catalog.Entry] = []
-        self.rec_params = {"pre": 0.0, "post": 0.0, "policy": "first"}
+        self.rec_params = {"pre": 0.0, "post": 0.0, "policy": sched.DEFAULT_POLICY}
         self.lost: list = []
 
         self.scene = TimetableScene()
@@ -1583,10 +1583,10 @@ class TimetableWindow(QMainWindow):
                 return float(vals.get(f"recording.{key}", default))
             except (TypeError, ValueError):
                 return float(default)
-        policy = str(vals.get("recording.overlap", rec.get("overlap", "first")))
+        policy = str(vals.get("recording.overlap", rec.get("overlap", sched.DEFAULT_POLICY)))
         return {"pre": num("pre_roll_minutes", rec.get("pre_roll_minutes", 0)),
                 "post": num("post_roll_minutes", rec.get("post_roll_minutes", 0)),
-                "policy": policy if policy in sched.OVERLAP_POLICIES else "first"}
+                "policy": policy if policy in sched.OVERLAP_POLICIES else sched.DEFAULT_POLICY}
 
     def recording_losses(self) -> list:
         """녹화기와 같은 계획으로 '녹화되지 않는 수업 시간'. [(요일 번호, Lost)]"""

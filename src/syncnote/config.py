@@ -182,8 +182,8 @@ DEFAULTS: dict[str, Any] = {
             "watch_stop_grace_sec": 60,
         },
         "timetable": [],
-        # 시간이 겹치는 수업: first(앞 수업 우선) / last(뒤 수업 우선) / merge(하나로)
-        "overlap": "first",
+        # 시간이 겹치는 수업: merge(하나로 이어서, 기본) / first(앞 수업 우선) / last(뒤 수업 우선)
+        "overlap": "merge",
         # 쉬는 날. 이 날짜의 수업은 녹화·송출 일정에서 건너뜁니다.
         # [[recording.holidays]] date = "YYYY-MM-DD", name = "..."
         "holidays": [],

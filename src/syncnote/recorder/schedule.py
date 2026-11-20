@@ -34,6 +34,10 @@ class Slot:
     # 과목마다 언어가 다릅니다. 영어 수업을 ko 로 전사하면 소리 나는 대로
     # 한글을 뱉어 전사본이 통째로 쓸모없어집니다.
     language: str | None = None
+    # 시간표 편집기가 함께 적는 칸. 녹화 파일 메타데이터와 과목 판정에 씀.
+    course_id: str = ""
+    room: str = ""
+    professor: str = ""
 
     @property
     def weekday(self) -> int:
@@ -73,6 +77,9 @@ def parse(entries: Iterable[dict]) -> list[Slot]:
                 start=str(entry["start"]),
                 end=str(entry["end"]),
                 language=_as_language(entry.get("language")),
+                course_id=str(entry.get("course_id", "") or ""),
+                room=str(entry.get("room", "") or ""),
+                professor=str(entry.get("professor", "") or ""),
             )
             # 여기서 걸러야 합니다. 그냥 두면 요일·시각이 깨진 행이 나중에
             # 일정 계산 중 KeyError/ValueError 로 대기 루프 전체를 죽입니다.
@@ -94,6 +101,8 @@ class Occurrence:
     video_from: datetime | None = None     # 화면을 켤 시각(진짜 수업 시작 또는 넘겨받은 시각)
     slots: tuple = ()                      # 이 녹화에 든 수업들(merge 면 둘 이상)
     label: str = ""
+    # (Slot, 예정 수업 시작, 예정 수업 끝) — 파일 메타데이터에 남김
+    classes: tuple = ()
 
     @property
     def minutes(self) -> float:
@@ -115,11 +124,14 @@ class Occurrence:
 #       나눔. 수업 시간은 잃지 않음(바로 이어지는 수업이 앞 수업의 post-roll 때문에
 #       앞부분을 잃던 것을 막음).
 #   수업 시간이 겹침 → recording.overlap
-#       first  앞 수업을 끝까지, 뒤 수업은 그 뒤부터(뒤 수업 앞부분을 잃음) [기본]
+#       first  앞 수업을 끝까지, 뒤 수업은 그 뒤부터(뒤 수업 앞부분을 잃음)
 #       last   뒤 수업이 시작하면 넘김. 뒤 수업이 앞 수업 안에 쏙 들어가면 끝난 뒤
 #              앞 수업을 이어서(앞 수업 가운데를 잃음)
-#       merge  앞 수업 시작부터 뒤 수업 끝까지 한 파일(잃는 시간 없음, 이름에 둘 다)
+#       merge  앞 수업 시작부터 뒤 수업 끝까지 한 파일(잃는 시간 없음, 이름에 둘 다) [기본]
 OVERLAP_POLICIES = {"first": "앞 수업 우선", "last": "뒤 수업 우선", "merge": "하나로 이어서"}
+# 기본: 겹치면 앞 수업 시작부터 뒤 수업 끝까지 한 번에(원테이크). 잃는 시간이 없고,
+# 수업별 시작·끝은 파일 메타데이터(태그·챕터)에 남습니다(recorder.meta).
+DEFAULT_POLICY = "merge"
 
 
 @dataclass
@@ -153,7 +165,7 @@ class Lost:
 
 
 def plan_day(slots: list[Slot], day: date, pre_roll_min: float = 0.0,
-             post_roll_min: float = 0.0, policy: str = "first") -> tuple[list[Window], list[Lost]]:
+             post_roll_min: float = 0.0, policy: str = DEFAULT_POLICY) -> tuple[list[Window], list[Lost]]:
     pre, post = timedelta(minutes=pre_roll_min), timedelta(minutes=post_roll_min)
     todays = []
     for s in slots:
@@ -215,7 +227,7 @@ def plan_day(slots: list[Slot], day: date, pre_roll_min: float = 0.0,
 def next_window(slots: list[Slot], *, now: datetime | None = None,
                 pre_roll_min: float = 0.0, post_roll_min: float = 0.0,
                 horizon_days: int = 8, skip_days: set[date] | None = None,
-                policy: str = "first") -> Occurrence | None:
+                policy: str = DEFAULT_POLICY) -> Occurrence | None:
     """next_occurrence 와 같되, 겹치는 수업을 정책대로 나눈 실제 녹화 창 기준."""
     now = now or datetime.now()
     skip = skip_days or set()
@@ -230,13 +242,14 @@ def next_window(slots: list[Slot], *, now: datetime | None = None,
         if ahead:
             w = min(ahead, key=lambda w: w.start)
             video = w.start if w.resumed else max(w.start, w.cls_start)
+            classes = tuple((sl, *sl.occurrence(day)) for sl in w.slots)
             return Occurrence(w.slot, w.start, w.end, video_from=video,
-                              slots=tuple(w.slots), label=w.label)
+                              slots=tuple(w.slots), label=w.label, classes=classes)
     return None
 
 
 def overlap_report(slots: list[Slot], pre_roll_min: float = 0.0, post_roll_min: float = 0.0,
-                   policy: str = "first", today: date | None = None) -> list[tuple[int, Lost]]:
+                   policy: str = DEFAULT_POLICY, today: date | None = None) -> list[tuple[int, Lost]]:
     """요일마다(다가오는 그 요일 기준) 녹화되지 않는 수업 시간. (요일 번호, Lost)."""
     today = today or date.today()
     out = []
@@ -325,7 +338,7 @@ def wait_until(when: datetime, *, stop_check=None, poll_sec: float = 20.0) -> bo
 
 def describe(slots: list[Slot], skip_days: set[date] | None = None, *,
              pre_roll_min: float = 0.0, post_roll_min: float = 0.0,
-             policy: str = "first") -> str:
+             policy: str = DEFAULT_POLICY) -> str:
     if not slots:
         return ("시간표가 비어 있습니다.\n"
                 "config.toml 의 [[recording.timetable]] 블록을 채우거나 "
