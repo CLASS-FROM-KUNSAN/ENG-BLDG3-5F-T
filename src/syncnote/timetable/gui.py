@@ -17,6 +17,7 @@ Swift 앱(2026년 시간표)의 화면 구성을 데스크톱으로 옮겼습니
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -52,6 +53,7 @@ from PySide6.QtGui import (
     QPalette,
     QPen,
     QScreen,
+    QTextDocument,
     QUndoCommand,
     QUndoStack,
 )
@@ -282,7 +284,7 @@ class ScreenKeeper(QObject):
 
     DELAY_MS = 250
 
-    def __init__(self, win: QWidget, want: QSize | None = None) -> None:
+    def __init__(self, win: QWidget, want: QSize | Callable[[], QSize] | None = None) -> None:
         super().__init__(win)
         self.win = win
         self.want = want
@@ -296,7 +298,8 @@ class ScreenKeeper(QObject):
 
     # 창마다 하나. 이미 있으면 그것을 돌려줍니다.
     @classmethod
-    def attach(cls, win: QWidget, want: QSize | None = None) -> ScreenKeeper:
+    def attach(cls, win: QWidget,
+               want: QSize | Callable[[], QSize] | None = None) -> ScreenKeeper:
         k = win.findChild(ScreenKeeper, options=Qt.FindChildOption.FindDirectChildrenOnly)
         return k if k is not None else cls(win, want)
 
@@ -373,8 +376,10 @@ class ScreenKeeper(QObject):
             return
         if self._skip():
             return
+        # want 가 함수면 지금(레이아웃이 잡힌 뒤) 계산합니다 — 글자 실제 폭을 재려고.
+        want = self.want() if callable(self.want) else self.want
         left, top, right, bottom = self._chrome()
-        self._apply(start_rect(self.want, self._avail(), QSize(left + right, top + bottom)))
+        self._apply(start_rect(want, self._avail(), QSize(left + right, top + bottom)))
 
     def _skip(self) -> bool:
         w = self.win
@@ -404,6 +409,19 @@ class ScreenKeeper(QObject):
         before = QRect(fr)
         self._apply(new)
         return self.win.frameGeometry() != before
+
+
+def natural_width(label: QLabel) -> int:
+    """줄바꿈 없이 한 줄로 그릴 때의 글자 폭(여백 포함)."""
+    text = label.text()
+    if label.textFormat() != Qt.TextFormat.PlainText and "<" in text:
+        doc = QTextDocument()
+        doc.setDefaultFont(label.font())
+        doc.setHtml(text)
+        text = doc.toPlainText()
+    m = label.contentsMargins()
+    return label.fontMetrics().horizontalAdvance(text) + m.left() + m.right() \
+        + 2 * label.margin() + 4
 
 
 def _mix(a: QColor, b: QColor, t: float) -> QColor:
@@ -850,7 +868,9 @@ class SaveSummary(QDialog):
         self.win = win
         self.setWindowTitle("저장 결과 · 다가오는 일정")
         self.resize(520, 560)
-        ScreenKeeper.attach(self)
+        # 처음 폭은 가장 긴 줄(예: '… · 쉼(개교기념일)')이 잘리지 않게. 영역보다
+        # 넓으면 ScreenKeeper 가 줄이고, 그때만 가로 스크롤이 생깁니다.
+        ScreenKeeper.attach(self, self._preferred_size)
         lay = QVBoxLayout(self)
 
         self.state = QLabel()
@@ -907,6 +927,12 @@ class SaveSummary(QDialog):
         win.undo.indexChanged.connect(self._on_undo)
         win.undo.cleanChanged.connect(self._on_undo)
         self.htable.itemSelectionChanged.connect(self._update_buttons)
+
+    def _preferred_size(self) -> QSize:
+        longest = self.next_list.sizeHintForColumn(0) if self.next_list.count() else 0
+        frame = 2 * self.next_list.frameWidth() + self.next_list.verticalScrollBar().sizeHint().width()
+        pad = max(0, self.width() - self.next_list.width())
+        return QSize(max(520, longest + frame + pad + 8), 560)
 
     def _on_undo(self, *_a) -> None:
         if self.isVisible():
@@ -1001,7 +1027,7 @@ class TimetableWindow(QMainWindow):
         self._build_menus()
         # 크기를 고정하지 않습니다. 처음엔 이만큼을 원하되 작업 가능한 영역에
         # 맞춰 줄이고, 그 뒤로도 영역 밖으로 나가면 되돌립니다.
-        self.keeper = ScreenKeeper.attach(self, QSize(TIME_W + DAY_W * 5 + 80, 900))
+        self.keeper = ScreenKeeper.attach(self, self._preferred_size)
 
         # 다른 곳(메모장, 다른 PC 동기화, 두 번째 편집기)에서 config.toml 이
         # 바뀌는 것을 감시합니다. 저장은 임시 파일을 바꿔치기(os.replace)
@@ -1016,6 +1042,17 @@ class TimetableWindow(QMainWindow):
         self._disk_timer.timeout.connect(self.check_disk)
 
         self.reload_from_disk()
+
+    def _preferred_size(self) -> QSize:
+        """처음 열 때 원하는 크기. 격자 5일치와, 긴 안내 문구가 **한 줄로**
+        들어가는 폭 중 큰 쪽. 실제로는 ScreenKeeper 가 작업 영역에 맞춰 줄이고,
+        그때만 문구가 줄바꿈됩니다. 창이 떠서 레이아웃이 잡힌 뒤 불립니다."""
+        pad = max(0, self.width() - self.hint.width())       # 탭 테두리·여백
+        hol_btn = self.summary_btn.sizeHint().width() + 12   # 공휴일 탭 오른쪽 버튼 + 간격
+        width = max(TIME_W + DAY_W * 5 + 80,
+                    natural_width(self.hint) + pad,
+                    natural_width(self.holiday_note) + hol_btn + pad)
+        return QSize(width, 900)
 
     # -- 다른 곳에서 바뀐 파일 -------------------------------------------
     def _build_banner(self) -> QWidget:
@@ -1122,7 +1159,11 @@ class TimetableWindow(QMainWindow):
         hint = QLabel("빈 칸 드래그 = 추가 · 블록 끌기 = 이동(Shift: 그 요일만) · "
                       "아래 가장자리 = 길이 · 더블클릭 = 수정 · 우클릭 = 메뉴")
         hint.setStyleSheet("color: #6B7280;")
-        hint.setWordWrap(True)   # 한 줄로 두면 창 최소 폭이 950px 로 묶여 작은 화면을 넘음
+        # 줄바꿈은 '영역이 모자랄 때만' 일어납니다. 처음 여는 폭은 이 문구가
+        # 한 줄로 들어가게 잡고(_preferred_size), 영역보다 넓을 때만 접힙니다.
+        # 줄바꿈을 끄면 최소 폭이 950px 로 묶여 작은 화면을 넘습니다.
+        hint.setWordWrap(True)
+        self.hint = hint
         lay.addWidget(hint)
         lay.addWidget(self.view, 1)
         return w
@@ -1164,6 +1205,7 @@ class TimetableWindow(QMainWindow):
         note = QLabel("여기 적은 날짜의 수업은 녹화·송출 일정에서 건너뜁니다.")
         note.setWordWrap(True)
         top.addWidget(note, 1)
+        self.holiday_note = note
         top.addStretch(1)
         self.summary_btn = QPushButton("다가오는 일정 · 공휴일 보기")
         self.summary_btn.setToolTip("앞으로 녹화될 수업과 공휴일로 쉬는 회차를 확인합니다 (Ctrl+I)")
