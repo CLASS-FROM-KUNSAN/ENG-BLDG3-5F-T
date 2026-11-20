@@ -95,3 +95,14 @@ def qt_app():
     global _QT_APP
     _QT_APP = QApplication.instance() or QApplication([])
     return _QT_APP
+
+
+@pytest.fixture(autouse=True)
+def _no_setup_flow_in_tests(monkeypatch):
+    """편집기 저장 뒤 설치·점검(setup.bat·pip install)을 테스트에서는 끔.
+    그 흐름을 시험하는 테스트는 명령을 가짜로 바꾸고 직접 켭니다."""
+    try:
+        from syncnote.timetable import gui
+    except ImportError:          # PySide6 없음(CI) — 해당 없음
+        return
+    monkeypatch.setattr(gui.TimetableWindow, "SETUP_AFTER_SAVE", False)

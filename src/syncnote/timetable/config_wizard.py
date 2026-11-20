@@ -178,7 +178,9 @@ class FieldRow(QFrame):
     # -- 표시 -----------------------------------------------------------
     def restyle(self) -> None:
         v = self.dlg.values.get(self.field.dotted)
-        changed = v is not _BAD and v != self.dlg.base_value(self.field)
+        changed = v is not _BAD and (v != self.dlg.base_value(self.field)
+                                      or (self.dlg.fill_missing
+                                          and self.field.dotted in self.dlg.missing))
         bad = v is _BAD
         off_default = v is not _BAD and v != self.field.value
         issues = self.dlg.issues_for(self.field)
@@ -212,7 +214,8 @@ class SettingsDialog(QDialog):
 
     def __init__(self, parent: QWidget | None, example_text: str, target: Path,
                  base_text: str | None = None,
-                 example_name: str = "config.example.toml") -> None:
+                 example_name: str = "config.example.toml",
+                 fill_missing: bool = False) -> None:
         super().__init__(parent)
         from .gui import ScreenKeeper  # 순환 import 피함
 
@@ -226,6 +229,10 @@ class SettingsDialog(QDialog):
         self.fields = [f for s in self.sections for f in s.fields]
         self.by_dotted = {f.dotted: f for f in self.fields}
         self.base_vals = S.current_values(self.base) if self.edit_mode else {}
+        # 편집 모드에서 이 파일에 없는 설정. fill_missing 이면 안 건드려도 예시 값으로 넣음.
+        self.missing = [f.dotted for f in self.fields
+                        if self.edit_mode and f.dotted not in self.base_vals]
+        self.fill_missing = fill_missing and bool(self.missing)
         self.values: dict[str, Any] = {f.dotted: self.base_value(f) for f in self.fields}
         self.problem_list: list[str] = []
         self.rows: dict[str, FieldRow] = {}
@@ -237,7 +244,12 @@ class SettingsDialog(QDialog):
         lay = QVBoxLayout(self)
 
         missing = sum(1 for f in self.fields if f.dotted not in self.base_vals)
-        if self.edit_mode:
+        if self.fill_missing:
+            msg = (f"⚠ <b>{_esc(self.target.name)}</b> 에 <b>{_esc(example_name)}</b> 의 설정 "
+                   f"<b>{len(self.missing)}개</b>가 빠져 있습니다. 맨 위 '먼저 확인할 항목' 에 모았고, "
+                   "<b>저장</b> 하면 고친 값(안 고치면 예시 값)으로 채워 넣습니다. "
+                   "다른 줄·주석·시간표는 그대로 둡니다. ")
+        elif self.edit_mode:
             msg = (f"<b>{_esc(self.target.name)}</b> 의 지금 값을 보여 줍니다. 항목과 설명은 "
                    f"<b>{_esc(example_name)}</b> 에서 읽었습니다(설정 {len(self.fields)}개"
                    + (f", 이 파일에 없는 항목 {missing}개는 예시 값으로 표시" if missing else "")
@@ -305,7 +317,8 @@ class SettingsDialog(QDialog):
 
     def changes(self) -> dict[str, Any]:
         return {d: v for d, v in self.values.items()
-                if v is not _BAD and v != self.base_value(self.by_dotted[d])}
+                if v is not _BAD and (v != self.base_value(self.by_dotted[d])
+                                      or (self.fill_missing and d in self.missing))}
 
     def on_edit(self, f: S.Field, value: Any) -> None:
         self.values[f.dotted] = value
@@ -345,6 +358,8 @@ class SettingsDialog(QDialog):
 
     def _first_fields(self) -> list[S.Field]:
         seen: list[S.Field] = []
+        if self.fill_missing:                 # 빠진 설정이 먼저
+            seen += [self.by_dotted[d] for d in self.missing]
         for p in self.problem_list:
             for f in S.fields_in(p, self.fields):
                 if f not in seen:

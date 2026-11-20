@@ -101,13 +101,38 @@ def _uploader(cfg, *, dry_run: bool = False, course=None, what: str = ""):
 # doctor
 # ---------------------------------------------------------------------------
 def cmd_doctor(args) -> int:
+    """환경 점검. --json 이면 같은 내용을 구조화해 한 줄 JSON 으로(시간표 편집기가 그림)."""
+    import contextlib
+    import io
+    import json
+
+    rep: dict = {"ok": True, "info": [], "config_error": None, "sections": [], "verdict": ""}
+    if getattr(args, "json", False):
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = _doctor(args, rep)
+        print(json.dumps(rep, ensure_ascii=False))
+        return rc
+    return _doctor(args, rep)
+
+
+def _doctor(args, rep: dict) -> int:
+    def info(label: str, value) -> None:
+        rep["info"].append([label, str(value)])
+
+    def section(title: str) -> list:
+        items: list = []
+        rep["sections"].append({"title": title, "items": items})
+        return items
+
     print("환경 점검")
     print("=" * 62)
     ok = True
 
     print(f"  Python          : {sys.version.split()[0]}")
+    info("Python", sys.version.split()[0])
     if sys.version_info < (3, 10):  # noqa: UP036 - pip 를 거치지 않고 실행한 경우 안내
         print("    ! Python 3.10 이상을 권장합니다.")
+        section("Python").append({"mark": "!", "name": "Python", "detail": "3.10 이상을 권장합니다"})
         ok = False
 
     # 설정
@@ -116,8 +141,14 @@ def cmd_doctor(args) -> int:
         print(f"  설정 파일        : {cfg.path}")
         print(f"  데이터 폴더      : {cfg.data_dir}")
         print(f"  기기 이름        : {cfg.machine_label}")
+        info("설정 파일", cfg.path)
+        info("데이터 폴더", cfg.data_dir)
+        info("기기 이름", cfg.machine_label)
     except config_module.ConfigError as exc:
         print(f"  설정 파일        : 실패\n{exc}")
+        rep["config_error"] = str(exc)
+        rep["ok"] = False
+        rep["verdict"] = "설정 파일을 읽지 못해 점검을 멈췄습니다."
         return 1
 
     # 패키지
@@ -131,38 +162,50 @@ def cmd_doctor(args) -> int:
         ("psutil", "프로그램 감지(선택)", bool(cfg.get("recording.triggers.watch_enabled"))),
     ]
     print("\n  파이썬 패키지")
+    pkgs = section("파이썬 패키지")
     for module, purpose, required in checks:
         try:
             __import__(module)
             print(f"    [O] {module:<16} {purpose}")
+            pkgs.append({"mark": "O", "name": module, "detail": purpose})
         except ImportError:
             mark = "[X]" if required else "[-]"
-            print(f"    {mark} {module:<16} {purpose}  -> pip install {module.replace('_','-')}")
+            fix = f"pip install {module.replace('_','-')}"
+            print(f"    {mark} {module:<16} {purpose}  -> {fix}")
+            pkgs.append({"mark": mark[1], "name": module, "detail": f"{purpose} — {fix}"})
             if required:
                 ok = False
 
     # ffmpeg
     print("\n  외부 도구")
+    tools = section("외부 도구")
     try:
         from .recorder.ffmpeg_util import find_ffmpeg, find_ffprobe
 
         print(f"    [O] ffmpeg           {find_ffmpeg()}")
+        tools.append({"mark": "O", "name": "ffmpeg", "detail": str(find_ffmpeg())})
         probe = find_ffprobe()
         print(f"    {'[O]' if probe else '[-]'} ffprobe          {probe or '없음(길이 계산만 영향)'}")
+        tools.append({"mark": "O" if probe else "-", "name": "ffprobe",
+                      "detail": str(probe) if probe else "없음(길이 계산만 영향)"})
     except Exception as exc:
         print(f"    [X] ffmpeg           {exc}")
+        tools.append({"mark": "X", "name": "ffmpeg", "detail": str(exc)})
         if cfg.get("recording.enabled"):
             ok = False
 
     # 비밀값
     print("\n  자격증명")
+    creds = section("자격증명")
     for name, where in secrets.status().items():
         mark = "[O]" if where != "없음" else "[-]"
         print(f"    {mark} {name:<16} {where}")
+        creds.append({"mark": mark[1], "name": name, "detail": where})
 
     # 오디오 장치
     if cfg.get("recording.audio.enabled"):
         print("\n  오디오 장치")
+        audio = section("오디오 장치")
         try:
             from .recorder import devices as dev
 
@@ -170,14 +213,22 @@ def cmd_doctor(args) -> int:
             loop = [d for d in found if d.kind == "loopback"]
             mics = [d for d in found if d.kind == "microphone"]
             print(f"    루프백 {len(loop)}개 / 마이크 {len(mics)}개")
+            audio.append({"mark": "O" if loop or mics else "-", "name": "장치",
+                          "detail": f"루프백 {len(loop)}개 / 마이크 {len(mics)}개"})
             if not loop and cfg.get("recording.audio.system_enabled"):
                 print("    ! 시스템 소리를 잡을 루프백 장치가 없습니다.")
+                audio.append({"mark": "X", "name": "루프백",
+                              "detail": "시스템 소리를 잡을 루프백 장치가 없습니다"})
                 ok = False
         except Exception as exc:
             print(f"    [X] {exc}")
+            audio.append({"mark": "X", "name": "장치", "detail": str(exc)})
 
     print("\n" + "=" * 62)
-    print("모두 정상입니다." if ok else "위의 [X] 항목을 해결하세요.")
+    verdict = "모두 정상입니다." if ok else "위의 [X] 항목을 해결하세요."
+    print(verdict)
+    rep["ok"] = ok
+    rep["verdict"] = verdict
     return 0 if ok else 1
 
 
@@ -186,6 +237,9 @@ def cmd_devices(args) -> int:
     from .recorder.devices import describe
     from .recorder.monitors import enumerate_monitors
 
+    if getattr(args, "json", False):
+        print(_devices_json(enumerate_monitors, probe=getattr(args, "probe", False)))
+        return 0
     print(describe())
     print()
     print("화면")
@@ -201,6 +255,49 @@ def cmd_devices(args) -> int:
         print("  [recording.video] monitor = <번호>  (0 = 전체 바탕화면)")
         print("  window_title 을 적어 두면 monitor 는 무시됩니다.")
     return 0
+
+
+def _devices_json(enumerate_monitors, probe: bool = False) -> str:
+    """오디오 장치·화면 목록을 구조화(describe() 와 같은 분류·같은 설정 키).
+
+    probe=True 면 **마이크만** 잠깐(1초) 열어 최대 레벨을 잽니다(디스크에 안 씀,
+    devices.probe_mic). 정확히 0 이면 '신호 경로 없음'(가상 장치·권한 꺼짐).
+    시스템 소리(루프백)는 재생 중인 게 없으면 0 이 정상이라 재지 않습니다.
+    """
+    import json
+
+    from .recorder import devices as dev
+
+    out: dict = {"audio_error": None, "groups": [], "monitors": [], "probed": bool(probe)}
+    try:
+        found = dev.list_devices()
+    except Exception as exc:  # noqa: BLE001 — soundcard 없음 등도 화면에 보여 줌
+        out["audio_error"] = str(exc)
+        found = []
+    levels: dict[str, dict] = {}
+    if probe and found:
+        try:
+            for mic in dev._sc().all_microphones(include_loopback=False):
+                r = dev.probe_mic(mic, duration_sec=1.0)
+                levels[str(mic.name)] = {"peak": r.peak, "dead": r.dead, "error": r.error}
+        except Exception as exc:  # noqa: BLE001
+            out["probe_error"] = str(exc)
+    for kind, title, key in (
+        ("loopback", "시스템 소리 캡처용", "recording.audio.system_device"),
+        ("microphone", "마이크", "recording.audio.mic_device"),
+        ("speaker", "재생 장치 (참고용)", ""),
+    ):
+        out["groups"].append({
+            "kind": kind, "title": title, "config_key": key,
+            "devices": [{"name": d.name, "default": bool(d.is_default),
+                         **(levels.get(d.name, {}) if kind == "microphone" else {})}
+                        for d in found if d.kind == kind]})
+    try:
+        out["monitors"] = [{"index": m.index, "text": m.describe(), "primary": bool(m.primary)}
+                           for m in enumerate_monitors()]
+    except Exception:  # noqa: BLE001
+        out["monitors"] = []
+    return json.dumps(out, ensure_ascii=False)
 
 
 def cmd_secrets(args) -> int:
@@ -1500,8 +1597,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-q", "--quiet", action="store_true", help="콘솔 출력 끄기(파일 로그는 유지)")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("doctor", help="환경 점검").set_defaults(func=cmd_doctor)
-    sub.add_parser("devices", help="오디오 장치 목록").set_defaults(func=cmd_devices)
+    p = sub.add_parser("doctor", help="환경 점검")
+    p.add_argument("--json", action="store_true", help="결과를 JSON 한 줄로(시간표 편집기용)")
+    p.set_defaults(func=cmd_doctor)
+    p = sub.add_parser("devices", help="오디오 장치 목록")
+    p.add_argument("--json", action="store_true", help="결과를 JSON 한 줄로(시간표 편집기용)")
+    p.add_argument("--probe", action="store_true",
+                   help="--json 과 함께: 마이크를 1초씩 열어 소리가 들어오는지 잼(저장 안 함)")
+    p.set_defaults(func=cmd_devices)
 
     p = sub.add_parser("secrets", help="비밀번호/토큰 관리")
     p.add_argument("action", choices=["set", "delete", "status"], nargs="?", default="status")

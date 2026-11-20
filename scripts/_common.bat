@@ -29,4 +29,6 @@ REM 동봉 ffmpeg 가 있으면 PATH 에 추가
 if exist "%REPO%\tools\ffmpeg\bin\ffmpeg.exe" set "PATH=%REPO%\tools\ffmpeg\bin;%PATH%"
 
 REM config.toml 위치를 명시 (작업 스케줄러는 작업 폴더가 엉뚱할 수 있음)
-if exist "%REPO%\config.toml" set "SYNCNOTE_CONFIG=%REPO%\config.toml"
+REM 이미 정해져 있으면 그대로 둡니다 — 시간표 편집기가 연 설정으로 doctor·probe 를
+REM 돌릴 때 레포의 config.toml 로 바꿔치기되면 엉뚱한 설정을 점검합니다.
+if not defined SYNCNOTE_CONFIG if exist "%REPO%\config.toml" set "SYNCNOTE_CONFIG=%REPO%\config.toml"

@@ -1193,6 +1193,10 @@ class LinkDialog(QDialog):
 # 메인 창
 # ---------------------------------------------------------------------------
 class TimetableWindow(QMainWindow):
+    # 저장 뒤 설치·점검 흐름(setup.bat → 라이브러리 → 비밀번호 → doctor/devices).
+    # 테스트는 conftest 에서 끕니다(진짜 pip install 을 돌리면 안 되므로).
+    SETUP_AFTER_SAVE = True
+
     def __init__(self, config_path: Path) -> None:
         super().__init__()
         self.path = Path(config_path)
@@ -1488,6 +1492,7 @@ class TimetableWindow(QMainWindow):
         act(f, "config.toml 열기…", self.open_other, QKeySequence.StandardKey.Open)
         act(f, "디스크에서 다시 읽기", self.reload_from_disk, "F5")
         act(f, "설정 편집…", self.edit_settings, "Ctrl+,")
+        act(f, "설치 · 점검 다시 실행…", self.run_setup_flow)
         act(f, "저장", self.save, QKeySequence.StandardKey.Save)
         act(f, "다가오는 일정 · 공휴일 보기…", self.show_summary, "Ctrl+I")
         f.addSeparator()
@@ -1740,7 +1745,7 @@ class TimetableWindow(QMainWindow):
             QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard
             | QMessageBox.StandardButton.Cancel)
         if ans == QMessageBox.StandardButton.Save:
-            return self.save(show_summary=False)   # 닫는 중엔 결과 창을 안 띄움
+            return self.save(show_summary=False, setup=False)   # 닫는 중엔 창을 안 띄움
         return ans == QMessageBox.StandardButton.Discard
 
     def reload_from_disk(self) -> None:
@@ -1783,8 +1788,17 @@ class TimetableWindow(QMainWindow):
             self.undo.setClean()    # 위에서 이미 확인함
             self.reload_from_disk()
 
-    def save(self, show_summary: bool = True) -> bool:
-        if not self.path.exists() and not self._create_config():
+    def save(self, show_summary: bool = True, setup: bool | None = None) -> bool:
+        """저장.
+        분기 2(config.toml 없음): 설정 화면 → 만들기 → 시간표 저장 → 설치·점검.
+        분기 1(config.toml 있음): 빠진 설정 확인(있으면 경고 + 설정 화면)
+                                   → 시간표 저장 → 설치·점검.
+        setup=False 면 설치·점검을 건너뜁니다(창을 닫으며 저장할 때 등)."""
+        setup = self.SETUP_AFTER_SAVE if setup is None else setup
+        if not self.path.exists():
+            if not self._create_config():
+                return False
+        elif setup and not self.check_missing_settings():
             return False
         if not self._conflict_ok():
             return False
@@ -1802,6 +1816,8 @@ class TimetableWindow(QMainWindow):
                 f"config.toml 에 손으로 적은 시간표/공휴일 표 {commented}개를 주석 처리했습니다.\n"
                 "같은 수업이 두 번 잡히지 않게 하기 위해서이며, 지우지는 않았습니다.")
         self.statusBar().showMessage(note, 6000)
+        if setup:
+            self.run_setup_flow()
         if show_summary:
             self.show_summary()
         return True
@@ -1881,6 +1897,10 @@ class TimetableWindow(QMainWindow):
             return False
         if dlg is None or dlg.exec() != QDialog.DialogCode.Accepted:
             return False
+        return self._write_settings(dlg, raw)
+
+    def _write_settings(self, dlg, raw: bytes) -> bool:
+        """설정 창 결과를 config.toml 에 씀(창을 연 사이 바뀌었으면 거부)."""
         if not dlg.changes():
             self.statusBar().showMessage("바뀐 설정이 없습니다.", 4000)
             return True
@@ -1897,6 +1917,56 @@ class TimetableWindow(QMainWindow):
             f"설정 {len(dlg.changes())}개를 {self.path.name} 에 저장했습니다 "
             f"(원본은 {self.path.name}.bak).", 6000)
         return True
+
+    # -- 저장 분기 1: config.toml 이 있을 때 빠진 설정 찾기 ----------------
+    def missing_settings(self) -> list[str]:
+        """config.example.toml 에는 있는데 config.toml 에는 없는 설정(점 표기)."""
+        if self.example_text is None or not self.path.exists():
+            return []
+        try:
+            have = settings_schema.current_values(M.read_text(self.path))
+            fields = [f for s in settings_schema.parse(self.example_text) for f in s.fields]
+        except (OSError, UnicodeDecodeError, settings_schema.SchemaError):
+            return []
+        return [f.dotted for f in fields if f.dotted not in have]
+
+    def check_missing_settings(self) -> bool:
+        """빠진 설정이 있으면 경고와 함께 설정 화면(채워 넣기 모드)을 엽니다.
+        False 면 사용자가 저장을 멈춤(취소)."""
+        missing = self.missing_settings()
+        if not missing:
+            return True
+        shown = ", ".join(missing[:6]) + (f" 외 {len(missing) - 6}개" if len(missing) > 6 else "")
+        QMessageBox.warning(
+            self, "빠진 설정",
+            f"{self.path.name} 에 {self.example_path.name} 의 설정 {len(missing)}개가 "
+            f"빠져 있습니다.\n  {shown}\n\n설정 화면을 엽니다. 저장하면 고친 값"
+            "(안 고치면 예시 값)으로 채워 넣습니다.")
+        try:
+            raw = self.path.read_bytes()
+            base = raw.decode("utf-8-sig").replace("\r\n", "\n")
+            from .config_wizard import SettingsDialog
+
+            dlg = SettingsDialog(self, self.example_text, self.path, base,
+                                 example_name=self.example_path.name, fill_missing=True)
+        except (OSError, UnicodeDecodeError, settings_schema.SchemaError) as exc:
+            QMessageBox.critical(self, "설정 파일을 읽을 수 없습니다", f"{self.path}\n{exc}")
+            return False
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            ans = QMessageBox.question(
+                self, "빠진 설정",
+                "빠진 설정을 채우지 않고 시간표만 저장할까요?")
+            return ans == QMessageBox.StandardButton.Yes
+        return self._write_settings(dlg, raw)
+
+    # -- 저장 뒤 설치·점검 ------------------------------------------------
+    def run_setup_flow(self) -> None:
+        from .setup_flow import SetupFlow
+
+        # 점검이 설정 오류로 멈추면 같은 '설정 편집' 창으로 고치게(D1).
+        SetupFlow(self, self.path, fix_config=self.edit_settings).exec()
+        self._remember_disk()
+        self.catalog = self._load_catalog()
     def show_summary(self) -> SaveSummary:
         """저장 결과 창. 모달이 아니라 편집을 막지 않고, 하나만 띄웁니다."""
         if self.summary is None:
