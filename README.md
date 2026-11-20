@@ -52,7 +52,8 @@ scripts\doctor.bat            REM 환경 점검
 |---|---|
 | `github.owner` / `github.repo` | 결과물을 올릴 **private** 저장소 |
 | `eclass.username` | 학번 |
-| `recording.timetable` | 시간표 (자동 녹화를 쓸 때) |
+| `recording.timetable` | 시간표 (자동 녹화를 쓸 때). GUI 편집기: `python -m syncnote timetable edit` |
+| `recording.holidays` | 쉬는 날 (그날 수업은 녹화·송출 일정에서 건너뜀) |
 | `recording.audio.system_device` | `devices.bat` 에 나온 루프백 장치 이름 |
 
 마지막으로 자동 실행을 걸려면 **관리자 권한 PowerShell** 에서:
@@ -235,6 +236,7 @@ python -m syncnote eclass probe           페이지 구조 탐색(디버그)
 python -m syncnote eclass sync            자료 수집 + 업로드
 python -m syncnote record start           수동 녹화
 python -m syncnote record schedule        시간표 대기
+python -m syncnote timetable edit         시간표 편집기 (GUI, PySide6)
 python -m syncnote record watch           프로그램 감지 대기
 python -m syncnote audio record           소리만 녹음 (FFmpeg / SoX / arecord)
 python -m syncnote audio tools            터미널 녹음 도구 점검

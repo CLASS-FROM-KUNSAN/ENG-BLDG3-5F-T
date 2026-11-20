@@ -92,15 +92,43 @@ class Occurrence:
         return (self.end - self.start).total_seconds() / 60
 
 
+def holidays(entries: Iterable) -> set[date]:
+    """`[[recording.holidays]]` -> 날짜 집합. 날짜를 못 읽는 행은 건너뜁니다."""
+    out: set[date] = set()
+    for entry in entries or []:
+        raw = entry.get("date") if isinstance(entry, dict) else entry
+        try:
+            if isinstance(raw, datetime):
+                out.add(raw.date())
+            elif isinstance(raw, date):
+                out.add(raw)
+            else:
+                out.add(date.fromisoformat(str(raw).strip()))
+        except (TypeError, ValueError):
+            log.error("공휴일 항목을 건너뜁니다: %s", entry)
+    return out
+
+
 def next_occurrence(slots: list[Slot], *, now: datetime | None = None,
                     pre_roll_min: float = 0.0, post_roll_min: float = 0.0,
-                    horizon_days: int = 8) -> Occurrence | None:
-    """지금 이후(또는 진행 중) 가장 가까운 수업을 찾습니다."""
+                    horizon_days: int = 8,
+                    skip_days: set[date] | None = None) -> Occurrence | None:
+    """지금 이후(또는 진행 중) 가장 가까운 수업을 찾습니다.
+
+    skip_days(공휴일) 에 든 날의 수업은 건너뜁니다. 공휴일이 이어져도
+    다음 수업을 찾도록 그만큼 더 멀리 봅니다.
+    """
     now = now or datetime.now()
     best: Occurrence | None = None
+    skip = skip_days or set()
 
-    for offset in range(horizon_days):
+    # 쉬는 날이 있으면 같은 요일 수업이 몇 주 연달아 빠질 수 있으므로
+    # 찾을 때까지(최대 1년) 봅니다. 찾으면 아래 break 로 바로 끝납니다.
+    limit = horizon_days + (366 if skip else 0)
+    for offset in range(limit):
         day = (now + timedelta(days=offset)).date()
+        if day in skip:
+            continue
         for slot in slots:
             if slot.weekday != day.weekday():
                 continue
@@ -135,14 +163,20 @@ def wait_until(when: datetime, *, stop_check=None, poll_sec: float = 20.0) -> bo
         time.sleep(min(poll_sec, max(1.0, remaining)))
 
 
-def describe(slots: list[Slot]) -> str:
+def describe(slots: list[Slot], skip_days: set[date] | None = None) -> str:
     if not slots:
         return ("시간표가 비어 있습니다.\n"
-                "config.toml 의 [[recording.timetable]] 블록을 채우세요.")
+                "config.toml 의 [[recording.timetable]] 블록을 채우거나 "
+                "`python -m syncnote timetable edit` 로 편집하세요.")
     lines = ["등록된 시간표", "=" * 40]
     for slot in sorted(slots, key=lambda s: (s.weekday, s.start)):
         lines.append(f"  {slot}")
-    nxt = next_occurrence(slots)
+    upcoming = sorted(d for d in (skip_days or ()) if d >= date.today())
+    if upcoming:
+        lines.append("")
+        lines.append("쉬는 날(공휴일): " + ", ".join(f"{d:%m-%d}" for d in upcoming[:8])
+                     + (f" 외 {len(upcoming) - 8}일" if len(upcoming) > 8 else ""))
+    nxt = next_occurrence(slots, skip_days=skip_days)
     if nxt:
         lines.append("")
         lines.append(f"다음 녹화: {nxt.start:%Y-%m-%d(%a) %H:%M} ~ {nxt.end:%H:%M}  [{nxt.slot.name}]")

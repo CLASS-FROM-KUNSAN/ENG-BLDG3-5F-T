@@ -6,6 +6,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -181,6 +182,9 @@ DEFAULTS: dict[str, Any] = {
             "watch_stop_grace_sec": 60,
         },
         "timetable": [],
+        # 쉬는 날. 이 날짜의 수업은 녹화·송출 일정에서 건너뜁니다.
+        # [[recording.holidays]] date = "YYYY-MM-DD", name = "..."
+        "holidays": [],
         # 터미널 녹음기(FFmpeg / SoX / arecord). 소리만 받습니다.
         # `python -m syncnote audio record` 와 cron·작업 스케줄러용입니다.
         "terminal": {
@@ -731,6 +735,16 @@ def validate(cfg: Config) -> None:
                 ok = 0 <= hour <= 23 and 0 <= minute <= 59
             if not ok:
                 errors.append(f"{where}.{field_name} = {value!r} 는 HH:MM 형식이어야 합니다")
+
+    for idx, entry in enumerate(cfg.get("recording.holidays", []) or []):
+        where = f"recording.holidays[{idx}]"
+        raw = entry.get("date") if isinstance(entry, dict) else None
+        if isinstance(raw, date):
+            continue
+        try:
+            date.fromisoformat(str(raw or "").strip())
+        except ValueError:
+            errors.append(f"{where}.date = {raw!r} 는 YYYY-MM-DD 형식이어야 합니다")
 
     # 저사양 경고가 아니라 실제 오류인 것만 여기서 막습니다.
     if cfg.get("transcribe.realtime.enabled") and not cfg.get("recording.audio.enabled"):

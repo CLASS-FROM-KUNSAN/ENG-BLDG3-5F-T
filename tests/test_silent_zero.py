@@ -396,7 +396,7 @@ def test_schedule_logs_an_error_when_a_class_is_lost(tmp_path, monkeypatch, capl
     nxt = sched.Occurrence(_Slot(), datetime.now(),
                            datetime.now() + timedelta(minutes=50))
     monkeypatch.setattr(sched, "parse", lambda _t: [_Slot()])
-    monkeypatch.setattr(sched, "describe", lambda _s: "")
+    monkeypatch.setattr(sched, "describe", lambda *_a, **_k: "")
     monkeypatch.setattr(sched, "next_occurrence", lambda *a, **kw: nxt)
     monkeypatch.setattr(sched, "wait_until", lambda *a, **kw: True)
     monkeypatch.setattr(cli, "_load", lambda _a: (

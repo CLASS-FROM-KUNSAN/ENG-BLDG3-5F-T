@@ -196,7 +196,7 @@ def test_schedule_delays_video_to_the_real_class_time(monkeypatch, tmp_path):
     nxt = sched.Occurrence(_Slot(), shifted, real_start + timedelta(minutes=50))
 
     monkeypatch.setattr(sched, "parse", lambda _t: [_Slot()])
-    monkeypatch.setattr(sched, "describe", lambda _s: "")
+    monkeypatch.setattr(sched, "describe", lambda *_a, **_k: "")
     monkeypatch.setattr(sched, "next_occurrence", lambda *a, **kw: nxt)
     monkeypatch.setattr(sched, "wait_until", lambda *a, **kw: True)
     monkeypatch.setattr(cli, "_load", lambda _a: (

@@ -7,6 +7,7 @@
   python -m syncnote eclass sync           자료 수집 + 업로드
   python -m syncnote record start          수동 녹화
   python -m syncnote record schedule       시간표 대기
+  python -m syncnote timetable edit        시간표 편집기 (GUI, PySide6)
   python -m syncnote record watch          프로그램 감지 대기
   python -m syncnote audio record          소리만 녹음 (FFmpeg / SoX / arecord)
   python -m syncnote audio tools           터미널 녹음 도구 점검
@@ -649,16 +650,30 @@ def cmd_record_start(args) -> int:
     return 0
 
 
+def cmd_timetable_edit(args) -> int:
+    """시간표 편집기. config 전체 검증(_load)은 하지 않습니다 — 설정 다른 곳이
+    틀려 있어도 시간표는 고칠 수 있어야 합니다."""
+    path = (Path(args.config).expanduser().resolve() if args.config
+            else config_module.default_config_path())
+    try:
+        from .timetable import gui
+    except ImportError as exc:
+        print(f"시간표 편집기에는 PySide6 가 필요합니다: pip install PySide6\n({exc})")
+        return 1
+    return gui.run(path)
+
+
 def cmd_record_schedule(args) -> int:
     from .recorder import schedule as sched
 
     cfg, layout = _load(args)
     slots = sched.parse(cfg.get("recording.timetable", []))
+    off = sched.holidays(cfg.get("recording.holidays", []))
     if not slots:
         print(sched.describe(slots))
         return 1
 
-    print(sched.describe(slots))
+    print(sched.describe(slots, off))
     if args.show:
         return 0
 
@@ -666,7 +681,8 @@ def cmd_record_schedule(args) -> int:
     post = float(cfg.get("recording.post_roll_minutes", 0))
 
     while True:
-        nxt = sched.next_occurrence(slots, pre_roll_min=pre, post_roll_min=post)
+        nxt = sched.next_occurrence(slots, pre_roll_min=pre, post_roll_min=post,
+                                    skip_days=off)
         if nxt is None:
             log.info("예정된 수업이 없습니다.")
             return 0
@@ -1296,14 +1312,15 @@ def cmd_stream_schedule(args) -> int:
     cfg, layout = _load(args)
     s = _stream_settings(cfg, args)
     slots = live.timetable(cfg, s)
-    print(sched.describe(slots).replace("다음 녹화", "다음 송출"))
+    off = sched.holidays(cfg.get("recording.holidays", []))
+    print(sched.describe(slots, off).replace("다음 녹화", "다음 송출"))
     if not slots or args.show:
         return 0 if slots else 1
     live.check(s)
 
     while True:
         nxt = sched.next_occurrence(slots, pre_roll_min=s.pre_roll_minutes,
-                                    post_roll_min=s.post_roll_minutes)
+                                    post_roll_min=s.post_roll_minutes, skip_days=off)
         if nxt is None:
             log.info("예정된 수업이 없습니다.")
             return 0
@@ -1517,6 +1534,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true",
                    help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
     p.set_defaults(func=cmd_record_schedule)
+
+    tt = sub.add_parser("timetable", help="시간표 편집기(GUI)").add_subparsers(
+        dest="sub", required=True)
+    tt.add_parser("edit", help="PySide6 편집기로 [[recording.timetable]] 편집").set_defaults(
+        func=cmd_timetable_edit)
 
     p = rec.add_parser("watch", help="프로그램이 뜨면 자동 녹화")
     p.add_argument("-l", "--label")

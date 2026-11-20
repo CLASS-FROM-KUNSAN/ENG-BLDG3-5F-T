@@ -525,6 +525,22 @@ vad_stop_sec  = 3.0
 # start = "13:00"
 # end   = "14:50"
 # language = "ko+en"       # 한국어 설명 + 영어 용어가 많이 섞이는 수업
+#
+#   선택 칸: course_id(eClass 과목코드), room, professor, color("#RRGGBB").
+#   녹화에는 name/day/start/end/language 만 쓰이고, 나머지는 편집기 표시용입니다.
+#
+# ---------------------------------------------------------------------
+# [[recording.holidays]] 쉬는 날
+#   이 날짜의 수업은 녹화·송출 일정에서 건너뜁니다.
+#
+# [[recording.holidays]]
+# date = "2026-12-25"
+# name = "성탄절"
+#
+# 손으로 적는 대신 GUI 로 편집할 수 있습니다(PySide6 필요):
+#   python -m syncnote timetable edit
+#   편집기는 이 파일 맨 아래 '# >>> syncnote 시간표 편집기' 표시줄 사이만
+#   다시 쓰고, 손으로 적은 [[recording.timetable]] 은 주석 처리합니다.
 
 
 # =====================================================================
