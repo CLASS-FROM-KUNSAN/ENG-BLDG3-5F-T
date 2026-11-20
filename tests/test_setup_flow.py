@@ -571,3 +571,92 @@ def test_pip_transient_failure_is_retried(app, tmp_path, fakes, monkeypatch):
     _run(app, dlg)
     assert (m / "pip_n").read_text(encoding="utf-8") == "2" and dlg.state["verify"] == "ok"
     dlg.close()
+
+
+# -- 4. 사용자가 할 일로 이어 주기(D1·C1) ---------------------------------------
+def _doctor_fake(tmp_path, m):
+    bad = {**DOCTOR, "ok": False, "config_error": "설정 오류 1건:\n  - eclass.username 이 비어 있습니다",
+           "sections": [], "verdict": "설정 파일을 읽지 못해 점검을 멈췄습니다."}
+    good = {**DOCTOR, "ok": True, "verdict": "모두 정상입니다."}
+    return _py(tmp_path, "doctor_cfg", f"""
+        import json, os
+        fixed = os.path.exists(r"{m / 'cfg_fixed'}")
+        print(json.dumps({good!r} if fixed else {bad!r}, ensure_ascii=False))
+    """)
+
+
+def test_config_error_opens_settings_then_reruns_doctor(app, tmp_path, fakes, monkeypatch):
+    m = fakes
+    for n in ("venv", "installed", "pw"):
+        (m / n).write_text("x", encoding="utf-8")
+    d = _doctor_fake(tmp_path, m)
+    monkeypatch.setattr(SF.SetupFlow, "doctor_command", lambda self: d)
+    calls = []
+
+    def fix():
+        calls.append(1)
+        (m / "cfg_fixed").write_text("x", encoding="utf-8")
+        return True
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml", fix_config=fix)
+    _run(app, dlg)
+    assert calls == [1] and dlg.state["check"] == "ok"
+    assert "설정 창을 엽니다" in dlg.log.toPlainText() and "eclass.username" in dlg.log.toPlainText()
+    dlg.close()
+
+
+def test_config_error_not_fixed_continues_once_without_loop(app, tmp_path, fakes, monkeypatch):
+    m = fakes
+    for n in ("venv", "installed", "pw"):
+        (m / n).write_text("x", encoding="utf-8")
+    d = _doctor_fake(tmp_path, m)
+    monkeypatch.setattr(SF.SetupFlow, "doctor_command", lambda self: d)
+    calls = []
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml", fix_config=lambda: calls.append(1) or False)
+    _run(app, dlg)
+    assert calls == [1] and dlg.state["check"] == "warn"
+    assert isinstance(dlg.devices, dict)                       # 장치 목록은 그래도 받음
+    dlg.close()
+
+
+def test_hidden_password_window_gets_a_reopen_button(app, tmp_path, fakes, monkeypatch):
+    m = fakes
+    for n in ("venv", "installed"):
+        (m / n).write_text("x", encoding="utf-8")
+    slow = _py(tmp_path, "pw_slow", f"""
+        import os, time
+        f = r"{m / 'pw_launch'}"
+        n = int(open(f).read()) if os.path.exists(f) else 0
+        open(f, "w").write(str(n + 1))
+        if n == 0:
+            time.sleep(30)               # 첫 창은 '숨어서' 아무도 입력 안 함
+        open(r"{m / 'pw'}", "w").write("ok")
+    """)
+    monkeypatch.setattr(SF.SetupFlow, "password_command", lambda self: slow)
+    monkeypatch.setattr(SF.SetupFlow, "PASSWORD_NUDGE", 0.3)
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    dlg.show()
+    dlg.start()
+    end = time.monotonic() + 20
+    while time.monotonic() < end and not dlg.reopen_btn.isVisible():
+        app.processEvents()
+        time.sleep(0.02)
+    assert dlg.reopen_btn.isVisible() and "안 보이나요" in dlg.headline.text()
+    dlg.reopen_btn.click()
+    end = time.monotonic() + 30
+    while time.monotonic() < end and dlg.close_btn.text() != "닫기":
+        app.processEvents()
+        time.sleep(0.02)
+    assert (m / "pw_launch").read_text(encoding="utf-8") == "2"
+    assert dlg.state["password"] == "ok" and dlg._pw_rounds == 1     # 다시 열기는 회차로 안 셈
+    assert not dlg.reopen_btn.isVisible()
+    dlg.close()
+
+
+def test_window_passes_settings_editor_to_the_flow(app, tmp_path, win_factory, monkeypatch):
+    make, _calls = win_factory
+    seen = {}
+    monkeypatch.setattr(SF.SetupFlow, "exec",
+                        lambda self: seen.setdefault("fix", self.fix_config) and 1)
+    w = make()
+    w.run_setup_flow()
+    assert seen["fix"] == w.edit_settings

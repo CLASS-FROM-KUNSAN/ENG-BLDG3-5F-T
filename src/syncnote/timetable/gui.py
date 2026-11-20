@@ -1963,7 +1963,8 @@ class TimetableWindow(QMainWindow):
     def run_setup_flow(self) -> None:
         from .setup_flow import SetupFlow
 
-        SetupFlow(self, self.path).exec()
+        # 점검이 설정 오류로 멈추면 같은 '설정 편집' 창으로 고치게(D1).
+        SetupFlow(self, self.path, fix_config=self.edit_settings).exec()
         self._remember_disk()
         self.catalog = self._load_catalog()
     def show_summary(self) -> SaveSummary:

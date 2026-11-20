@@ -27,6 +27,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import shiboken6
 from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
@@ -93,11 +94,19 @@ class SetupFlow(QDialog):
     TIMEOUTS = {"setup": (1800, 300), "pip": (900, 300), "remedy": (900, 300),
                 "quick": (120, 60)}
 
-    def __init__(self, parent: QWidget | None, config_path: Path) -> None:
+    # 비밀번호 창을 연 뒤 이만큼(초) 지나도 안 닫히면 '창을 찾으세요' + 다시 열기(C1).
+    PASSWORD_NUDGE = 60.0
+
+    def __init__(self, parent: QWidget | None, config_path: Path,
+                 fix_config: Callable[[], bool] | None = None) -> None:
         super().__init__(parent)
         from .gui import ScreenKeeper
 
         self.config_path = Path(config_path)
+        # 설정 오류로 doctor 가 멈추면 부르는 함수(편집기의 '설정 편집'). True = 저장함.
+        self.fix_config = fix_config
+        self._user_fixes: set[str] = set()
+        self._pw_opened = 0.0
         self.setWindowTitle("설치 · 점검")
         self.resize(900, 640)
         ScreenKeeper.attach(self)
@@ -153,6 +162,11 @@ class SetupFlow(QDialog):
         self.log_btn.toggled.connect(lambda on: self.stack.setCurrentIndex(0 if on else 1))
         self.log_btn.setEnabled(False)
         bb.addButton(self.log_btn, QDialogButtonBox.ButtonRole.ActionRole)
+        self.reopen_btn = QPushButton("비밀번호 창 다시 열기")
+        self.reopen_btn.setToolTip("검은 창이 안 보이면(다른 창 뒤에 숨었을 수 있음) 새로 엽니다")
+        self.reopen_btn.clicked.connect(self.reopen_password_window)
+        bb.addButton(self.reopen_btn, QDialogButtonBox.ButtonRole.ActionRole)
+        self.reopen_btn.hide()        # addButton 이 다시 보이게 하므로 그 뒤에 숨김
         self.close_btn = QPushButton("중단")
         self.close_btn.clicked.connect(self.reject)
         bb.addButton(self.close_btn, QDialogButtonBox.ButtonRole.RejectRole)
@@ -291,6 +305,8 @@ class SetupFlow(QDialog):
         watch.timeout.connect(tick)
 
         def read() -> None:
+            if not shiboken6.isValid(p):      # 창이 먼저 정리된 뒤 늦게 온 신호
+                return
             chunk = bytes(p.readAllStandardOutput()).decode("utf-8", errors="replace")
             if chunk:
                 clock["last"] = time.monotonic()
@@ -574,8 +590,11 @@ class SetupFlow(QDialog):
                 self._open_password_window()
         self._run(self.status_command(), done)
 
-    def _open_password_window(self) -> None:
-        self._pw_rounds += 1
+    def _open_password_window(self, count_round: bool = True) -> None:
+        if count_round:
+            self._pw_rounds += 1
+        self._pw_opened = time.monotonic()
+        self.reopen_btn.hide()
         cmd = self.password_command()
         self._say("eClass 비밀번호가 저장돼 있지 않습니다. 비밀번호 저장 창을 엽니다.")
         self._say(f"> {' '.join(cmd)}")
@@ -591,18 +610,49 @@ class SetupFlow(QDialog):
         self._poll.start()
 
     def _check_password_window(self) -> None:
-        if self.pw_proc is None or self.pw_proc.poll() is None:
+        if self.pw_proc is None:
+            return
+        if self.pw_proc.poll() is None:
+            if (not self.reopen_btn.isVisible()
+                    and time.monotonic() - self._pw_opened > self.PASSWORD_NUDGE):
+                # C1: 콘솔이 편집기 뒤에 숨어 못 찾는 경우가 많음
+                self.headline.setText("비밀번호 입력 창(검은 창)이 안 보이나요? 작업 표시줄에서 찾거나 "
+                                      "'비밀번호 창 다시 열기' 를 누르세요.")
+                self.reopen_btn.show()
             return
         self._poll.stop()
+        self.reopen_btn.hide()
         self.pw_proc = None
         self.headline.setText("저장한 설정으로 설치와 점검을 이어서 진행합니다.")
         self._say("비밀번호 창이 닫혔습니다. 다시 확인합니다.")
         self._step_password()
 
+    def reopen_password_window(self) -> None:
+        """숨은 비밀번호 창을 닫고 새로 엶(같은 회차로 셈 — 반복 방지 횟수는 그대로)."""
+        old, self.pw_proc = self.pw_proc, None
+        if old is not None and old.poll() is None:
+            eclass_fetch._kill_tree(old.pid)
+        self._say("비밀번호 창을 다시 엽니다.")
+        self._open_password_window(count_round=False)
+
     # 4. 점검
     def _step_check(self) -> None:
         def doctor_done(_rc: int, out: str) -> None:
             self.doctor = last_json(out)
+            err = self.doctor.get("config_error") if isinstance(self.doctor, dict) else None
+            if err and self.fix_config is not None and "config" not in self._user_fixes:
+                # D1: 설정 오류는 다시 돌려도 같음 → 설정 창(오류 항목이 맨 위)을 엶.
+                self._user_fixes.add("config")
+                self._say("! 설정 오류로 점검이 멈췄습니다. 설정 창을 엽니다:")
+                for line in str(err).splitlines():
+                    self._say("  " + line)
+                self.headline.setText("설정 오류를 고쳐 주세요 — 저장하면 점검을 다시 합니다.")
+                if self.fix_config():
+                    self._say("설정을 저장했습니다. 점검을 다시 합니다.")
+                    self.headline.setText("저장한 설정으로 설치와 점검을 이어서 진행합니다.")
+                    self._run(self.doctor_command(), doctor_done)
+                    return
+                self._say("설정을 고치지 않았습니다.")
             self._run(self.devices_command(), devices_done)
 
         def devices_done(_rc: int, out: str) -> None:
