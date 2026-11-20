@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
+import shiboken6
 from PySide6.QtCore import (
     QDate,
     QEvent,
@@ -70,6 +71,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -576,14 +579,17 @@ class CourseEditor:
 # ---------------------------------------------------------------------------
 # 공휴일 창들
 # ---------------------------------------------------------------------------
-def ask_holiday(parent: QWidget) -> M.Holiday | None:
+def ask_holiday(parent: QWidget, existing: M.Holiday | None = None) -> M.Holiday | None:
+    """공휴일 추가(existing=None) 또는 수정 창."""
     dlg = QDialog(parent)
-    dlg.setWindowTitle("공휴일 추가")
+    dlg.setWindowTitle("공휴일 수정" if existing else "공휴일 추가")
     form = QFormLayout(dlg)
-    when = QDateEdit(QDate.currentDate())
+    start = (QDate(existing.day.year, existing.day.month, existing.day.day)
+             if existing else QDate.currentDate())
+    when = QDateEdit(start)
     when.setCalendarPopup(True)
     when.setDisplayFormat("yyyy-MM-dd (ddd)")
-    name = QLineEdit()
+    name = QLineEdit(existing.name if existing else "")
     name.setPlaceholderText("예: 개교기념일")
     form.addRow("날짜", when)
     form.addRow("이름", name)
@@ -641,6 +647,142 @@ def ask_holiday_paste(parent: QWidget) -> list[M.Holiday]:
 
 
 # ---------------------------------------------------------------------------
+# 저장 결과 · 다가오는 일정
+# ---------------------------------------------------------------------------
+def _fmt_when(u: M.Upcoming) -> str:
+    return f"{u.start:%m/%d}({M.DAY_KR[u.start.weekday()]}) {u.start:%H:%M}~{u.end:%H:%M}"
+
+
+class SaveSummary(QDialog):
+    """저장 직후 보여 주는 창.
+
+    - 다음 녹화: 저장된 상태면 **config.toml 을 다시 읽어** 녹화기와 같은
+      방식으로 계산합니다. 편집기에 보이는 것과 녹화기가 읽는 것이 같은지
+      그 자리에서 확인하는 용도입니다. 공휴일로 건너뛰는 회차도 보여 줍니다.
+    - 다가오는 공휴일: 여기서 바로 추가·수정·삭제. 고치면 일정이 다시
+      계산되고, 저장 버튼이 켜집니다(실행 취소도 그대로 됩니다).
+    """
+
+    COUNT = 8
+
+    def __init__(self, win: TimetableWindow) -> None:
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("저장 결과 · 다가오는 일정")
+        self.resize(520, 560)
+        lay = QVBoxLayout(self)
+
+        self.state = QLabel()
+        self.state.setWordWrap(True)
+        lay.addWidget(self.state)
+
+        lay.addWidget(QLabel(f"<b>다음 녹화</b> (앞으로 {self.COUNT}회)"))
+        self.next_list = QListWidget()
+        lay.addWidget(self.next_list, 3)
+
+        lay.addWidget(QLabel("<b>다가오는 공휴일</b> — 이 날의 수업은 녹화·송출하지 않습니다"))
+        self.htable = QTableWidget(0, 2)
+        self.htable.setHorizontalHeaderLabels(["날짜", "이름"])
+        self.htable.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.htable.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.htable.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents)
+        self.htable.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.htable.verticalHeader().setVisible(False)
+        self.htable.cellDoubleClicked.connect(
+            lambda r, _c: win.edit_holiday(win._holiday_at(self.htable, r)))
+        lay.addWidget(self.htable, 2)
+
+        row = QHBoxLayout()
+        self.add_btn = QPushButton("추가")
+        self.add_btn.clicked.connect(win.add_holiday)
+        self.edit_btn = QPushButton("수정")
+        self.edit_btn.clicked.connect(
+            lambda: win.edit_holiday(win._selected_holiday(self.htable)))
+        self.del_btn = QPushButton("삭제")
+        self.del_btn.clicked.connect(lambda: win.delete_holiday_days(
+            {win._holiday_at(self.htable, i.row())
+             for i in self.htable.selectionModel().selectedRows()}))
+        for b in (self.add_btn, self.edit_btn, self.del_btn):
+            row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+
+        bottom = QHBoxLayout()
+        bottom.addStretch(1)
+        self.save_btn = QPushButton("저장")
+        self.save_btn.clicked.connect(lambda: win.save(show_summary=False))
+        close = QPushButton("닫기")
+        close.clicked.connect(self.close)
+        bottom.addWidget(self.save_btn)
+        bottom.addWidget(close)
+        lay.addLayout(bottom)
+
+        # 편집기에서 무엇을 바꾸든(여기 버튼, 탭, 실행 취소) 다시 계산.
+        # 람다가 아니라 이 창의 메서드에 연결해야, 창이 사라질 때 Qt 가 연결도
+        # 같이 끊습니다(람다면 닫히는 중에 지워진 undo 스택을 건드림).
+        win.undo.indexChanged.connect(self._on_undo)
+        win.undo.cleanChanged.connect(self._on_undo)
+        self.htable.itemSelectionChanged.connect(self._update_buttons)
+
+    def _on_undo(self, *_a) -> None:
+        if self.isVisible():
+            self.refresh()
+
+    def refresh(self, now: datetime | None = None) -> None:
+        win = self.win
+        if not (shiboken6.isValid(win) and shiboken6.isValid(win.undo)):
+            return
+        clean = win.undo.isClean()
+        if clean:
+            try:
+                rows, hrows = M.saved_rows(win.path)
+                source = f"{win.path.name} 을 다시 읽어 녹화기와 같은 방식으로 계산했습니다."
+            except Exception as exc:  # noqa: BLE001 — 읽기 실패도 화면에 보여 줌
+                rows, hrows = win.tt.to_rows(), win.tt.holiday_rows()
+                source = f"⚠ {win.path.name} 을 다시 읽지 못했습니다: {exc}"
+            self.state.setText(f"✔ 저장됨 — {win.path.name}\n{source}")
+            self.state.setToolTip(str(win.path))
+        else:
+            rows, hrows = win.tt.to_rows(), win.tt.holiday_rows()
+            self.state.setText("● 저장하지 않은 변경이 있습니다. 아래는 저장 전 내용으로 계산한 "
+                               "것이며, 저장해야 녹화에 반영됩니다.")
+        self.save_btn.setEnabled(not clean)
+
+        self.next_list.clear()
+        items = M.upcoming(rows, hrows, now=now, count=self.COUNT)
+        dim = Theme.current().dim
+        for u in items:
+            if u.skipped:
+                it = QListWidgetItem(f"{_fmt_when(u)}  {u.name} · 쉼({u.skipped_for or '공휴일'})")
+                it.setToolTip(f"{u.skipped_for or '공휴일'} 이라 이 회차는 녹화·송출하지 않습니다")
+                it.setForeground(QBrush(dim))
+                f = it.font()
+                f.setStrikeOut(True)
+                it.setFont(f)
+            else:
+                it = QListWidgetItem(f"{_fmt_when(u)}  {u.name}")
+            self.next_list.addItem(it)
+        if not items:
+            self.next_list.addItem("예정된 수업이 없습니다. 시간표에 수업을 추가하세요.")
+
+        today = (now or datetime.now()).date()
+        hs = sorted((h for h in win.tt.holidays if h.day >= today), key=lambda h: h.day)
+        self.htable.setRowCount(len(hs))
+        for r, h in enumerate(hs):
+            dt = QTableWidgetItem(f"{h.day.isoformat()} ({M.DAY_KR[h.day.weekday()]})")
+            dt.setData(Qt.ItemDataRole.UserRole, h.day.isoformat())
+            self.htable.setItem(r, 0, dt)
+            self.htable.setItem(r, 1, QTableWidgetItem(h.name))
+        self._update_buttons()
+
+    def _update_buttons(self) -> None:
+        has = bool(self.htable.selectionModel().selectedRows())
+        self.edit_btn.setEnabled(has)
+        self.del_btn.setEnabled(has)
+
+
+# ---------------------------------------------------------------------------
 # 메인 창
 # ---------------------------------------------------------------------------
 class TimetableWindow(QMainWindow):
@@ -651,6 +793,7 @@ class TimetableWindow(QMainWindow):
         self.undo = QUndoStack(self)
         self.undo.cleanChanged.connect(lambda _c: self._update_title())
         self.show_weekend = False
+        self.summary: SaveSummary | None = None
 
         self.scene = TimetableScene()
         q = Qt.ConnectionType.QueuedConnection   # 블록 이벤트 안에서 장면을 지우지 않도록
@@ -721,11 +864,16 @@ class TimetableWindow(QMainWindow):
         self.htable.setHorizontalHeaderLabels(["날짜", "이름"])
         self.htable.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.htable.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.htable.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents)
         self.htable.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.htable.verticalHeader().setVisible(False)
         lay.addWidget(self.htable, 1)
         row = QHBoxLayout()
+        self.htable.cellDoubleClicked.connect(
+            lambda r, _c: self.edit_holiday(self._holiday_at(self.htable, r)))
         for text, fn in (("추가", self.add_holiday), ("붙여넣기로 추가", self.paste_holidays),
+                         ("수정", lambda: self.edit_holiday(self._selected_holiday(self.htable))),
                          ("삭제", self.delete_holidays), ("지난 날짜 지우기", self.drop_past_holidays)):
             b = QPushButton(text)
             b.clicked.connect(fn)
@@ -747,6 +895,7 @@ class TimetableWindow(QMainWindow):
         act(f, "config.toml 열기…", self.open_other, QKeySequence.StandardKey.Open)
         act(f, "디스크에서 다시 읽기", self.reload_from_disk)
         act(f, "저장", self.save, QKeySequence.StandardKey.Save)
+        act(f, "다가오는 일정 · 공휴일 보기…", self.show_summary, "Ctrl+I")
         f.addSeparator()
         act(f, "Swift 앱 백업 JSON 가져오기…", self.import_swift)
         act(f, "Swift 앱 백업 JSON 내보내기…", self.export_swift)
@@ -944,13 +1093,39 @@ class TimetableWindow(QMainWindow):
                 have[h.day] = h
         self._apply(new, text)
 
-    def delete_holidays(self) -> None:
-        days = {self.htable.item(i.row(), 0).data(Qt.ItemDataRole.UserRole)
-                for i in self.htable.selectionModel().selectedRows()}
+    @staticmethod
+    def _holiday_at(table: QTableWidget, row: int) -> date | None:
+        item = table.item(row, 0) if row >= 0 else None
+        raw = item.data(Qt.ItemDataRole.UserRole) if item else None
+        return date.fromisoformat(raw) if raw else None
+
+    def _selected_holiday(self, table: QTableWidget) -> date | None:
+        rows = table.selectionModel().selectedRows() if table.selectionModel() else []
+        return self._holiday_at(table, rows[0].row()) if rows else None
+
+    def edit_holiday(self, day: date | None) -> None:
+        cur = next((h for h in self.tt.holidays if h.day == day), None)
+        if cur is None:
+            return
+        got = ask_holiday(self, cur)
+        if got is None or (got.day, got.name) == (cur.day, cur.name):
+            return
+        try:
+            new = M.edit_holiday(self.tt, cur.day, got)
+        except M.TimetableError as exc:
+            QMessageBox.warning(self, "공휴일 수정", str(exc))
+            return
+        self._apply(new, f"공휴일 {cur.day:%m-%d} 수정")
+
+    def delete_holiday_days(self, days) -> None:
+        days = [d for d in days if d is not None]
         if days:
-            new = self.tt.copy()
-            new.holidays = [h for h in new.holidays if h.day.isoformat() not in days]
-            self._apply(new, f"공휴일 {len(days)}일 삭제")
+            self._apply(M.remove_holidays(self.tt, days), f"공휴일 {len(days)}일 삭제")
+
+    def delete_holidays(self) -> None:
+        self.delete_holiday_days(
+            {self._holiday_at(self.htable, i.row())
+             for i in self.htable.selectionModel().selectedRows()})
 
     def drop_past_holidays(self) -> None:
         today = date.today()
@@ -969,7 +1144,7 @@ class TimetableWindow(QMainWindow):
             QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard
             | QMessageBox.StandardButton.Cancel)
         if ans == QMessageBox.StandardButton.Save:
-            return self.save()
+            return self.save(show_summary=False)   # 닫는 중엔 결과 창을 안 띄움
         return ans == QMessageBox.StandardButton.Discard
 
     def reload_from_disk(self) -> None:
@@ -996,7 +1171,7 @@ class TimetableWindow(QMainWindow):
             self.undo.setClean()    # 위에서 이미 확인함
             self.reload_from_disk()
 
-    def save(self) -> bool:
+    def save(self, show_summary: bool = True) -> bool:
         try:
             commented = M.save(self.path, self.tt)
         except (M.TimetableError, OSError) as exc:
@@ -1010,7 +1185,19 @@ class TimetableWindow(QMainWindow):
                 f"config.toml 에 손으로 적은 시간표/공휴일 표 {commented}개를 주석 처리했습니다.\n"
                 "같은 수업이 두 번 잡히지 않게 하기 위해서이며, 지우지는 않았습니다.")
         self.statusBar().showMessage(note, 6000)
+        if show_summary:
+            self.show_summary()
         return True
+
+    def show_summary(self) -> SaveSummary:
+        """저장 결과 창. 모달이 아니라 편집을 막지 않고, 하나만 띄웁니다."""
+        if self.summary is None:
+            self.summary = SaveSummary(self)
+        self.summary.refresh()
+        self.summary.show()
+        self.summary.raise_()
+        self.summary.activateWindow()
+        return self.summary
 
     def import_swift(self) -> None:
         name, _ = QFileDialog.getOpenFileName(self, "Swift 앱 백업 JSON", "",

@@ -180,3 +180,77 @@ def test_dark_palette_keeps_day_names_readable(app, win):
         app.setPalette(old)
         app.processEvents()
     assert not win.scene.theme.dark
+
+
+# -- 저장 결과 창 ----------------------------------------------------------
+def _upcoming_texts(summary):
+    return [summary.next_list.item(i).text() for i in range(summary.next_list.count())]
+
+
+def test_save_opens_summary_with_next_recordings_from_the_file(app, win):
+    from datetime import date as _d
+    from datetime import datetime as _dt
+
+    new = win.tt.copy()
+    new.holidays.append(M.Holiday(_d(2026, 11, 23), "개교기념일"))
+    win._apply(new, "t")
+    assert win.save()
+    s = win.summary
+    assert s is not None and s.isVisible() and not s.isModal()
+    assert "저장됨" in s.state.text() and not s.save_btn.isEnabled()
+    s.refresh(now=_dt(2026, 11, 20, 12, 0))
+    texts = _upcoming_texts(s)
+    assert texts[0].startswith("11/23(월) 09:00~10:00  자료구조") and "쉼(개교기념일)" in texts[0]
+    assert texts[1].startswith("11/25(수) 09:00~10:00  자료구조") and "쉼" not in texts[1]
+    assert s.htable.rowCount() >= 0
+
+
+def test_summary_add_edit_delete_holidays(app, win, monkeypatch):
+    from datetime import date as _d
+    from datetime import datetime as _dt
+
+    future = _d.today().replace(year=_d.today().year + 1)
+    win.save()
+    s = win.summary
+    # 추가
+    monkeypatch.setattr(gui, "ask_holiday", lambda *_a, **_k: M.Holiday(future, "개교기념일"))
+    s.add_btn.click()
+    assert s.htable.rowCount() == 1 and s.save_btn.isEnabled()
+    assert "저장하지 않은" in s.state.text()
+    # 수정 (선택 후 버튼)
+    s.htable.selectRow(0)
+    monkeypatch.setattr(gui, "ask_holiday", lambda _p, cur: M.Holiday(cur.day, "학교 쉬는 날"))
+    s.edit_btn.click()
+    assert s.htable.item(0, 1).text() == "학교 쉬는 날"
+    assert win.htable.item(0, 1).text() == "학교 쉬는 날"           # 탭도 같이 바뀜
+    # 실행 취소가 결과 창에도 반영
+    win.undo.undo()
+    assert s.htable.item(0, 1).text() == "개교기념일"
+    # 삭제
+    s.htable.selectRow(0)
+    s.del_btn.click()
+    assert s.htable.rowCount() == 0 and win.tt.holidays == []
+    # 저장 버튼
+    s.save_btn.click()
+    assert win.undo.isClean() and not s.save_btn.isEnabled()
+    s.refresh(now=_dt.now())
+
+
+def test_holiday_tab_edit_by_double_click(app, win, monkeypatch):
+    from datetime import date as _d
+
+    new = win.tt.copy()
+    new.holidays.append(M.Holiday(_d(2026, 12, 25), "성탄절"))
+    win._apply(new, "t")
+    monkeypatch.setattr(gui, "ask_holiday", lambda _p, cur: M.Holiday(_d(2026, 12, 24), cur.name))
+    win.htable.cellDoubleClicked.emit(0, 0)
+    assert [h.day for h in win.tt.holidays] == [_d(2026, 12, 24)]
+
+
+def test_closing_with_save_does_not_pop_the_summary(app, win, monkeypatch):
+    new = win.tt.copy()
+    new.courses[0].name = "바뀜"
+    win._apply(new, "t")
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Save)
+    assert win._confirm_discard()
+    assert win.summary is None and win.undo.isClean()

@@ -182,3 +182,60 @@ def test_schedule_skips_holidays():
     # 공휴일이 여러 주 이어져도 그 뒤 수업을 찾음
     many = {date(2026, 12, 25), date(2027, 1, 1)}
     assert sched.next_occurrence(slots, now=now, skip_days=many).start.date() == date(2027, 1, 8)
+
+
+# -- 다가오는 일정 · 공휴일 편집 -------------------------------------------
+ROWS = [{"name": "자료구조", "day": "mon", "start": "09:00", "end": "10:50"},
+        {"name": "영어2", "day": "wed", "start": "11:00", "end": "12:50"}]
+
+
+def test_upcoming_lists_classes_and_skipped_holidays():
+    now = datetime(2026, 11, 20, 12, 0)                         # 금요일
+    hol = [{"date": "2026-11-23", "name": "개교기념일"}]          # 다음 월요일
+    got = M.upcoming(ROWS, hol, now=now, count=3)
+    assert [(u.start.strftime("%m-%d %H:%M"), u.name, u.skipped_for) for u in got] == [
+        ("11-23 09:00", "자료구조", "개교기념일"),
+        ("11-25 11:00", "영어2", None),
+        ("11-30 09:00", "자료구조", None),
+        ("12-02 11:00", "영어2", None)]
+
+
+def test_upcoming_includes_a_class_in_progress_and_trims_trailing_skips():
+    now = datetime(2026, 11, 23, 10, 0)                          # 월 자료구조 수업 중
+    got = M.upcoming(ROWS, [{"date": "2026-11-25"}], now=now, count=1)
+    assert [(u.name, u.skipped) for u in got] == [("자료구조", False)]
+
+
+def test_upcoming_uses_the_same_parser_as_the_recorder():
+    bad = ROWS + [{"name": "깨진", "day": "funday", "start": "09:00", "end": "10:00"}]
+    names = {u.name for u in M.upcoming(bad, [], now=datetime(2026, 11, 20), count=4)}
+    assert "깨진" not in names
+
+
+def test_edit_holiday_rejects_a_date_already_taken():
+    tt = M.Timetable([], [M.Holiday(date(2026, 12, 25), "성탄절"),
+                          M.Holiday(date(2027, 1, 1), "신정")])
+    moved = M.edit_holiday(tt, date(2026, 12, 25), M.Holiday(date(2026, 12, 24), " 이브 "))
+    assert [(h.day, h.name) for h in moved.holidays][0] == (date(2026, 12, 24), "이브")
+    assert tt.holidays[0].day == date(2026, 12, 25)               # 원본은 그대로
+    with pytest.raises(M.TimetableError, match="이미"):
+        M.edit_holiday(tt, date(2026, 12, 25), M.Holiday(date(2027, 1, 1), "x"))
+    assert [h.day for h in M.remove_holidays(tt, [date(2027, 1, 1)]).holidays] == [
+        date(2026, 12, 25)]
+
+
+def test_saved_rows_reads_the_file_not_memory(tmp_path):
+    p = tmp_path / "config.toml"
+    M.save(p, _tt())
+    rows, hrows = M.saved_rows(p)
+    assert rows == _tt().to_rows() and hrows == _tt().holiday_rows()
+    assert M.saved_rows(tmp_path / "없음.toml") == ([], [])
+
+
+def test_schedule_parse_skips_broken_rows_instead_of_crashing_later():
+    rows = [{"name": "깨진요일", "day": "funday", "start": "09:00", "end": "10:00"},
+            {"name": "깨진시각", "day": "mon", "start": "25:99", "end": "10:00"},
+            {"name": "정상", "day": "mon", "start": "09:00", "end": "10:00"}]
+    slots = sched.parse(rows)
+    assert [s.name for s in slots] == ["정상"]
+    assert sched.next_occurrence(slots, now=datetime(2026, 11, 20)) is not None
