@@ -27,7 +27,13 @@ from pathlib import Path
 from typing import Any
 
 from ..logging_setup import get as get_logger
-from ..paths import Layout, safe_name, unique_path
+from ..paths import (
+    ECLASS_ACCOUNT_DIR,
+    ECLASS_MESSAGE_DIR,
+    Layout,
+    safe_name,
+    unique_path,
+)
 from ..state import Store, sha256_file, sha256_text
 from . import anon, filedown, singlefile, snapshot
 from .browser import EclassBrowser
@@ -387,12 +393,46 @@ class Crawler:
 
     def filter_courses(self, courses: list[Course], include: list[str],
                        exclude: list[str]) -> list[Course]:
-        def matches(course: Course, needles: list[str]) -> bool:
+        def hit(course: Course, needle: str) -> bool:
             hay = f"{course.name} {course.course_id}".lower()
-            return any(str(n).strip().lower() in hay for n in needles if str(n).strip())
+            return needle.lower() in hay
+
+        def matches(course: Course, needles: list[str]) -> bool:
+            return any(hit(course, str(n).strip()) for n in needles if str(n).strip())
 
         if include:
-            courses = [c for c in courses if matches(c, include)]
+            # 1) 이름 일부로 걸리는 셀렉터는 예전처럼 걸리는 과목 전부.
+            # 2) 하나도 안 걸린 셀렉터만 퍼지 매칭(띄어쓰기·음절 순서 무관)으로
+            #    최고 일치 과목 하나.
+            # 3) 그래도 못 찾은 셀렉터가 하나라도 있으면 전 과목 수집으로 폴백.
+            #    오타 하나로 원하던 과목이 통째로 빠지는 것보다 많이 받는 쪽이
+            #    낫다는 결정(exclude 는 그대로 적용).
+            from . import coursematch
+
+            needles = [str(n).strip() for n in include if str(n).strip()]
+            picked: set[str] = set()
+            fuzzy: list[str] = []
+            for n in needles:
+                hits = [c for c in courses if hit(c, n)]
+                if hits:
+                    picked.update(c.course_id for c in hits)
+                else:
+                    fuzzy.append(n)
+            if fuzzy:
+                res = coursematch.select(courses, fuzzy, id_of=lambda c: c.course_id,
+                                         name_of=lambda c: c.name)
+                for line in res.report:
+                    log.info("과목 매칭: %s", line)
+                unmatched = [m.selector for m in res.matches if m.course is None]
+                picked.update(c.course_id for c in res.selected)
+            else:
+                unmatched = []
+            if unmatched:
+                log.warning("과목 셀렉터 %s 에 맞는 과목이 없어 전 과목(%d개)을 "
+                            "수집합니다.", ", ".join(repr(s) for s in unmatched),
+                            len(courses))
+            else:
+                courses = [c for c in courses if c.course_id in picked]
         if exclude:
             courses = [c for c in courses if not matches(c, exclude)]
         return courses
@@ -1318,7 +1358,7 @@ class Crawler:
         return "\n".join(lines), names
 
     def crawl_account(self) -> None:
-        out_dir = self.layout.menu_dir(self.term, "_계정", "계정정보")
+        out_dir = self.layout.menu_dir(self.term, ECLASS_ACCOUNT_DIR, "계정정보")
         out_dir.mkdir(parents=True, exist_ok=True)
         own = ""
         sections = []
@@ -1358,7 +1398,7 @@ class Crawler:
 
     def crawl_messages(self, box: str = "RECEIVE") -> None:
         """쪽지함 하나를 끝까지 긁습니다."""
-        out_dir = self.layout.menu_dir(self.term, "_쪽지", MENU_LABELS["message"])
+        out_dir = self.layout.menu_dir(self.term, ECLASS_MESSAGE_DIR, MENU_LABELS["message"])
         out_dir.mkdir(parents=True, exist_ok=True)
         total = 0
 

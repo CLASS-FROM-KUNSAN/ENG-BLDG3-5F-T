@@ -620,14 +620,61 @@ def test_index_maps_asset_names_back_to_folders(tmp_path):
     """에셋 이름이 해시라 목차 없이는 어느 과목인지 알 수 없습니다."""
     from syncnote.release import write_index
 
-    rows = [("2_23_84aadfbc.zip", "영어2_23", 3, 571),
-            ("56740f8b.zip", "_쪽지", 1, 221)]
+    rows = [("main_2_23_84aadfbc.zip", "영어2_23", 3, 571),
+            ("sub_56740f8b.zip", "_쪽지", 1, 221),
+            ("main_01_aaaa1111.zip", "운동과건강_01", 2, 100)]
     text = write_index(tmp_path / "INDEX.md", rows, tag="eclass-2026-11").read_text("utf-8")
     assert "eclass-2026-11" in text
     for name, folder, _n, _s in rows:
         assert name in text and folder in text
-    # 폴더 이름 순으로 정렬합니다(해시 순이면 사람이 못 찾습니다).
-    assert text.index("_쪽지") < text.index("영어2_23")
+    # 과목(main) 먼저 폴더 이름 순, 그다음 쪽지·계정(sub).
+    assert text.index("영어2_23") < text.index("운동과건강_01") < text.index("_쪽지")
+    assert "| sub | `sub_56740f8b.zip` | _쪽지 |" in text
+
+
+def test_bundle_kind_main_for_courses_sub_for_menus():
+    from syncnote.release import bundle_filename, bundle_kind
+
+    assert bundle_kind("영어2_23") == "main"
+    assert bundle_kind("_쪽지") == "sub"
+    assert bundle_kind("_계정") == "sub"
+    assert bundle_filename("영어2_23") == "main_영어2_23.zip"
+    assert bundle_filename("_쪽지") == "sub__쪽지.zip"
+    # 접두어로 추측하지 않음: '_' 로 시작해도 목록에 없으면 과목.
+    assert bundle_kind("_특강") == "main"
+    # macOS 등에서 NFD 로 들어와도 같은 판정.
+    import unicodedata
+    assert bundle_kind(unicodedata.normalize("NFD", "_쪽지")) == "sub"
+
+
+def test_crawler_writes_term_level_folders_only_from_the_registry():
+    """크롤러가 목록 밖 비과목 폴더를 만들면 업로드에서 main 으로 섞입니다."""
+    import re
+    from pathlib import Path
+
+    import syncnote.eclass.crawler as crawler
+
+    src = Path(crawler.__file__).read_text(encoding="utf-8")
+    literals = re.findall(r"(?:menu_dir|course_dir)\(\s*self\.term,\s*(['\"][^'\"]*['\"])", src)
+    assert literals == [], f"폴더 이름을 문자열로 직접 씀: {literals} — paths.py 상수를 쓰세요"
+
+
+def test_bundle_asset_names_carry_main_or_sub_before_the_hash():
+    """릴리스 화면에서 과목 zip 과 쪽지·계정 zip 을 이름만으로 가릅니다."""
+    import re
+
+    from syncnote.release import asset_name, bundle_filename, machine_prefix
+
+    prefix = machine_prefix("actions")
+    def name(folder):
+        f = bundle_filename(folder)
+        return asset_name(f, prefix=prefix, unique_key=f)
+
+    assert re.fullmatch(r"actions_main_2_23_[0-9a-f]{8}\.zip", name("영어2_23"))
+    assert re.fullmatch(r"actions_main_[0-9a-f]{8}\.zip", name("운동과건강"))
+    assert re.fullmatch(r"actions_sub_[0-9a-f]{8}\.zip", name("_쪽지"))
+    assert re.fullmatch(r"actions_sub_[0-9a-f]{8}\.zip", name("_계정"))
+    assert name("_쪽지") != name("_계정")
 
 
 def test_index_counts_and_sizes_are_shown(tmp_path):

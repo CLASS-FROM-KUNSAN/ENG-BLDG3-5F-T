@@ -73,6 +73,9 @@ def asset_name(original: str, prefix: str = "", unique_key: str | None = None) -
     # 원본에 비ASCII 가 섞여 있었다면 정보가 날아간 것이므로 해시로 보강합니다.
     lost = any(ord(ch) > 127 for ch in stem)
     key = unique_key if unique_key is not None else stem
+    if lost:
+        # 한글이 '_' 로 바뀌며 생긴 '__' 를 하나로(`main_영어2` -> `main_2`).
+        safe_stem = re.sub(r"_{2,}", "_", safe_stem)
     if lost or not safe_stem:
         digest = hashlib.sha1(unicodedata.normalize("NFC", key).encode("utf-8")).hexdigest()[:8]
         safe_stem = f"{safe_stem}_{digest}".strip("_") if safe_stem else digest
@@ -896,24 +899,57 @@ def group_by_top_folder(root: Path, files: Iterable[Path]) -> dict[str, list[Pat
     return groups
 
 
+KIND_MAIN = "main"   # 실제 과목
+KIND_SUB = "sub"     # 쪽지·계정 등 과목이 아닌 메뉴
+
+
+def bundle_kind(folder: str) -> str:
+    """학기 폴더 바로 아래 폴더가 과목이면 'main', 아니면 'sub'.
+
+    접두어('_')로 추측하지 않고 paths.ECLASS_NON_COURSE_DIRS 목록으로만
+    가릅니다. 그래야 이름이 '_' 로 시작하는 과목도 main 으로 남습니다.
+    """
+    from .paths import ECLASS_NON_COURSE_DIRS
+
+    name = unicodedata.normalize("NFC", str(folder))
+    return KIND_SUB if name in ECLASS_NON_COURSE_DIRS else KIND_MAIN
+
+
+def bundle_filename(folder: str) -> str:
+    """폴더 묶음 zip 의 로컬 파일 이름. 종류를 맨 앞에 붙입니다.
+
+    GitHub 에셋 이름에서는 한글이 빠져 해시만 남으므로, 릴리스 화면에서
+    과목 묶음과 쪽지·계정 묶음을 가를 수 있도록 `main_` / `sub_` 를
+    해시 앞에 남깁니다. 예: `영어2_23` -> `main_2_23_84aadfbc.zip`,
+    `_쪽지` -> `sub_56740f8b.zip` (기기 접두어는 그 앞에 붙습니다).
+    zip 안의 폴더 이름은 원래대로입니다.
+    """
+    return f"{bundle_kind(folder)}_{folder}.zip"
+
+
 def write_index(dest: Path, rows: list[tuple[str, str, int, int]], *, tag: str) -> Path:
     """에셋 이름 -> 폴더 이름 목차.
 
-    GitHub 에셋 이름에서 한글이 빠지기 때문에 `56740f8b.zip` 같은
+    GitHub 에셋 이름에서 한글이 빠지기 때문에 `main_56740f8b.zip` 같은
     이름만 남습니다. 릴리스 화면에서 어느 과목인지 알 수 없으므로
     목차를 같이 올립니다. rows = (에셋 이름, 폴더, 파일 수, 바이트).
+    과목(main)을 먼저, 쪽지·계정 등(sub)을 뒤에 적습니다.
     """
     lines = [
         f"# {tag} 수집 목차",
         "",
         "에셋 이름에 한글이 들어가지 않아 해시로 올라갑니다.",
+        "`main_` 은 과목, `sub_` 는 쪽지·계정 등 과목이 아닌 메뉴입니다.",
         "받아서 풀면 폴더 이름은 원래대로 나옵니다.",
         "",
-        "| 에셋 | 폴더 | 파일 수 | 크기 |",
-        "|---|---|---:|---:|",
+        "| 구분 | 에셋 | 폴더 | 파일 수 | 크기 |",
+        "|---|---|---|---:|---:|",
     ]
-    for name, folder, count, size in sorted(rows, key=lambda r: r[1]):
-        lines.append(f"| `{name}` | {folder} | {count} | {_human(size)} |")
+    order = {KIND_MAIN: 0, KIND_SUB: 1}
+    for name, folder, count, size in sorted(
+            rows, key=lambda r: (order[bundle_kind(r[1])], r[1])):
+        lines.append(f"| {bundle_kind(folder)} | `{name}` | {folder} | {count} "
+                     f"| {_human(size)} |")
     lines.append("")
     lines.append(f"- 만든 시각: {datetime.now().astimezone():%Y-%m-%d %H:%M:%S}")
     dest.parent.mkdir(parents=True, exist_ok=True)

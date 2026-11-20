@@ -7,6 +7,14 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path
 
+# eclass/<학기>/ 바로 아래에서 '과목이 아닌' 폴더 전부. 크롤러는 계정 단위
+# 수집물을 반드시 이 이름으로만 씁니다. 업로드는 이 목록으로 과목(main)과
+# 비과목(sub)을 가르므로, 새 계정 단위 폴더를 만들면 여기에 먼저 추가하세요.
+# (tests 가 크롤러 소스에서 목록 밖 '_' 폴더를 찾으면 실패합니다.)
+ECLASS_ACCOUNT_DIR = "_계정"
+ECLASS_MESSAGE_DIR = "_쪽지"
+ECLASS_NON_COURSE_DIRS = frozenset({ECLASS_ACCOUNT_DIR, ECLASS_MESSAGE_DIR})
+
 # Windows 에서 쓸 수 없는 문자 + 제어문자
 _ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 # Windows 예약 이름
