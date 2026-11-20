@@ -254,3 +254,15 @@ def test_closing_with_save_does_not_pop_the_summary(app, win, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Save)
     assert win._confirm_discard()
     assert win.summary is None and win.undo.isClean()
+
+
+def test_holiday_tab_has_summary_button_top_right(app, win):
+    win.tabs.setCurrentIndex(2)
+    app.processEvents()
+    btn = win.summary_btn
+    assert btn.text() == "다가오는 일정 · 공휴일 보기" and btn.isVisible()
+    tab = win.tabs.currentWidget()
+    pos = btn.mapTo(tab, btn.rect().topRight())
+    assert pos.x() > tab.width() * 0.6 and pos.y() < win.htable.mapTo(tab, win.htable.rect().topLeft()).y()
+    btn.click()
+    assert win.summary is not None and win.summary.isVisible()
