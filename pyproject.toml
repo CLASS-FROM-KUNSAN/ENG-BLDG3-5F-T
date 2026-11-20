@@ -16,5 +16,9 @@ syncnote = "syncnote.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# Qt Designer 로 고치는 화면 파일. 빠지면 설치본에서 편집기가 안 열립니다.
+"syncnote.timetable" = ["*.ui"]
+
 [tool.setuptools.package-dir]
 "" = "src"

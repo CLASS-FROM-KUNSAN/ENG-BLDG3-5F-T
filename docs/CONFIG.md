@@ -112,6 +112,53 @@ REM 등록한 시간표와 다음 녹화 시각 확인
 scripts\show_timetable.bat
 ```
 
+### 시간표 편집기 (GUI)
+
+손으로 적는 대신 화면에서 편집할 수 있습니다. PySide6 가 필요합니다
+(`pip install PySide6`).
+
+```bat
+scripts\timetable_edit.bat
+REM 또는: python -m syncnote timetable edit [-c config.toml]
+```
+
+- **시간표 탭**: 빈 칸을 드래그하면 수업 추가, 블록을 끌면 이동, 아래
+  가장자리를 끌면 길이 조절, 더블클릭하면 수정. 5분 단위로 맞춥니다.
+  여러 요일 수업은 시간이 함께 움직이고, **Shift** 를 누른 채 끌면 그
+  요일만 떼어 옮깁니다. 시간이 겹치는 수업은 나란히 그리고 빨간 테두리로 표시합니다
+  (녹화는 한 번에 하나라 뒤 수업이 빠질 수 있습니다).
+- **수업 목록 탭**: 표로 보고 추가/수정/복제/삭제.
+- **공휴일 탭**: 쉬는 날. 그날 수업은 녹화·송출 일정에서 건너뜁니다.
+  "3월 1일(일) 삼일절" 같은 목록을 붙여넣어 한 번에 넣을 수 있습니다.
+- **파일 메뉴**: 저장(Ctrl+S), iPad 시간표 앱(Swift) 백업 JSON 가져오기/내보내기.
+- Ctrl+Z / Ctrl+Y 로 실행 취소 / 다시 실행.
+
+저장하면 config.toml **맨 아래 표시줄 사이만** 다시 씁니다.
+
+```toml
+# >>> syncnote 시간표 편집기 (이 아래부터 END 까지는 편집기가 다시 씁니다) >>>
+[[recording.timetable]]
+name  = "자료구조"
+day   = "mon"
+start = "09:00"
+end   = "10:50"
+room  = "공학관 401호"
+
+[[recording.holidays]]
+date = "2026-12-25"
+name = "성탄절"
+# <<< syncnote 시간표 편집기 <<<
+```
+
+- 표시줄 밖의 설정과 주석은 그대로 둡니다. 원본은 `config.toml.bak` 으로 남습니다.
+- 손으로 적어 둔 `[[recording.timetable]]` 이 있으면 같은 수업이 두 번
+  잡히지 않도록 **주석 처리**합니다(지우지 않음).
+- `room`·`professor`·`color`·`course_id` 는 편집기 표시용 칸입니다.
+  녹화에는 `name/day/start/end/language` 만 쓰입니다(`course_id` 는 과목 판정에도 쓰임).
+- 수업 추가/수정 창은 `src/syncnote/timetable/course_dialog.ui` 입니다.
+  `pyside6-designer` 로 열어 드래그 앤 드롭으로 배치를 바꿀 수 있습니다
+  (위젯 이름만 그대로 두면 됩니다).
+
 ---
 
 ## 전사

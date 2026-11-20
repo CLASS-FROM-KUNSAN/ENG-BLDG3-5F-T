@@ -91,8 +91,9 @@ def _offenders(path: Path) -> list[str]:
 
         if name in ("open", "read_text", "write_text") and not has_encoding:
             # Store.open / zipfile.ZipFile.open 등은 우리 API 입니다.
+            # ui_file 은 Qt QFile(.ui) — 바이트 장치라 인코딩 개념이 없습니다.
             if owner in ("Store", "HomeState", "SealedStore", "zipfile", "wave",
-                         "os", "gzip", "tarfile"):
+                         "os", "gzip", "tarfile", "ui_file"):
                 continue
             if name == "open" and _binary_mode(node, method=bool(owner) or
                                                 isinstance(node.func, ast.Attribute)):

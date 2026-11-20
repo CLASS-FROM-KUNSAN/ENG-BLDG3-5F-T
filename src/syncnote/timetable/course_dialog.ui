@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  수업 추가/수정 창. Qt Designer 로 열어 드래그 앤 드롭으로 배치를 바꿀 수 있습니다:
+      pyside6-designer src/syncnote/timetable/course_dialog.ui
+  위젯 objectName 은 gui.py 가 찾는 이름이라 바꾸지 마세요
+  (nameEdit professorEdit roomEdit courseIdEdit languageCombo
+   dayMon..daySun startTime endTime colorGrid previewLabel errorLabel buttonBox).
+-->
+<ui version="4.0">
+ <class>CourseDialog</class>
+ <widget class="QDialog" name="CourseDialog">
+  <property name="geometry">
+   <rect><x>0</x><y>0</y><width>420</width><height>560</height></rect>
+  </property>
+  <property name="windowTitle">
+   <string>수업</string>
+  </property>
+  <layout class="QVBoxLayout" name="rootLayout">
+   <item>
+    <widget class="QGroupBox" name="infoGroup">
+     <property name="title"><string>수업 정보</string></property>
+     <layout class="QFormLayout" name="infoForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="nameLabel"><property name="text"><string>수업명</string></property></widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QLineEdit" name="nameEdit">
+        <property name="placeholderText"><string>수업명 (필수)</string></property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="professorLabel"><property name="text"><string>교수명</string></property></widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLineEdit" name="professorEdit"/>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="roomLabel"><property name="text"><string>강의실</string></property></widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QLineEdit" name="roomEdit">
+        <property name="placeholderText"><string>예: 공학관 401호</string></property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="courseIdLabel"><property name="text"><string>과목코드</string></property></widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QLineEdit" name="courseIdEdit">
+        <property name="placeholderText"><string>eClass 과목코드 (선택)</string></property>
+       </widget>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLabel" name="languageLabel"><property name="text"><string>전사 언어</string></property></widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QComboBox" name="languageCombo">
+        <property name="editable"><bool>true</bool></property>
+        <property name="toolTip"><string>비우면 [transcribe] 의 language 를 씁니다. 영어 수업은 en.</string></property>
+        <item><property name="text"><string></string></property></item>
+        <item><property name="text"><string>ko</string></property></item>
+        <item><property name="text"><string>en</string></property></item>
+        <item><property name="text"><string>ko+en</string></property></item>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="dayGroup">
+     <property name="title"><string>요일</string></property>
+     <layout class="QHBoxLayout" name="dayLayout">
+      <item><widget class="QCheckBox" name="dayMon"><property name="text"><string>월</string></property></widget></item>
+      <item><widget class="QCheckBox" name="dayTue"><property name="text"><string>화</string></property></widget></item>
+      <item><widget class="QCheckBox" name="dayWed"><property name="text"><string>수</string></property></widget></item>
+      <item><widget class="QCheckBox" name="dayThu"><property name="text"><string>목</string></property></widget></item>
+      <item><widget class="QCheckBox" name="dayFri"><property name="text"><string>금</string></property></widget></item>
+      <item><widget class="QCheckBox" name="daySat"><property name="text"><string>토</string></property></widget></item>
+      <item><widget class="QCheckBox" name="daySun"><property name="text"><string>일</string></property></widget></item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="timeGroup">
+     <property name="title"><string>수업 시간</string></property>
+     <layout class="QFormLayout" name="timeForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="startLabel"><property name="text"><string>시작</string></property></widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QTimeEdit" name="startTime">
+        <property name="displayFormat"><string>HH:mm</string></property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="endLabel"><property name="text"><string>종료</string></property></widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QTimeEdit" name="endTime">
+        <property name="displayFormat"><string>HH:mm</string></property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="colorGroup">
+     <property name="title"><string>블록 색상</string></property>
+     <layout class="QGridLayout" name="colorGrid"/>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="previewLabel">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="text"><string/></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="errorLabel">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="styleSheet"><string>color: #C0392B;</string></property>
+     <property name="text"><string/></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

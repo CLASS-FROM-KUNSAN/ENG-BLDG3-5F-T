@@ -186,7 +186,8 @@ def test_example_file_has_no_unknown_keys(example_config_text):
     example = _example_keys(example_config_text)
     known = _flatten(cfgmod.DEFAULTS)
     # 시간표는 배열이라 평탄화 대상이 아닙니다.
-    unknown = {k for k in example - known if not k.startswith("recording.timetable")}
+    unknown = {k for k in example - known
+               if not k.startswith(("recording.timetable", "recording.holidays"))}
     assert not unknown, f"예시 파일에만 있는 키(코드가 무시함): {sorted(unknown)}"
 
 
@@ -200,7 +201,7 @@ def test_every_default_is_documented(example_config_text):
         if not k.startswith("eclass.menu_ids")
         # timetable 은 [[배열]] 이라 비어 있으면 키 자체가 없습니다.
         # 예시 파일은 주석으로 설명합니다.
-        and k != "recording.timetable"
+        and k not in ("recording.timetable", "recording.holidays")
     }
     assert not undocumented, (
         "예시 파일에 설명이 없는 설정 키: " + ", ".join(sorted(undocumented))

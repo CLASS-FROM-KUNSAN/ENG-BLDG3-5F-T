@@ -1,0 +1,1028 @@
+"""PySide6 시간표 편집기.
+
+    python -m syncnote timetable edit [-c config.toml]
+
+Swift 앱(2026년 시간표)의 화면 구성을 데스크톱으로 옮겼습니다.
+  - 시간표 탭: 주간 격자. 빈 칸을 드래그하면 수업 추가, 블록을 끌면 이동,
+    아래 가장자리를 끌면 길이 조절, 더블클릭하면 수정. 5분 단위로 맞춥니다.
+    Shift 를 누른 채 끌면 그 요일만 떼어 옮깁니다(다른 요일은 그대로).
+  - 수업 목록 탭: 표로 보고 추가/수정/복제/삭제.
+  - 공휴일 탭: 쉬는 날. 녹화·송출 일정에서 건너뜁니다. 붙여넣기 일괄 추가.
+  - 저장 = config.toml 의 [[recording.timetable]] / [[recording.holidays]].
+  - Swift 앱 백업 JSON 가져오기/내보내기.
+
+수업 추가/수정 창은 course_dialog.ui 로, Qt Designer 로 고칠 수 있습니다.
+"""
+
+from __future__ import annotations
+
+import sys
+from datetime import date
+from pathlib import Path
+
+from PySide6.QtCore import (
+    QDate,
+    QFile,
+    QIODevice,
+    QLibraryInfo,
+    QLocale,
+    QRectF,
+    Qt,
+    QTime,
+    QTimer,
+    QTranslator,
+    Signal,
+)
+from PySide6.QtGui import (
+    QAction,
+    QBrush,
+    QColor,
+    QFont,
+    QKeySequence,
+    QPainter,
+    QPen,
+    QUndoCommand,
+    QUndoStack,
+)
+from PySide6.QtUiTools import QUiLoader
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QCheckBox,
+    QColorDialog,
+    QComboBox,
+    QDateEdit,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFormLayout,
+    QGraphicsItem,
+    QGraphicsRectItem,
+    QGraphicsScene,
+    QGraphicsSceneMouseEvent,
+    QGraphicsTextItem,
+    QGraphicsView,
+    QGridLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QTimeEdit,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from . import model as M
+
+# 격자 크기 (1분 = 1px)
+TIME_W = 52
+DAY_W = 132
+HEADER_H = 30
+PX_PER_MIN = 1.0
+SNAP = 5
+MIN_LEN = 10
+RESIZE_GRIP = 7
+
+
+def snap(minute: float) -> int:
+    return int(round(minute / SNAP) * SNAP)
+
+
+def _text_color(bg: QColor) -> QColor:
+    # 밝은 블록 위에는 검정 글씨. (YIQ 휘도)
+    y = (bg.red() * 299 + bg.green() * 587 + bg.blue() * 114) / 1000
+    return QColor("#1B1B1B") if y > 170 else QColor("#FFFFFF")
+
+
+# ---------------------------------------------------------------------------
+# 실행 취소: 통째 스냅샷 (시간표는 작아서 충분히 쌉니다)
+# ---------------------------------------------------------------------------
+class _Snapshot(QUndoCommand):
+    def __init__(self, win: TimetableWindow, before: M.Timetable,
+                 after: M.Timetable, text: str) -> None:
+        super().__init__(text)
+        self._win, self._before, self._after = win, before, after
+
+    def redo(self) -> None:
+        self._win._set_model(self._after.copy())
+
+    def undo(self) -> None:
+        self._win._set_model(self._before.copy())
+
+
+# ---------------------------------------------------------------------------
+# 시간표 격자
+# ---------------------------------------------------------------------------
+class CourseBlock(QGraphicsRectItem):
+    def __init__(self, scene: TimetableScene, idx: int, course: M.Course, day: str,
+                 rect: QRectF, warn: bool) -> None:
+        super().__init__(rect)
+        self.grid = scene
+        self.idx, self.course, self.day = idx, course, day
+        self.setAcceptHoverEvents(True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setZValue(10)
+        bg = QColor(course.color)
+        bg.setAlpha(225)
+        self.setBrush(QBrush(bg))
+        self.setPen(QPen(QColor("#C0392B"), 2.5) if warn else QPen(bg.darker(130), 1))
+        tip = f"{course.name}\n{course.days_text}  {course.time_text}"
+        if course.room:
+            tip += f"\n{course.room}"
+        if warn:
+            tip += "\n⚠ 같은 요일의 다른 수업과 시간이 겹칩니다"
+        self.setToolTip(tip)
+
+        # 참조를 붙잡아 둡니다. 지역 변수로만 두면 PySide 가 Python 쪽 객체를
+        # 정리하면서 자식 아이템이 같이 사라져 블록에 글자가 안 나옵니다.
+        self.label = label = QGraphicsTextItem(self)
+        label.setDefaultTextColor(_text_color(bg))
+        lines = [f"<b>{_esc(course.name)}</b>"]
+        if rect.height() >= 44 and course.room:
+            lines.append(_esc(course.room))
+        if rect.height() >= 62:
+            lines.append(course.time_text)
+        label.setHtml("<br>".join(lines))
+        f = QFont()
+        f.setPointSizeF(8.5)
+        label.setFont(f)
+        label.setTextWidth(rect.width() - 6)
+        label.setPos(rect.x() + 2, rect.y() + 1)
+        self._mode = ""
+        self._press = None
+        self._orig = QRectF(rect)
+
+    # -- 마우스 ---------------------------------------------------------
+    def _near_bottom(self, y: float) -> bool:
+        return self.rect().bottom() - y <= RESIZE_GRIP
+
+    def hoverMoveEvent(self, event) -> None:
+        self.setCursor(Qt.CursorShape.SizeVerCursor if self._near_bottom(event.pos().y())
+                       else Qt.CursorShape.OpenHandCursor)
+        super().hoverMoveEvent(event)
+
+    def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        self._mode = "resize" if self._near_bottom(event.pos().y()) else "move"
+        self._press = event.scenePos()
+        self._orig = QRectF(self.rect())
+        self.setZValue(20)
+        self.setOpacity(0.8)
+        event.accept()
+
+    def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:
+        if not self._mode:
+            super().mouseMoveEvent(event)
+            return
+        d = event.scenePos() - self._press
+        r = QRectF(self._orig)
+        if self._mode == "resize":
+            r.setHeight(max(MIN_LEN * PX_PER_MIN, self._orig.height() + d.y()))
+            self.setRect(r)
+        else:
+            self.setPos(d.x(), d.y())
+
+    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:
+        if not self._mode:
+            super().mouseReleaseEvent(event)
+            return
+        mode, self._mode = self._mode, ""
+        g = self.grid
+        if mode == "resize":
+            start = self.course.start_min
+            grown = (self.rect().height() - self._orig.height()) / PX_PER_MIN
+            end = max(start + MIN_LEN, snap(self.course.end_min + grown))
+            end = min(end, 24 * 60 - 1)
+            to_day = self.day
+        else:
+            moved = self.mapRectToScene(self.rect())
+            to_day = g.day_at(moved.center().x()) or self.day
+            length = self.course.end_min - self.course.start_min
+            start = snap(g.minute_at(moved.top()))
+            start = max(0, min(start, 24 * 60 - 1 - length))
+            end = start + length
+        only_this = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        g.moveRequested.emit(self.idx, self.day, to_day, start, end, only_this)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        self.grid.editRequested.emit(self.idx)
+
+    def contextMenuEvent(self, event) -> None:
+        self.grid.contextRequested.emit(self.idx, self.day, event.screenPos())
+
+
+def _lanes(items: list[tuple[int, M.Course]]) -> list[tuple[int, M.Course, int, int]]:
+    """같은 요일에서 시간이 겹치는 수업을 나란히 그리기 위한 칸 배정.
+
+    겹치는 무리(cluster)마다 필요한 칸 수를 따로 셉니다. 겹치지 않는
+    수업은 칸 하나를 통째로 씁니다. 반환: (idx, course, 칸 번호, 칸 수).
+    """
+    items = sorted(items, key=lambda t: (t[1].start_min, t[1].end_min))
+    out: list[tuple[int, M.Course, int, int]] = []
+    cluster: list[tuple[int, M.Course, int]] = []
+    lane_ends: list[int] = []
+    cluster_end = -1
+
+    def flush() -> None:
+        n = max(1, len(lane_ends))
+        out.extend((i, c, lane, n) for i, c, lane in cluster)
+
+    for idx, c in items:
+        if cluster and c.start_min >= cluster_end:
+            flush()
+            cluster, lane_ends = [], []
+        lane = next((k for k, end in enumerate(lane_ends) if end <= c.start_min), None)
+        if lane is None:
+            lane = len(lane_ends)
+            lane_ends.append(c.end_min)
+        else:
+            lane_ends[lane] = c.end_min
+        cluster.append((idx, c, lane))
+        cluster_end = max(cluster_end, c.end_min) if len(cluster) > 1 else c.end_min
+    if cluster:
+        flush()
+    return out
+
+
+def _esc(s: str) -> str:
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+class TimetableScene(QGraphicsScene):
+    # idx, from_day, to_day, start, end, only_this_day
+    moveRequested = Signal(int, str, str, int, int, bool)
+    createRequested = Signal(str, int, int)
+    editRequested = Signal(int)
+    contextRequested = Signal(int, str, object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.days: list[str] = list(M.DAYS[:5])
+        self.h0, self.h1 = 8, 21
+        self._creating: tuple[str, int] | None = None
+        self._rubber: QGraphicsRectItem | None = None
+        self.setBackgroundBrush(QBrush(QColor("#FFFFFF")))
+
+    # -- 좌표 -----------------------------------------------------------
+    def x_of(self, day: str) -> float:
+        return TIME_W + self.days.index(day) * DAY_W
+
+    def y_of(self, minute: float) -> float:
+        return HEADER_H + (minute - self.h0 * 60) * PX_PER_MIN
+
+    def minute_at(self, y: float) -> float:
+        return (y - HEADER_H) / PX_PER_MIN + self.h0 * 60
+
+    def day_at(self, x: float) -> str | None:
+        col = int((x - TIME_W) // DAY_W)
+        return self.days[col] if 0 <= col < len(self.days) else None
+
+    def _in_grid(self, pos) -> bool:
+        return (TIME_W <= pos.x() < TIME_W + DAY_W * len(self.days)
+                and HEADER_H <= pos.y() <= self.y_of(self.h1 * 60))
+
+    # -- 그리기 ---------------------------------------------------------
+    def rebuild(self, tt: M.Timetable, show_weekend: bool) -> None:
+        self.clear()
+        self._rubber = None
+        used = {d for c in tt.courses for d in c.days}
+        self.days = [d for d in M.DAYS
+                     if M.DAY_INDEX[d] < 5 or show_weekend or d in used]
+        valid = [c for c in tt.courses if not c.problems()]
+        lo = min([c.start_min for c in valid], default=9 * 60)
+        hi = max([c.end_min for c in valid], default=18 * 60)
+        self.h0 = max(0, min(8, lo // 60))
+        self.h1 = min(24, max(21, -(-hi // 60)))
+        width = TIME_W + DAY_W * len(self.days)
+        bottom = self.y_of(self.h1 * 60)
+
+        grid_pen = QPen(QColor("#E3E6EA"))
+        half_pen = QPen(QColor("#F1F3F5"))
+        head_font = QFont()
+        head_font.setBold(True)
+        for i, d in enumerate(self.days):
+            x = TIME_W + i * DAY_W
+            if M.DAY_INDEX[d] >= 5:
+                self.addRect(QRectF(x, HEADER_H, DAY_W, bottom - HEADER_H),
+                             QPen(Qt.PenStyle.NoPen), QBrush(QColor("#FAFAFB")))
+            t = self.addText(M.DAY_KR[M.DAY_INDEX[d]], head_font)
+            t.setPos(x + DAY_W / 2 - t.boundingRect().width() / 2, 4)
+            self.addLine(x, HEADER_H, x, bottom, grid_pen)
+        self.addLine(width, HEADER_H, width, bottom, grid_pen)
+        for h in range(self.h0, self.h1 + 1):
+            y = self.y_of(h * 60)
+            self.addLine(TIME_W, y, width, y, grid_pen)
+            if h < self.h1:
+                self.addLine(TIME_W, y + 30 * PX_PER_MIN, width, y + 30 * PX_PER_MIN, half_pen)
+                lab = self.addText(f"{h}:00")
+                lab.setDefaultTextColor(QColor("#7A808A"))
+                lab.setPos(TIME_W - lab.boundingRect().width() - 4, y - 9)
+
+        warn = {id(c) for _d, a, b in tt.overlaps() for c in (a, b)}
+        for d in self.days:
+            todays = [(idx, c) for idx, c in enumerate(tt.courses)
+                      if d in c.days and not c.problems()]
+            for idx, c, lane, lanes in _lanes(todays):
+                w = (DAY_W - 4) / lanes
+                r = QRectF(self.x_of(d) + 2 + lane * w, self.y_of(c.start_min) + 1,
+                           w - (1 if lanes > 1 else 0),
+                           (c.end_min - c.start_min) * PX_PER_MIN - 2)
+                self.addItem(CourseBlock(self, idx, c, d, r, id(c) in warn))
+        self.setSceneRect(QRectF(0, 0, width + 8, bottom + 8))
+
+    # -- 빈 칸 드래그로 추가 --------------------------------------------
+    def _block_at(self, pos) -> bool:
+        for item in self.items(pos):
+            while item is not None:
+                if isinstance(item, CourseBlock):
+                    return True
+                item = item.parentItem()
+        return False
+
+    def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:
+        pos = event.scenePos()
+        if (event.button() == Qt.MouseButton.LeftButton and not self._block_at(pos)
+                and self._in_grid(pos)):
+            day = self.day_at(pos.x())
+            m = snap(self.minute_at(pos.y()))
+            self._creating = (day, m)
+            self._rubber = self.addRect(
+                QRectF(self.x_of(day) + 2, self.y_of(m), DAY_W - 4, 1),
+                QPen(QColor("#4A90D9"), 1, Qt.PenStyle.DashLine),
+                QBrush(QColor(74, 144, 217, 60)))
+            self._rubber.setZValue(30)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:
+        if self._creating and self._rubber is not None:
+            day, m0 = self._creating
+            m1 = snap(self.minute_at(event.scenePos().y()))
+            top, bot = sorted((m0, m1))
+            self._rubber.setRect(QRectF(self.x_of(day) + 2, self.y_of(top), DAY_W - 4,
+                                        max(1, (bot - top) * PX_PER_MIN)))
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:
+        if self._creating:
+            day, m0 = self._creating
+            m1 = snap(self.minute_at(event.scenePos().y()))
+            self._creating = None
+            if self._rubber is not None:
+                self.removeItem(self._rubber)
+                self._rubber = None
+            top, bot = sorted((m0, m1))
+            if bot - top >= MIN_LEN:
+                self.createRequested.emit(day, top, bot)
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:
+        pos = event.scenePos()
+        if not self._block_at(pos) and self._in_grid(pos):
+            m = snap(self.minute_at(pos.y()))
+            self.createRequested.emit(self.day_at(pos.x()), m, min(m + 60, 24 * 60 - 1))
+            return
+        super().mouseDoubleClickEvent(event)
+
+
+# ---------------------------------------------------------------------------
+# 수업 추가/수정 창 (course_dialog.ui)
+# ---------------------------------------------------------------------------
+def load_ui(name: str, parent: QWidget | None = None) -> QWidget:
+    path = Path(__file__).with_name(name)
+    # Qt 장치(QFile)는 바이트를 그대로 QUiLoader 에 넘깁니다(텍스트 디코딩 없음).
+    ui_file = QFile(str(path))
+    if not ui_file.open(QIODevice.OpenModeFlag.ReadOnly):
+        raise FileNotFoundError(path)
+    try:
+        w = QUiLoader().load(ui_file, parent)
+    finally:
+        ui_file.close()
+    if w is None:
+        raise RuntimeError(f"{name} 를 불러오지 못했습니다")
+    return w
+
+
+_DAY_WIDGETS = ("dayMon", "dayTue", "dayWed", "dayThu", "dayFri", "daySat", "daySun")
+
+
+class CourseEditor:
+    """course_dialog.ui 를 감싸 Course 를 주고받습니다."""
+
+    def __init__(self, parent: QWidget | None, course: M.Course, title: str) -> None:
+        self.dlg: QDialog = load_ui("course_dialog.ui", parent)
+        self.dlg.setWindowTitle(title)
+        w = self.dlg.findChild
+        self.name: QLineEdit = w(QLineEdit, "nameEdit")
+        self.professor: QLineEdit = w(QLineEdit, "professorEdit")
+        self.room: QLineEdit = w(QLineEdit, "roomEdit")
+        self.course_id: QLineEdit = w(QLineEdit, "courseIdEdit")
+        self.language: QComboBox = w(QComboBox, "languageCombo")
+        self.days = [w(QCheckBox, n) for n in _DAY_WIDGETS]
+        self.start: QTimeEdit = w(QTimeEdit, "startTime")
+        self.end: QTimeEdit = w(QTimeEdit, "endTime")
+        self.preview: QLabel = w(QLabel, "previewLabel")
+        self.error: QLabel = w(QLabel, "errorLabel")
+        grid: QGridLayout = self.dlg.findChild(QGridLayout, "colorGrid")
+        buttons: QDialogButtonBox = w(QDialogButtonBox, "buttonBox")
+
+        self.color = course.color
+        self._swatches: list[QToolButton] = []
+        for i, hex_ in enumerate(M.PALETTE):
+            b = QToolButton()
+            b.setCheckable(True)
+            b.setAutoExclusive(True)
+            b.setFixedSize(30, 30)
+            b.setToolTip(hex_)
+            b.setStyleSheet(f"QToolButton {{ background: {hex_}; border-radius: 15px; "
+                            f"border: 2px solid white; }} QToolButton:checked {{ "
+                            f"border: 3px solid #222; }}")
+            b.clicked.connect(lambda _=False, h=hex_: self._pick(h))
+            grid.addWidget(b, i // 6, i % 6)
+            self._swatches.append(b)
+        other = QPushButton("기타…")
+        other.clicked.connect(self._pick_custom)
+        grid.addWidget(other, len(M.PALETTE) // 6, 0, 1, 2)
+
+        self.name.setText(course.name)
+        self.professor.setText(course.professor)
+        self.room.setText(course.room)
+        self.course_id.setText(course.course_id)
+        self.language.setCurrentText(course.language)
+        for cb, d in zip(self.days, M.DAYS, strict=True):
+            cb.setChecked(d in course.days)
+        self.start.setTime(QTime(course.start_min // 60, course.start_min % 60))
+        self.end.setTime(QTime(course.end_min // 60, course.end_min % 60))
+        self._pick(course.color)
+
+        for sig in (self.name.textChanged, self.room.textChanged,
+                    self.language.currentTextChanged, self.start.timeChanged,
+                    self.end.timeChanged):
+            sig.connect(self._refresh)
+        for cb in self.days:
+            cb.toggled.connect(self._refresh)
+        buttons.accepted.connect(self._try_accept)
+        buttons.rejected.connect(self.dlg.reject)
+        self._refresh()
+
+    def _pick(self, hex_: str) -> None:
+        self.color = hex_.upper()
+        for b in self._swatches:
+            b.setChecked(b.toolTip().upper() == self.color)
+        self._refresh()
+
+    def _pick_custom(self) -> None:
+        c = QColorDialog.getColor(QColor(self.color), self.dlg, "블록 색상")
+        if c.isValid():
+            self._pick(c.name())
+
+    def course(self) -> M.Course:
+        return M.Course(
+            name=self.name.text().strip(),
+            days=[d for cb, d in zip(self.days, M.DAYS, strict=True) if cb.isChecked()],
+            start=self.start.time().toString("HH:mm"),
+            end=self.end.time().toString("HH:mm"),
+            professor=self.professor.text().strip(),
+            room=self.room.text().strip(),
+            color=self.color,
+            language=self.language.currentText().strip(),
+            course_id=self.course_id.text().strip(),
+        )
+
+    def _refresh(self, *_a) -> None:
+        c = self.course()
+        mins = c.end_min - c.start_min
+        lang = c.language or "기본([transcribe])"
+        where = f" · {c.room}" if c.room else ""
+        self.preview.setText(
+            f"녹화: {c.days_text or '요일 없음'}  {c.time_text}"
+            f" ({mins}분){where}\n전사 언어: {lang}")
+        self.error.setText("")
+
+    def _try_accept(self) -> None:
+        problems = self.course().problems()
+        if problems:
+            self.error.setText("\n".join(problems))
+            return
+        self.dlg.accept()
+
+    def exec(self) -> M.Course | None:
+        return self.course() if self.dlg.exec() == QDialog.DialogCode.Accepted else None
+
+
+# ---------------------------------------------------------------------------
+# 공휴일 창들
+# ---------------------------------------------------------------------------
+def ask_holiday(parent: QWidget) -> M.Holiday | None:
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("공휴일 추가")
+    form = QFormLayout(dlg)
+    when = QDateEdit(QDate.currentDate())
+    when.setCalendarPopup(True)
+    when.setDisplayFormat("yyyy-MM-dd (ddd)")
+    name = QLineEdit()
+    name.setPlaceholderText("예: 개교기념일")
+    form.addRow("날짜", when)
+    form.addRow("이름", name)
+    bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+    bb.accepted.connect(dlg.accept)
+    bb.rejected.connect(dlg.reject)
+    form.addRow(bb)
+    if dlg.exec() != QDialog.DialogCode.Accepted:
+        return None
+    q = when.date()
+    return M.Holiday(date(q.year(), q.month(), q.day()), name.text().strip())
+
+
+def ask_holiday_paste(parent: QWidget) -> list[M.Holiday]:
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("붙여넣기로 공휴일 추가")
+    dlg.resize(460, 480)
+    lay = QVBoxLayout(dlg)
+    row = QHBoxLayout()
+    row.addWidget(QLabel("연도"))
+    year = QSpinBox()
+    year.setRange(2000, 2100)
+    year.setValue(date.today().year)
+    row.addWidget(year)
+    row.addStretch(1)
+    lay.addLayout(row)
+    lay.addWidget(QLabel("한 줄에 하나씩. 날짜(월/일)만 있으면 앞뒤 글자는 이름이 됩니다.\n"
+                         "예) 3월 1일(일) 삼일절 · 5/5 어린이날 · 2026-10-09 한글날"))
+    text = QPlainTextEdit()
+    lay.addWidget(text, 1)
+    preview = QLabel()
+    preview.setWordWrap(True)
+    lay.addWidget(preview)
+    bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+    ok = bb.button(QDialogButtonBox.StandardButton.Ok)
+    lay.addWidget(bb)
+    found: list[M.Holiday] = []
+
+    def refresh() -> None:
+        found[:] = M.parse_holiday_text(text.toPlainText(), year.value())
+        ok.setEnabled(bool(found))
+        if found:
+            preview.setText(f"인식된 날짜 {len(found)}개: " + ", ".join(
+                f"{h.day:%m/%d} {h.name}".strip() for h in found[:12])
+                + (" …" if len(found) > 12 else ""))
+        else:
+            preview.setText("인식된 날짜가 없습니다.")
+
+    text.textChanged.connect(refresh)
+    year.valueChanged.connect(refresh)
+    bb.accepted.connect(dlg.accept)
+    bb.rejected.connect(dlg.reject)
+    refresh()
+    return list(found) if dlg.exec() == QDialog.DialogCode.Accepted else []
+
+
+# ---------------------------------------------------------------------------
+# 메인 창
+# ---------------------------------------------------------------------------
+class TimetableWindow(QMainWindow):
+    def __init__(self, config_path: Path) -> None:
+        super().__init__()
+        self.path = Path(config_path)
+        self.tt = M.Timetable()
+        self.undo = QUndoStack(self)
+        self.undo.cleanChanged.connect(lambda _c: self._update_title())
+        self.show_weekend = False
+
+        self.scene = TimetableScene()
+        q = Qt.ConnectionType.QueuedConnection   # 블록 이벤트 안에서 장면을 지우지 않도록
+        self.scene.moveRequested.connect(self._on_move, q)
+        self.scene.createRequested.connect(self._on_create, q)
+        self.scene.editRequested.connect(self.edit_course, q)
+        self.scene.contextRequested.connect(self._on_context, q)
+        self.view = QGraphicsView(self.scene)
+        self.view.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.view.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_grid_tab(), "시간표")
+        self.tabs.addTab(self._build_list_tab(), "수업 목록")
+        self.tabs.addTab(self._build_holiday_tab(), "공휴일")
+        self.setCentralWidget(self.tabs)
+        self._build_menus()
+        self.resize(TIME_W + DAY_W * 5 + 80, 900)
+
+        self.reload_from_disk()
+
+    # -- 화면 구성 ------------------------------------------------------
+    def _build_grid_tab(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        hint = QLabel("빈 칸 드래그 = 추가 · 블록 끌기 = 이동(Shift: 그 요일만) · "
+                      "아래 가장자리 = 길이 · 더블클릭 = 수정 · 우클릭 = 메뉴")
+        hint.setStyleSheet("color: #6B7280;")
+        lay.addWidget(hint)
+        lay.addWidget(self.view, 1)
+        return w
+
+    def _build_list_tab(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels(
+            ["수업명", "요일", "시간", "강의실", "교수", "전사 언어", "과목코드"])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.verticalHeader().setVisible(False)
+        self.table.cellDoubleClicked.connect(lambda r, _c: self.edit_course(r))
+        lay.addWidget(self.table, 1)
+        row = QHBoxLayout()
+        for text, fn in (("추가", lambda: self.add_course()),
+                         ("수정", lambda: self._selected() is not None
+                          and self.edit_course(self._selected())),
+                         ("복제", lambda: self._selected() is not None
+                          and self.duplicate_course(self._selected())),
+                         ("삭제", lambda: self._selected() is not None
+                          and self.delete_course(self._selected()))):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+        return w
+
+    def _build_holiday_tab(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.addWidget(QLabel("여기 적은 날짜의 수업은 녹화·송출 일정에서 건너뜁니다."))
+        self.htable = QTableWidget(0, 2)
+        self.htable.setHorizontalHeaderLabels(["날짜", "이름"])
+        self.htable.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.htable.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.htable.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.htable.verticalHeader().setVisible(False)
+        lay.addWidget(self.htable, 1)
+        row = QHBoxLayout()
+        for text, fn in (("추가", self.add_holiday), ("붙여넣기로 추가", self.paste_holidays),
+                         ("삭제", self.delete_holidays), ("지난 날짜 지우기", self.drop_past_holidays)):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+        return w
+
+    def _build_menus(self) -> None:
+        def act(menu, text, fn, shortcut=None):
+            a = QAction(text, self)
+            if shortcut:
+                a.setShortcut(shortcut)
+            a.triggered.connect(fn)
+            menu.addAction(a)
+            return a
+
+        f = self.menuBar().addMenu("파일(&F)")
+        act(f, "config.toml 열기…", self.open_other, QKeySequence.StandardKey.Open)
+        act(f, "디스크에서 다시 읽기", self.reload_from_disk)
+        act(f, "저장", self.save, QKeySequence.StandardKey.Save)
+        f.addSeparator()
+        act(f, "Swift 앱 백업 JSON 가져오기…", self.import_swift)
+        act(f, "Swift 앱 백업 JSON 내보내기…", self.export_swift)
+        f.addSeparator()
+        act(f, "끝내기", self.close, QKeySequence.StandardKey.Quit)
+
+        e = self.menuBar().addMenu("편집(&E)")
+        u = self.undo.createUndoAction(self, "실행 취소")
+        u.setShortcut(QKeySequence.StandardKey.Undo)
+        r = self.undo.createRedoAction(self, "다시 실행")
+        r.setShortcut(QKeySequence.StandardKey.Redo)
+        e.addAction(u)
+        e.addAction(r)
+        e.addSeparator()
+        act(e, "수업 추가…", lambda: self.add_course(), QKeySequence.StandardKey.New)
+        act(e, "선택한 수업 삭제", self._delete_selected, QKeySequence.StandardKey.Delete)
+
+        v = self.menuBar().addMenu("보기(&V)")
+        wk = act(v, "주말(토·일) 표시", self._toggle_weekend)
+        wk.setCheckable(True)
+
+    # -- 모델 <-> 화면 ---------------------------------------------------
+    def _set_model(self, tt: M.Timetable) -> None:
+        self.tt = tt
+        self._refresh()
+
+    def _apply(self, new: M.Timetable, text: str) -> None:
+        self.undo.push(_Snapshot(self, self.tt.copy(), new, text))
+
+    def _refresh(self) -> None:
+        self.scene.rebuild(self.tt, self.show_weekend)
+        self.table.setRowCount(len(self.tt.courses))
+        for r, c in enumerate(self.tt.courses):
+            vals = [c.name, c.days_text, c.time_text, c.room, c.professor,
+                    c.language or "기본", c.course_id]
+            for col, v in enumerate(vals):
+                item = QTableWidgetItem(v)
+                if col == 0:
+                    sw = QColor(c.color)
+                    item.setBackground(QBrush(sw))
+                    item.setForeground(QBrush(_text_color(sw)))
+                self.table.setItem(r, col, item)
+        hs = sorted(self.tt.holidays, key=lambda h: h.day)
+        self.htable.setRowCount(len(hs))
+        for r, h in enumerate(hs):
+            dt = QTableWidgetItem(f"{h.day.isoformat()} ({M.DAY_KR[h.day.weekday()]})")
+            dt.setData(Qt.ItemDataRole.UserRole, h.day.isoformat())
+            if h.day < date.today():
+                dt.setForeground(QBrush(QColor("#9CA3AF")))
+            self.htable.setItem(r, 0, dt)
+            self.htable.setItem(r, 1, QTableWidgetItem(h.name))
+        self._update_status()
+
+    def _update_status(self) -> None:
+        ov = self.tt.overlaps()
+        msg = f"수업 {len(self.tt.courses)}개 · 공휴일 {len(self.tt.holidays)}일 · {self.path}"
+        if ov:
+            pairs = "; ".join(f"{M.DAY_KR[M.DAY_INDEX[d]]} {a.name}↔{b.name}" for d, a, b in ov[:3])
+            msg = f"⚠ 시간 겹침 {len(ov)}건 ({pairs}) · " + msg
+        self.statusBar().showMessage(msg)
+        self._update_title()
+
+    def _update_title(self) -> None:
+        star = "" if self.undo.isClean() else " *"
+        self.setWindowTitle(f"Sync Note 시간표 편집기 — {self.path.name}{star}")
+
+    def _selected(self) -> int | None:
+        rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
+        return rows[0].row() if rows else None
+
+    # -- 수업 ------------------------------------------------------------
+    def add_course(self, prefill: M.Course | None = None) -> None:
+        used = {c.color.upper() for c in self.tt.courses}
+        color = next((p for p in M.PALETTE if p not in used), M.PALETTE[len(used) % len(M.PALETTE)])
+        base = prefill or M.Course(name="", days=["mon"], color=color)
+        if prefill and prefill.color == M.DEFAULT_COLOR:
+            base = prefill.copy(color=color)
+        got = CourseEditor(self, base, "수업 추가").exec()
+        if got:
+            new = self.tt.copy()
+            new.courses.append(got)
+            self._apply(new, f"{got.name} 추가")
+
+    def edit_course(self, idx: int) -> None:
+        if not (0 <= idx < len(self.tt.courses)):
+            return
+        got = CourseEditor(self, self.tt.courses[idx], "수업 수정").exec()
+        if got:
+            new = self.tt.copy()
+            new.courses[idx] = got
+            self._apply(new, f"{got.name} 수정")
+
+    def duplicate_course(self, idx: int) -> None:
+        if 0 <= idx < len(self.tt.courses):
+            src = self.tt.courses[idx]
+            self.add_course(src.copy(name=src.name + " (복사)", days=[]))
+
+    def delete_course(self, idx: int) -> None:
+        if not (0 <= idx < len(self.tt.courses)):
+            return
+        c = self.tt.courses[idx]
+        if QMessageBox.question(self, "삭제", f"'{c.name}' ({c.days_text} {c.time_text}) 를 지울까요?"
+                                ) != QMessageBox.StandardButton.Yes:
+            return
+        new = self.tt.copy()
+        del new.courses[idx]
+        self._apply(new, f"{c.name} 삭제")
+
+    def _delete_selected(self) -> None:
+        if self.tabs.currentIndex() == 2:
+            self.delete_holidays()
+            return
+        blocks = [i for i in self.scene.selectedItems() if isinstance(i, CourseBlock)]
+        if self.tabs.currentIndex() == 0 and blocks:
+            self._remove_day(blocks[0].idx, blocks[0].day)
+            return
+        if (idx := self._selected()) is not None:
+            self.delete_course(idx)
+
+    def _remove_day(self, idx: int, day: str) -> None:
+        c = self.tt.courses[idx]
+        if len(c.days) <= 1:
+            self.delete_course(idx)
+            return
+        new = self.tt.copy()
+        new.courses[idx].days = [d for d in c.days if d != day]
+        self._apply(new, f"{c.name} {M.DAY_KR[M.DAY_INDEX[day]]} 빼기")
+
+    def _on_create(self, day: str, start: int, end: int) -> None:
+        self.add_course(M.Course(name="", days=[day], start=M.from_minutes(start),
+                                 end=M.from_minutes(end)))
+
+    def _on_move(self, idx: int, from_day: str, to_day: str, start: int, end: int,
+                 only_this: bool) -> None:
+        if not (0 <= idx < len(self.tt.courses)):
+            self._refresh()
+            return
+        c = self.tt.courses[idx]
+        s, e = M.from_minutes(start), M.from_minutes(end)
+        if (s, e, to_day) == (c.start, c.end, from_day):
+            self._refresh()                 # 제자리 — 블록 위치만 되돌림
+            return
+        new = self.tt.copy()
+        if only_this and len(c.days) > 1:
+            new.courses[idx].days = [d for d in c.days if d != from_day]
+            new.courses.append(c.copy(days=[to_day], start=s, end=e))
+            self._apply(new, f"{c.name} {M.DAY_KR[M.DAY_INDEX[from_day]]}만 이동")
+            return
+        if to_day != from_day and to_day in c.days:
+            self.statusBar().showMessage(
+                f"'{c.name}' 은 이미 {M.DAY_KR[M.DAY_INDEX[to_day]]}요일에 있습니다.", 5000)
+            self._refresh()
+            return
+        days = [to_day if d == from_day else d for d in c.days]
+        new.courses[idx] = c.copy(days=days, start=s, end=e)
+        self._apply(new, f"{c.name} 이동")
+
+    def _on_context(self, idx: int, day: str, screen_pos) -> None:
+        if not (0 <= idx < len(self.tt.courses)):
+            return
+        c = self.tt.courses[idx]
+        m = QMenu(self)
+        m.addAction("수정…", lambda: self.edit_course(idx))
+        m.addAction("복제…", lambda: self.duplicate_course(idx))
+        if len(c.days) > 1:
+            m.addAction(f"{M.DAY_KR[M.DAY_INDEX[day]]}요일만 빼기",
+                        lambda: self._remove_day(idx, day))
+        m.addAction("수업 삭제", lambda: self.delete_course(idx))
+        m.exec(screen_pos)
+
+    def _toggle_weekend(self, on: bool) -> None:
+        self.show_weekend = bool(on)
+        self._refresh()
+
+    # -- 공휴일 ----------------------------------------------------------
+    def add_holiday(self) -> None:
+        h = ask_holiday(self)
+        if h:
+            self._merge_holidays([h], "공휴일 추가")
+
+    def paste_holidays(self) -> None:
+        hs = ask_holiday_paste(self)
+        if hs:
+            self._merge_holidays(hs, f"공휴일 {len(hs)}일 추가")
+
+    def _merge_holidays(self, hs: list[M.Holiday], text: str) -> None:
+        new = self.tt.copy()
+        have = {h.day: h for h in new.holidays}
+        for h in hs:
+            if h.day in have:
+                if h.name and not have[h.day].name:
+                    have[h.day].name = h.name
+            else:
+                new.holidays.append(h)
+                have[h.day] = h
+        self._apply(new, text)
+
+    def delete_holidays(self) -> None:
+        days = {self.htable.item(i.row(), 0).data(Qt.ItemDataRole.UserRole)
+                for i in self.htable.selectionModel().selectedRows()}
+        if days:
+            new = self.tt.copy()
+            new.holidays = [h for h in new.holidays if h.day.isoformat() not in days]
+            self._apply(new, f"공휴일 {len(days)}일 삭제")
+
+    def drop_past_holidays(self) -> None:
+        today = date.today()
+        if any(h.day < today for h in self.tt.holidays):
+            new = self.tt.copy()
+            new.holidays = [h for h in new.holidays if h.day >= today]
+            self._apply(new, "지난 공휴일 지우기")
+
+    # -- 파일 ------------------------------------------------------------
+    def _confirm_discard(self) -> bool:
+        if self.undo.isClean():
+            return True
+        ans = QMessageBox.question(
+            self, "저장하지 않은 변경",
+            "저장하지 않은 변경이 있습니다. 저장할까요?",
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel)
+        if ans == QMessageBox.StandardButton.Save:
+            return self.save()
+        return ans == QMessageBox.StandardButton.Discard
+
+    def reload_from_disk(self) -> None:
+        if not self._confirm_discard():
+            return
+        try:
+            tt = M.load(self.path)
+        except M.TimetableError as exc:
+            QMessageBox.critical(self, "읽기 실패", str(exc))
+            tt = M.Timetable()
+        self.undo.clear()
+        self._set_model(tt)
+        if not self.path.exists():
+            self.statusBar().showMessage(
+                f"{self.path} 가 없습니다. 저장하면 새로 만듭니다(나머지 설정은 기본값).")
+
+    def open_other(self) -> None:
+        if not self._confirm_discard():
+            return
+        name, _ = QFileDialog.getOpenFileName(self, "config.toml 열기", str(self.path.parent),
+                                              "TOML (*.toml);;모든 파일 (*)")
+        if name:
+            self.path = Path(name)
+            self.undo.setClean()    # 위에서 이미 확인함
+            self.reload_from_disk()
+
+    def save(self) -> bool:
+        try:
+            commented = M.save(self.path, self.tt)
+        except (M.TimetableError, OSError) as exc:
+            QMessageBox.critical(self, "저장 실패", str(exc))
+            return False
+        self.undo.setClean()
+        note = f"저장했습니다: {self.path} (원본은 {self.path.name}.bak)"
+        if commented:
+            QMessageBox.information(
+                self, "손으로 적은 시간표",
+                f"config.toml 에 손으로 적은 시간표/공휴일 표 {commented}개를 주석 처리했습니다.\n"
+                "같은 수업이 두 번 잡히지 않게 하기 위해서이며, 지우지는 않았습니다.")
+        self.statusBar().showMessage(note, 6000)
+        return True
+
+    def import_swift(self) -> None:
+        name, _ = QFileDialog.getOpenFileName(self, "Swift 앱 백업 JSON", "",
+                                              "JSON (*.json *.txt);;모든 파일 (*)")
+        if not name:
+            return
+        try:
+            got = M.from_swift_json(Path(name).read_text(encoding="utf-8-sig"))
+        except (M.TimetableError, OSError, UnicodeDecodeError) as exc:
+            QMessageBox.critical(self, "가져오기 실패", str(exc))
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("가져오기")
+        box.setText(f"수업 {len(got.courses)}개, 공휴일 {len(got.holidays)}일을 읽었습니다.")
+        merge = box.addButton("지금 시간표에 합치기", QMessageBox.ButtonRole.AcceptRole)
+        repl = box.addButton("지금 시간표를 바꾸기", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is merge:
+            new = self.tt.copy()
+            new.courses.extend(got.courses)
+            self._apply(new, "Swift JSON 합치기")
+            self._merge_holidays(got.holidays, "Swift JSON 공휴일")
+        elif box.clickedButton() is repl:
+            self._apply(got, "Swift JSON 으로 바꾸기")
+
+    def export_swift(self) -> None:
+        name, _ = QFileDialog.getSaveFileName(self, "Swift 앱 백업 JSON 내보내기",
+                                              "timetable-backup.json", "JSON (*.json)")
+        if not name:
+            return
+        text, warnings = M.to_swift_json(self.tt)
+        Path(name).write_text(text, encoding="utf-8")
+        msg = f"내보냈습니다: {name}\nSwift 앱 설정 → '데이터 복원' 에 붙여넣으세요."
+        if warnings:
+            msg += "\n\n" + "\n".join(warnings)
+        QMessageBox.information(self, "내보내기", msg)
+
+    def closeEvent(self, event) -> None:
+        if self._confirm_discard():
+            event.accept()
+        else:
+            event.ignore()
+
+
+def _install_korean(app: QApplication) -> None:
+    """확인/취소 같은 Qt 기본 버튼을 한국어로. 번역 파일이 없으면 그냥 영어."""
+    tr = QTranslator(app)
+    if tr.load(QLocale(QLocale.Language.Korean), "qtbase", "_",
+               QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+        app.installTranslator(tr)
+        app._syncnote_tr = tr   # 수명 유지
+
+
+def run(config_path: Path, argv: list[str] | None = None) -> int:
+    app = QApplication.instance() or QApplication(argv or sys.argv[:1])
+    _install_korean(app)
+    win = TimetableWindow(config_path)
+    win.show()
+    # 첫 화면은 아침 수업 근처가 보이게.
+    QTimer.singleShot(0, lambda: win.view.ensureVisible(
+        QRectF(0, win.scene.y_of(8 * 60), 10, 10), 0, 40))
+    return app.exec()
