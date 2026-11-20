@@ -22,6 +22,7 @@ import hashlib
 import json
 import re
 import sys
+import time
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -366,9 +367,23 @@ def save(path: str | Path, tt: Timetable) -> int:
         p.with_name(p.name + ".bak").write_bytes(raw)
     tmp = p.with_name(p.name + ".tmp")
     tmp.write_bytes(new.encode("utf-8"))
-    tmp.replace(p)
+    _replace_with_retry(tmp, p)
     return commented
 
+
+def _replace_with_retry(src: Path, dst: Path, tries: int = 20, wait: float = 0.05) -> None:
+    """Windows 에서는 백신·인덱서·파일 감시가 방금 쓴 파일을 잠깐 잡고 있으면
+    바꿔치기가 PermissionError 로 실패합니다(테스트에서 간헐적으로 실제로 남).
+    짧게 몇 번 다시 시도하고, 그래도 안 되면 임시 파일을 지우고 오류를 올립니다."""
+    for attempt in range(tries):
+        try:
+            src.replace(dst)
+            return
+        except PermissionError:
+            if attempt == tries - 1:
+                src.unlink(missing_ok=True)
+                raise
+            time.sleep(wait)
 
 # ---------------------------------------------------------------------------
 # Swift 앱(2026년 시간표) 백업 JSON 호환
