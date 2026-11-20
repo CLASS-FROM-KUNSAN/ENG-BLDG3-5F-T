@@ -87,19 +87,15 @@ def asset_name(original: str, prefix: str = "", unique_key: str | None = None) -
 
 
 # ---------------------------------------------------------------------------
-# 태그 전략
+# 태그 — 릴리스는 전부 일 단위(년-월-일)
 # ---------------------------------------------------------------------------
-def tag_for(strategy: str, prefix: str, when: date | None = None, fixed: str = "archive") -> str:
-    when = when or date.today()
-    if strategy == "single":
-        return f"{prefix}-{fixed}" if prefix else fixed
-    if strategy == "daily":
-        suffix = when.strftime("%Y-%m-%d")
-    elif strategy == "weekly":
-        iso = when.isocalendar()
-        suffix = f"{iso[0]}-W{iso[1]:02d}"
-    else:  # monthly
-        suffix = when.strftime("%Y-%m")
+def tag_for(prefix: str, when: date | None = None) -> str:
+    """'recordings' -> 'recordings-2026-11-21'. 녹화·e-class·전사·홈 백업 모두 같은 규칙.
+
+    예전의 월·주 단위나 고정 태그(tag_strategy)는 없앴습니다. 한 릴리스에 한 달치가
+    쌓이면 언제 것인지 릴리스 이름만으로 알 수 없고 에셋 목록이 끝없이 길어집니다.
+    """
+    suffix = (when or date.today()).strftime("%Y-%m-%d")
     return f"{prefix}-{suffix}" if prefix else suffix
 
 

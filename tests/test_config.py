@@ -13,8 +13,9 @@ def test_example_config_is_valid(config_file):
     예시 파일이 깨지면 모든 신규 사용자가 막힙니다.
     """
     cfg = cfgmod.load(config_file())
-    assert cfg.get("github.tag_strategy") == "monthly"
-    assert cfg.get("github.tag_strategy_eclass") == "daily"
+    # 릴리스는 항상 일 단위라 전략 키가 예시에 없어야 합니다(남아 있으면 경고가 뜸).
+    assert cfg.get("github.tag_strategy") is None and cfg.get("github.fixed_tag") is None
+    assert not [n for n in cfgmod.warnings_for(cfg) if "tag_strategy" in n]
     assert cfg.get("recording.audio.track_layout") == "separate"
 
 
@@ -60,7 +61,6 @@ def test_single_backslash_path_is_explained(tmp):
 @pytest.mark.parametrize(
     "edit,fragment",
     [
-        (('tag_strategy = "monthly"', 'tag_strategy = "hourly"'), "tag_strategy"),
         (('track_layout = "separate"', 'track_layout = "stereo"'), "track_layout"),
         (("fps = 10", "fps = 0"), "fps"),
         (("split_size_mb = 1900", "split_size_mb = 5000"), "2000"),
@@ -78,7 +78,7 @@ def test_invalid_values_rejected(config_file, edit, fragment):
 def test_all_errors_reported_at_once(config_file):
     """하나 고치고 다시 돌리기를 반복하지 않도록 전부 모아서 보고합니다."""
     path = config_file([
-        ('tag_strategy = "monthly"', 'tag_strategy = "hourly"'),
+        ('container = "mkv"', 'container = "zip"'),
         ("fps = 10", "fps = 0"),
         ('track_layout = "separate"', 'track_layout = "stereo"'),
     ])
@@ -120,6 +120,16 @@ def test_warnings_do_not_block(config_file):
     assert "mp4" in notes
     assert "segment_minutes = 0" in notes
     assert "삭제" in notes
+
+
+def test_old_monthly_tag_strategy_only_warns_and_is_ignored(config_file):
+    """예전 config.toml 의 tag_strategy = "monthly" 는 막지 않고, 지워도 된다고 알립니다."""
+    cfg = cfgmod.load(config_file([
+        ("tag_prefix_eclass", 'tag_strategy = "monthly"\nfixed_tag = "archive"\ntag_prefix_eclass'),
+    ]))
+    notes = " ".join(cfgmod.warnings_for(cfg))
+    assert "github.tag_strategy" in notes and "github.fixed_tag" in notes
+    assert "일 단위" in notes
 
 
 def test_sensitive_upload_warning(config_file):
