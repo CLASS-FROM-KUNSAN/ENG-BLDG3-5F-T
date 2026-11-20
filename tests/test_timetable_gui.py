@@ -467,3 +467,89 @@ def test_hint_wraps_only_when_the_area_is_too_narrow(app, win):
 def test_long_text_does_not_force_a_wide_minimum(app, win):
     """줄바꿈을 끄면 최소 폭이 950px 로 묶여 작은 화면을 넘었습니다."""
     assert win.minimumSizeHint().width() < 700
+
+
+# -- eClass 과목 연결 ------------------------------------------------------
+from syncnote.eclass import catalog as CAT  # noqa: E402
+
+CATALOG = [CAT.Entry("C001", "운동과건강", "2026-2", "eclass"),
+           CAT.Entry("C002", "자료구조및알고리즘", "2026-2", "eclass"),
+           CAT.Entry("", "캡스톤디자인", "2026-2", "folder")]
+
+
+def test_editor_suggests_and_applies_an_eclass_course(app):
+    ed = gui.CourseEditor(None, M.Course("", ["mon"]), "t", CATALOG)
+    ed.name.setText("건강 운동과")
+    assert "운동과건강 [C001]" in ed.suggestion.text() and ed.apply_btn.isEnabled()
+    ed.apply_suggestion()
+    assert ed.name.text() == "운동과건강" and ed.course_id.text() == "C001"
+    assert ed.suggestion.text().startswith("✔ 연결됨") and not ed.apply_btn.isEnabled()
+    assert ed.name.completer() is not None
+
+
+def test_editor_folder_only_course_fills_name_but_not_code(app):
+    ed = gui.CourseEditor(None, M.Course("캡스톤", ["mon"]), "t", CATALOG)
+    assert "코드 모름" in ed.suggestion.text()
+    ed.apply_suggestion()
+    assert ed.name.text() == "캡스톤디자인" and ed.course_id.text() == ""
+
+
+def test_editor_without_catalog_explains_how_to_get_one(app):
+    ed = gui.CourseEditor(None, M.Course("자료구조", ["mon"]), "t", [])
+    assert "수집" in ed.suggestion.text() and not ed.apply_btn.isEnabled()
+
+
+def test_link_dialog_prechecks_confident_matches_and_applies_once(app, win, monkeypatch):
+    new = win.tt.copy()
+    new.courses.append(M.Course("운동 건강과", ["fri"], "13:00", "14:00"))
+    new.courses.append(M.Course("양자역학", ["thu"], "13:00", "14:00"))
+    win._apply(new, "t")
+    win.catalog = CATALOG
+    before = win.undo.count()
+
+    def accept(self):
+        checked = [self.table.item(r, 0).checkState() == Qt.CheckState.Checked
+                   for r in range(self.table.rowCount())]
+        assert checked == [True, True, False]       # 자료구조·운동과건강 ✔, 양자역학 ✗
+        return QDialog.DialogCode.Accepted
+    from PySide6.QtWidgets import QDialog
+    monkeypatch.setattr(gui.LinkDialog, "exec", accept)
+    win.link_courses()
+    got = {c.name: c.course_id for c in win.tt.courses}
+    assert got == {"자료구조및알고리즘": "C002", "운동과건강": "C001", "양자역학": ""}
+    assert win.undo.count() == before + 1           # 한 번에 실행 취소
+    win.undo.undo()
+    assert all(not c.course_id for c in win.tt.courses)
+
+
+def test_window_reads_catalog_from_configured_data_dir(app, tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    CAT.save(data / "state", "2026-2", [type("X", (), {"course_id": "C7", "name": "운영체제"})()])
+    p = tmp_path / "config.toml"
+    p.write_text(f'[general]\ndata_dir = "{data.as_posix()}"\n\n[eclass]\n'
+                 '[[eclass.course_repos]]\nid = "C8"\nname = "컴퓨터구조"\nrepo = "ca"\n',
+                 encoding="utf-8")
+    w = gui.TimetableWindow(p)
+    try:
+        assert [(e.id, e.name) for e in w.catalog] == [("C7", "운영체제"), ("C8", "컴퓨터구조")]
+    finally:
+        w.undo.setClean()
+        w.close()
+
+
+def test_editor_suggestion_one_line_when_room_wraps_when_narrow(app):
+    ed = gui.CourseEditor(None, M.Course("건강 운동과", ["fri"]), "t", CATALOG)
+    ed.dlg.show()
+    app.processEvents()
+    app.processEvents()
+    lab = ed.suggestion
+    # 한 줄 높이는 글꼴 줄 간격과 다를 수 있습니다(한글 대체 글꼴이 더 큼).
+    # 아주 넓을 때의 높이 = 한 줄 높이로 보고 비교합니다.
+    one_line = lab.heightForWidth(100_000)
+    assert lab.heightForWidth(lab.width()) == one_line     # 자리 있으면 한 줄
+    ed.dlg.resize(300, ed.dlg.height())
+    app.processEvents()
+    app.processEvents()
+    assert lab.heightForWidth(lab.width()) > one_line      # 좁으면 접히고
+    assert lab.minimumHeight() >= lab.heightForWidth(lab.width())   # 높이가 따라 늚
+    ed.dlg.close()

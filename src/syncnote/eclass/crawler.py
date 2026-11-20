@@ -2242,8 +2242,22 @@ class Crawler:
             finally:
                 self.store.save()
 
+    def _remember_catalog(self, courses: list[Course]) -> None:
+        """시간표 편집기가 네트워크 없이 과목코드를 채울 수 있게 목록을 남김.
+        실패해도 수집은 계속합니다(부가 기능)."""
+        if not courses:
+            return
+        try:
+            from . import catalog
+
+            catalog.save(self.layout.state, self.term, courses)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("과목 목록을 남기지 못했습니다(수집은 계속): %s", exc)
+
     def run(self, include: list[str], exclude: list[str]) -> Stats:
-        courses = self.filter_courses(self.list_courses(), include, exclude)
+        every = self.list_courses()
+        self._remember_catalog(every)          # 거르기 전 전체 목록
+        courses = self.filter_courses(every, include, exclude)
         if not courses:
             log.warning("수집 대상 과목이 없습니다. config 의 eclass.courses 를 확인하세요.")
             return self.stats

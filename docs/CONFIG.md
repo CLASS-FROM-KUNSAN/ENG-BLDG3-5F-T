@@ -132,6 +132,15 @@ REM 또는: python -m syncnote timetable edit [-c config.toml]
   "3월 1일(일) 삼일절" 같은 목록을 붙여넣어 한 번에 넣을 수 있습니다.
 - **파일 메뉴**: 저장(Ctrl+S), iPad 시간표 앱(Swift) 백업 JSON 가져오기/내보내기.
 - Ctrl+Z / Ctrl+Y 로 실행 취소 / 다시 실행.
+- **eClass 과목 연결**: 수업 창의 `eClass` 줄이 수업명과 가장 비슷한 eClass 과목을
+  제안합니다(띄어쓰기·음절 순서 무관). `적용` 을 누르면 eClass 정식 과목명과
+  과목코드로 채웁니다. 편집 메뉴 `eClass 과목과 연결…` 은 과목코드가 빈 수업을
+  한꺼번에 연결합니다(확신 있는 것만 미리 체크, 한 번에 실행 취소).
+  - 과목 목록은 eClass 수집(`scripts\eclass_sync.bat`)을 한 번 돌리면
+    `<data_dir>/state/eclass_courses.json` 에 남습니다(과목코드·과목명·학기만,
+    교수 이름은 남기지 않음). 그 전에는 `[[eclass.course_repos]]` 와 수집 폴더
+    이름만 씁니다.
+  - 과목코드가 있으면 녹화 파일이 어느 과목인지 이름이 조금 달라도 정확히 판정됩니다.
 
 저장하면 config.toml **맨 아래 표시줄 사이만** 다시 씁니다.
 
