@@ -36,5 +36,5 @@ git push origin "%TAG%" || ( echo [오류] 푸시 실패 ^(태그는 로컬에 �
 
 echo.
 echo 완료. GitHub Actions 의 release 워크플로가 릴리스를 만듭니다.
-echo   https://github.com/CLASS-FROM-KUNSAN/gym-w-hall-2f/actions
+echo   https://github.com/seongbin45/gym-w-hall-2f/actions
 endlocal & exit /b 0

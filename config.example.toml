@@ -37,7 +37,7 @@ machine_label = ""
 enabled = true
 
 # 산출물을 올릴 저장소. 소스코드 저장소와 달라도 됩니다.
-owner = "class-from-kunsan"
+owner = "seongbin45"
 repo  = "gym-w-hall-2f"
 
 # 릴리스 태그 전략

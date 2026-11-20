@@ -134,7 +134,7 @@ machine_label = "공학관-401호"     # PC 마다 다르게
 [[eclass.course_repos]]
 id    = "2026211605005"
 name  = "기초웹프로그래밍"
-owner = "CLASS-FROM-KUNSAN"
+owner = "seongbin45"
 repo  = "web-programming-2026-2"
 ```
 
