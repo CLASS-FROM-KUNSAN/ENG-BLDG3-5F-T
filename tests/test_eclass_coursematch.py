@@ -72,6 +72,19 @@ def test_filter_falls_back_to_fuzzy_for_reordered_names():
     assert ids == ["C001", "C002"] and not stats.errors
 
 
-def test_filter_unmatched_selector_is_reported_not_widened():
+ALL_IDS = ["C001", "C002", "C003", "C004", "C005"]
+
+
+def test_filter_unmatched_selector_falls_back_to_all_courses():
     ids, stats = _filter(["양자역학"])
-    assert ids == [] and any("양자역학" in e for e in stats.errors)
+    assert ids == ALL_IDS and not stats.errors
+
+
+def test_filter_partial_miss_also_takes_all_so_nothing_is_lost():
+    ids, _ = _filter(["영어2", "양자역학"])
+    assert ids == ALL_IDS
+
+
+def test_filter_fallback_still_honours_exclude():
+    ids, _ = _filter(["양자역학"], exclude=["영어"])
+    assert ids == ["C001", "C003", "C004"]

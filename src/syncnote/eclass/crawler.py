@@ -403,7 +403,10 @@ class Crawler:
         if include:
             # 1) 이름 일부로 걸리는 셀렉터는 예전처럼 걸리는 과목 전부.
             # 2) 하나도 안 걸린 셀렉터만 퍼지 매칭(띄어쓰기·음절 순서 무관)으로
-            #    최고 일치 과목 하나. 임계값 미만이면 버리고, 전체로 폴백하지 않음.
+            #    최고 일치 과목 하나.
+            # 3) 그래도 못 찾은 셀렉터가 하나라도 있으면 전 과목 수집으로 폴백.
+            #    오타 하나로 원하던 과목이 통째로 빠지는 것보다 많이 받는 쪽이
+            #    낫다는 결정(exclude 는 그대로 적용).
             from . import coursematch
 
             needles = [str(n).strip() for n in include if str(n).strip()]
@@ -420,11 +423,16 @@ class Crawler:
                                          name_of=lambda c: c.name)
                 for line in res.report:
                     log.info("과목 매칭: %s", line)
-                for m in res.matches:
-                    if m.course is None:
-                        self.stats.errors.append(f"과목 셀렉터 매칭 실패: {m.selector!r}")
+                unmatched = [m.selector for m in res.matches if m.course is None]
                 picked.update(c.course_id for c in res.selected)
-            courses = [c for c in courses if c.course_id in picked]
+            else:
+                unmatched = []
+            if unmatched:
+                log.warning("과목 셀렉터 %s 에 맞는 과목이 없어 전 과목(%d개)을 "
+                            "수집합니다.", ", ".join(repr(s) for s in unmatched),
+                            len(courses))
+            else:
+                courses = [c for c in courses if c.course_id in picked]
         if exclude:
             courses = [c for c in courses if not matches(c, exclude)]
         return courses
