@@ -150,3 +150,16 @@ def test_non_ascii_powershell_scripts_have_a_utf8_bom(path: Path):
     if all(b < 128 for b in data):
         return
     assert data.startswith(codecs.BOM_UTF8), f"{path.name}: 한글이 있는데 UTF-8 BOM 이 없습니다"
+
+
+# ---------------------------------------------------------------------------
+# 6) 줄바꿈이 LF 뿐인 .bat — cmd 가 한글(UTF-8) 줄 근처에서 줄을 잘못 잘라
+#    'M' 은(는) 내부 또는 외부 명령... 처럼 엉뚱한 조각을 실행합니다.
+#    .gitattributes 는 체크아웃 때만 CRLF 로 바꿔 주므로, 새로 만든 파일은
+#    작업 폴더에서 LF 인 채로 실행될 수 있습니다(timetable_edit.bat 에서 실제로 남).
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("path", BATS, ids=lambda p: p.name)
+def test_bat_uses_crlf_only(path: Path):
+    raw = path.read_bytes()
+    lone_lf = raw.replace(b"\r\n", b"").count(b"\n")
+    assert lone_lf == 0, f"{path.name}: CRLF 가 아닌 줄 {lone_lf}개 — cmd 가 줄을 잘못 읽습니다"

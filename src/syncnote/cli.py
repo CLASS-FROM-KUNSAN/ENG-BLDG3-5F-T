@@ -658,9 +658,22 @@ def cmd_timetable_edit(args) -> int:
     try:
         from .timetable import gui
     except ImportError as exc:
-        print(f"시간표 편집기에는 PySide6 가 필요합니다: pip install PySide6\n({exc})")
+        print(missing_pyside_message(exc))
         return 1
     return gui.run(path)
+
+
+def missing_pyside_message(exc: BaseException) -> str:
+    """PySide6 가 없을 때. '어느 파이썬에' 깔아야 하는지가 핵심입니다 —
+    py 런처·가상환경이 여럿이면 다른 파이썬에 깔고도 계속 없다고 나옵니다."""
+    exe = sys.executable or "python"
+    return (
+        "시간표 편집기에는 PySide6 가 필요한데 이 파이썬에는 설치되어 있지 않습니다.\n"
+        f"  파이썬: {exe}\n"
+        f'  설치:   "{exe}" -m pip install PySide6\n'
+        "  또는 scripts\\setup.bat 을 다시 실행하세요(requirements.txt 에 포함).\n"
+        f"  (원인: {exc})"
+    )
 
 
 def cmd_record_schedule(args) -> int:

@@ -17,11 +17,13 @@ Swift 앱(2026년 시간표)의 화면 구성을 데스크톱으로 옮겼습니
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
 from PySide6.QtCore import (
     QDate,
+    QEvent,
     QFile,
     QIODevice,
     QLibraryInfo,
@@ -40,6 +42,7 @@ from PySide6.QtGui import (
     QFont,
     QKeySequence,
     QPainter,
+    QPalette,
     QPen,
     QUndoCommand,
     QUndoStack,
@@ -223,6 +226,45 @@ class CourseBlock(QGraphicsRectItem):
         self.grid.contextRequested.emit(self.idx, self.day, event.screenPos())
 
 
+def _mix(a: QColor, b: QColor, t: float) -> QColor:
+    """a 에서 b 쪽으로 t 만큼(0=a, 1=b)."""
+    return QColor(round(a.red() + (b.red() - a.red()) * t),
+                  round(a.green() + (b.green() - a.green()) * t),
+                  round(a.blue() + (b.blue() - a.blue()) * t))
+
+
+@dataclass(frozen=True)
+class Theme:
+    """격자 색. 고정색 대신 지금 시스템 팔레트(라이트/다크)에서 뽑습니다."""
+    bg: QColor
+    text: QColor
+    dim: QColor
+    grid: QColor
+    half: QColor
+    weekend: QColor
+    accent: QColor
+    dark: bool
+
+    @classmethod
+    def current(cls) -> Theme:
+        app = QApplication.instance()
+        pal = app.palette() if app is not None else QPalette()
+        bg = pal.color(QPalette.ColorRole.Base)
+        text = pal.color(QPalette.ColorRole.Text)
+        dark = bg.lightness() < 128
+        return cls(
+            bg=bg, text=text,
+            dim=_mix(text, bg, 0.45),
+            grid=_mix(text, bg, 0.82 if dark else 0.88),
+            half=_mix(text, bg, 0.90 if dark else 0.94),
+            weekend=_mix(text, bg, 0.96 if dark else 0.98),
+            # 강조색(오늘 요일)은 다크 배경에서 어두우면 안 보여 밝게 올립니다.
+            accent=(pal.color(QPalette.ColorRole.Highlight).lighter(160) if dark
+                    else pal.color(QPalette.ColorRole.Highlight)),
+            dark=dark,
+        )
+
+
 def _lanes(items: list[tuple[int, M.Course]]) -> list[tuple[int, M.Course, int, int]]:
     """같은 요일에서 시간이 겹치는 수업을 나란히 그리기 위한 칸 배정.
 
@@ -273,7 +315,7 @@ class TimetableScene(QGraphicsScene):
         self.h0, self.h1 = 8, 21
         self._creating: tuple[str, int] | None = None
         self._rubber: QGraphicsRectItem | None = None
-        self.setBackgroundBrush(QBrush(QColor("#FFFFFF")))
+        self.theme = Theme.current()
 
     # -- 좌표 -----------------------------------------------------------
     def x_of(self, day: str) -> float:
@@ -308,16 +350,22 @@ class TimetableScene(QGraphicsScene):
         width = TIME_W + DAY_W * len(self.days)
         bottom = self.y_of(self.h1 * 60)
 
-        grid_pen = QPen(QColor("#E3E6EA"))
-        half_pen = QPen(QColor("#F1F3F5"))
+        th = self.theme = Theme.current()
+        self.setBackgroundBrush(QBrush(th.bg))
+        grid_pen = QPen(th.grid)
+        half_pen = QPen(th.half)
         head_font = QFont()
         head_font.setBold(True)
+        today = date.today().weekday()
         for i, d in enumerate(self.days):
             x = TIME_W + i * DAY_W
             if M.DAY_INDEX[d] >= 5:
                 self.addRect(QRectF(x, HEADER_H, DAY_W, bottom - HEADER_H),
-                             QPen(Qt.PenStyle.NoPen), QBrush(QColor("#FAFAFB")))
+                             QPen(Qt.PenStyle.NoPen), QBrush(th.weekend))
             t = self.addText(M.DAY_KR[M.DAY_INDEX[d]], head_font)
+            # 색을 안 주면 시스템 글자색을 씁니다. 다크 모드에서는 흰 글자라
+            # 예전처럼 배경이 흰색 고정이면 요일이 사라졌습니다.
+            t.setDefaultTextColor(th.accent if M.DAY_INDEX[d] == today else th.text)
             t.setPos(x + DAY_W / 2 - t.boundingRect().width() / 2, 4)
             self.addLine(x, HEADER_H, x, bottom, grid_pen)
         self.addLine(width, HEADER_H, width, bottom, grid_pen)
@@ -327,7 +375,7 @@ class TimetableScene(QGraphicsScene):
             if h < self.h1:
                 self.addLine(TIME_W, y + 30 * PX_PER_MIN, width, y + 30 * PX_PER_MIN, half_pen)
                 lab = self.addText(f"{h}:00")
-                lab.setDefaultTextColor(QColor("#7A808A"))
+                lab.setDefaultTextColor(th.dim)
                 lab.setPos(TIME_W - lab.boundingRect().width() - 4, y - 9)
 
         warn = {id(c) for _d, a, b in tt.overlaps() for c in (a, b)}
@@ -1000,6 +1048,13 @@ class TimetableWindow(QMainWindow):
         if warnings:
             msg += "\n\n" + "\n".join(warnings)
         QMessageBox.information(self, "내보내기", msg)
+
+    def changeEvent(self, event) -> None:
+        # Windows 설정에서 라이트/다크를 바꾸면 팔레트가 바뀝니다. 격자는
+        # 그릴 때 색을 정하므로 다시 그려야 따라갑니다.
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self._refresh()
+        super().changeEvent(event)
 
     def closeEvent(self, event) -> None:
         if self._confirm_discard():

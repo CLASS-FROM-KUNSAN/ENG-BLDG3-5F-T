@@ -155,3 +155,24 @@ def test_record_start_dry_run_says_recording_still_happens():
     help_text = next(a.help for a in start._actions
                      if "--dry-run" in a.option_strings)
     assert "녹화" in help_text, help_text
+
+
+def test_timetable_edit_without_pyside_explains_which_python(monkeypatch, capsys, tmp_path):
+    """PySide6 가 없으면 '어느 파이썬에' 깔지까지 알려 주고 1 로 끝납니다."""
+    import sys
+
+    import syncnote.timetable as tt_pkg
+    from syncnote import cli
+
+    # import 실패 흉내. sys.modules 만 막으면 안 됩니다 — pytest 가 테스트를
+    # 모을 때 test_timetable_gui 가 gui 를 이미 import 해 패키지 속성으로
+    # 붙어 있고, `from .timetable import gui` 는 그 속성을 먼저 씁니다.
+    # 그러면 진짜 편집기 창이 떠서 테스트가 영원히 멈춥니다(실제로 그랬음).
+    monkeypatch.setitem(sys.modules, "syncnote.timetable.gui", None)
+    monkeypatch.delattr(tt_pkg, "gui", raising=False)
+    # 그래도 혹시 GUI 가 뜨면 멈추지 말고 실패하게.
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    rc = cli.main(["-c", str(tmp_path / "config.toml"), "timetable", "edit"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "PySide6" in out and sys.executable in out and "-m pip install PySide6" in out
