@@ -40,8 +40,14 @@ def mux(
     audio_bitrate: str = "128k",
     delete_video: bool = True,
     delete_audio: bool = True,
+    meta=None,
+    segment_index: int = 1,
+    ended_at: float | None = None,
 ) -> Path:
     """최종 파일을 만듭니다.
+
+    meta(recorder.meta.RecordingMeta)를 주면 파일 안에 태그·챕터를 넣습니다.
+    챕터는 이 파일의 시작(가장 먼저 시작한 트랙) 기준 상대 시각, ended_at 까지.
 
     layout:
       separate - 오디오 트랙을 각각 따로
@@ -80,6 +86,23 @@ def mux(
         audio_indices.append((index, track.name))
         index += 1
 
+    # 메타데이터(태그·챕터)는 FFMETADATA 파일을 입력 하나로 붙여 넣습니다.
+    meta_file: Path | None = None
+    meta_index: int | None = None
+    if meta is not None:
+        from datetime import datetime
+
+        from .meta import ffmetadata
+
+        end = float(ended_at or 0.0) or base
+        tags = meta.tags(datetime.fromtimestamp(base), datetime.fromtimestamp(end), segment_index)
+        chapters = meta.chapters(base, end)
+        meta_file = out_path.with_name(out_path.name + ".ffmeta.txt")
+        meta_file.write_text(ffmetadata(tags, chapters), encoding="utf-8")
+        cmd += ["-f", "ffmetadata", "-i", str(meta_file)]
+        meta_index = index
+        index += 1
+
     want_mix = layout in {"mixed", "both"} and len(audio_indices) >= 2
     want_separate = layout in {"separate", "both"} or len(audio_indices) < 2
 
@@ -107,10 +130,20 @@ def mux(
         cmd += [f"-metadata:s:a:{position}", f"title={title}",
                 f"-metadata:s:a:{position}", "language=kor"]
 
+    if meta_index is not None:
+        cmd += ["-map_metadata", str(meta_index), "-map_chapters", str(meta_index)]
+        if out_path.suffix.lower() in (".mp4", ".m4a", ".mov"):
+            # mp4 는 이 옵션이 없으면 정해진 몇 개 말고는 태그를 버립니다.
+            cmd += ["-movflags", "+use_metadata_tags"]
+
     cmd += ["-fflags", "+genpts", str(out_path)]
 
     log.info("합치는 중 -> %s (트랙: %s)", out_path.name, ", ".join(out_track_names) or "없음")
-    run(cmd, timeout=3600)
+    try:
+        run(cmd, timeout=3600)
+    finally:
+        if meta_file is not None:
+            meta_file.unlink(missing_ok=True)
 
     if not out_path.exists() or out_path.stat().st_size == 0:
         raise RuntimeError(f"합치기 결과 파일이 비어 있습니다: {out_path}")

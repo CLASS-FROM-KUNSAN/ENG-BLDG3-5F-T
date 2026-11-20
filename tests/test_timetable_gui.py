@@ -774,3 +774,65 @@ def test_reload_rereads_the_example_too(app, tmp_path, monkeypatch):
     finally:
         w.undo.setClean()
         w.close()
+
+
+# -- 겹치는 수업: 녹화기와 같은 계획으로 경고 --------------------------------
+def _block(win, name, day):
+    return next(b for b in win.scene.items()
+                if isinstance(b, gui.CourseBlock) and b.course.name == name and b.day == day)
+
+
+def _red(block):
+    return block.pen().color().name().lower() == "#c0392b"
+
+
+def _with_overlap(win, extra):
+    new = win.tt.copy()
+    new.courses.append(extra)
+    win._apply(new, "t")
+
+
+def _set_policy(win, policy):
+    text = win.path.read_text(encoding="utf-8")
+    win.path.write_text(f"[recording]\noverlap = \"{policy}\"\n\n" + text, encoding="utf-8")
+    win.check_disk()
+
+
+def test_default_merge_policy_does_not_warn_lost_time(app, win):
+    _with_overlap(win, M.Course("영어2", ["mon"], "09:30", "11:00"))
+    assert win.rec_params["policy"] == "merge" and win.lost == []
+    assert not _red(_block(win, "영어2", "mon"))
+    assert "하나로 이어서" in win.statusBar().currentMessage()
+
+
+def test_first_policy_warns_only_the_class_that_loses_time(app, win):
+    _set_policy(win, "first")
+    _with_overlap(win, M.Course("영어2", ["mon"], "09:30", "11:00"))   # 자료구조 09:00~10:00 과 겹침
+    msg = win.statusBar().currentMessage()
+    assert "영어2 09:30~10:00 (30분) 녹화 안 됨" in msg and "앞 수업 우선" in msg
+    assert _red(_block(win, "영어2", "mon")) and not _red(_block(win, "자료구조", "mon"))
+    assert "녹화 안 됨" in _block(win, "영어2", "mon").toolTip()
+
+
+def test_policy_change_in_config_moves_the_warning(app, win):
+    _with_overlap(win, M.Course("영어2", ["mon"], "09:30", "11:00"))
+    win.undo.setClean()
+    text = win.path.read_text(encoding="utf-8")
+    win.path.write_text("[recording]\noverlap = \"last\"\n\n" + text, encoding="utf-8")
+    assert win.check_disk() == "other"
+    assert _red(_block(win, "자료구조", "mon")) and not _red(_block(win, "영어2", "mon"))
+    assert "뒤 수업 우선" in _block(win, "자료구조", "mon").toolTip()   # 상태줄은 6초간 다른 알림
+    text = win.path.read_text(encoding="utf-8").replace('overlap = "last"', 'overlap = "merge"')
+    win.path.write_text(text, encoding="utf-8")
+    win.check_disk()
+    assert win.lost == []
+    win._update_status()
+    assert "잃는 시간 없음" in win.statusBar().currentMessage()
+    assert not _red(_block(win, "자료구조", "mon")) and not _red(_block(win, "영어2", "mon"))
+
+
+def test_back_to_back_classes_with_rolls_are_not_warned(app, win):
+    _with_overlap(win, M.Course("영어2", ["mon"], "10:00", "11:00"))   # 바로 이어짐(여유 시간만 겹침)
+    msg = win.statusBar().currentMessage()
+    assert "녹화 안 됨" not in msg and "겹침" not in msg
+    assert not _red(_block(win, "영어2", "mon"))
