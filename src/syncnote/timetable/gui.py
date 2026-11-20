@@ -30,7 +30,11 @@ from PySide6.QtCore import (
     QIODevice,
     QLibraryInfo,
     QLocale,
+    QObject,
+    QPoint,
+    QRect,
     QRectF,
+    QSize,
     Qt,
     QTime,
     QTimer,
@@ -42,10 +46,12 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
+    QGuiApplication,
     QKeySequence,
     QPainter,
     QPalette,
     QPen,
+    QScreen,
     QUndoCommand,
     QUndoStack,
 )
@@ -228,6 +234,176 @@ class CourseBlock(QGraphicsRectItem):
 
     def contextMenuEvent(self, event) -> None:
         self.grid.contextRequested.emit(self.idx, self.day, event.screenPos())
+
+
+# ---------------------------------------------------------------------------
+# 창을 '작업 가능한 영역' 안에 두기
+# ---------------------------------------------------------------------------
+# 기기마다 화면 크기·배율·작업 표시줄 위치가 달라, 고정 크기(예: 높이 900)
+# 로 열면 작은 노트북에서 창 아래가 작업 표시줄 뒤로 넘어갑니다. 크기를
+# 고정하지 않고, 사용 가능한 영역(availableGeometry = 화면 - 작업 표시줄)에
+# 맞춰 줄이고 그 안으로 되돌립니다.
+FIT_MARGIN = 8          # 영역 가장자리와 띄울 여백(px)
+FIT_START_RATIO = 0.92  # 처음 열 때 영역의 이 비율까지만 차지
+
+
+def fit_rect(frame: QRect, avail: QRect, margin: int = FIT_MARGIN) -> QRect:
+    """frame(창 테두리 포함)을 avail 안에 들어가게 한 사각형.
+
+    너무 크면 먼저 줄이고, 그다음 밖으로 나간 만큼만 안으로 밉니다. 이미
+    안에 있으면 그대로 돌려줍니다(사용자가 둔 자리를 존중).
+    """
+    room = avail.adjusted(margin, margin, -margin, -margin)
+    if room.width() <= 0 or room.height() <= 0:
+        room = QRect(avail)
+    w = min(frame.width(), room.width())
+    h = min(frame.height(), room.height())
+    x = min(max(frame.x(), room.left()), room.right() - w + 1)
+    y = min(max(frame.y(), room.top()), room.bottom() - h + 1)
+    return QRect(x, y, w, h)
+
+
+def start_rect(want: QSize, avail: QRect, chrome: QSize = QSize(0, 0)) -> QRect:
+    """처음 열 때의 창 테두리 사각형: 원하는 크기를 영역 비율로 줄여 가운데."""
+    w = min(want.width() + chrome.width(), int(avail.width() * FIT_START_RATIO))
+    h = min(want.height() + chrome.height(), int(avail.height() * FIT_START_RATIO))
+    return QRect(avail.x() + (avail.width() - w) // 2, avail.y() + (avail.height() - h) // 2, w, h)
+
+
+class ScreenKeeper(QObject):
+    """최상위 창 하나를 사용 가능한 영역 안에 붙잡아 둡니다.
+
+    - 처음 보일 때: 원하는 크기를 영역에 맞춰 줄이고 가운데로(want 를 준 경우).
+    - 옮기거나 크기를 바꾼 뒤: 마우스를 놓고 잠깐 뒤 영역 밖이면 되돌립니다.
+      끄는 도중에는 건드리지 않습니다(사용자와 싸우지 않게).
+    - 다른 모니터로 옮기거나 해상도·작업 표시줄이 바뀌어도 다시 맞춥니다.
+    - 최대화·전체 화면·최소화 상태는 OS 가 관리하므로 손대지 않습니다.
+    """
+
+    DELAY_MS = 250
+
+    def __init__(self, win: QWidget, want: QSize | None = None) -> None:
+        super().__init__(win)
+        self.win = win
+        self.want = want
+        self._placed = False
+        self._screen: QScreen | None = None
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.setInterval(self.DELAY_MS)
+        self.timer.timeout.connect(self.check)
+        win.installEventFilter(self)
+
+    # 창마다 하나. 이미 있으면 그것을 돌려줍니다.
+    @classmethod
+    def attach(cls, win: QWidget, want: QSize | None = None) -> ScreenKeeper:
+        k = win.findChild(ScreenKeeper, options=Qt.FindChildOption.FindDirectChildrenOnly)
+        return k if k is not None else cls(win, want)
+
+    def eventFilter(self, obj, event) -> bool:
+        t = event.type()
+        if obj is self.win:
+            if t == QEvent.Type.Show:
+                self._hook_screen()
+                if not self._placed:
+                    self._placed = True
+                    self.place_initial()
+                else:
+                    self.check()
+            elif t in (QEvent.Type.Move, QEvent.Type.Resize):
+                self.timer.start()
+        return False
+
+    def _avail(self) -> QRect:
+        fr = self.win.frameGeometry()
+        screen = QGuiApplication.screenAt(fr.center()) or self.win.screen() \
+            or QGuiApplication.primaryScreen()
+        return screen.availableGeometry()
+
+    def _hook_screen(self) -> None:
+        handle = self.win.windowHandle()
+        if handle is not None:
+            try:
+                handle.screenChanged.connect(self._on_screen, Qt.ConnectionType.UniqueConnection)
+            except (RuntimeError, TypeError):
+                pass
+            self._on_screen(handle.screen())
+
+    def _on_screen(self, screen: QScreen | None) -> None:
+        if screen is self._screen:
+            return
+        if self._screen is not None:
+            try:
+                self._screen.availableGeometryChanged.disconnect(self._on_avail)
+            except (RuntimeError, TypeError):
+                pass
+        self._screen = screen
+        if screen is not None:
+            screen.availableGeometryChanged.connect(self._on_avail)
+        self.timer.start()
+
+    def _on_avail(self, _rect: QRect) -> None:
+        self.timer.start()
+
+    def _chrome(self) -> tuple[int, int, int, int]:
+        """창 테두리·제목줄 두께 (왼, 위, 오른, 아래)."""
+        fr, g = self.win.frameGeometry(), self.win.geometry()
+        return (g.left() - fr.left(), g.top() - fr.top(),
+                fr.right() - g.right(), fr.bottom() - g.bottom())
+
+    def _apply(self, frame: QRect) -> None:
+        left, top, right, bottom = self._chrome()
+        self.win.resize(max(1, frame.width() - left - right),
+                        max(1, frame.height() - top - bottom))
+        # 최소 크기 때문에 덜 줄었을 수 있습니다. 실제 크기로 자리를 다시 잡되,
+        # 그래도 영역보다 크면 제목줄·왼쪽 위가 보이도록 왼쪽 위에 붙입니다
+        # (제목줄이 화면 밖이면 사용자가 창을 다시 끌어올 수 없습니다).
+        real = QRect(frame.topLeft(), self.win.frameGeometry().size())
+        self.win.move(self._position(real))   # 최상위 창의 move 는 테두리 기준
+
+    def _position(self, frame: QRect) -> QPoint:
+        room = self._avail().adjusted(FIT_MARGIN, FIT_MARGIN, -FIT_MARGIN, -FIT_MARGIN)
+        x = max(room.left(), min(frame.x(), room.right() - frame.width() + 1))
+        y = max(room.top(), min(frame.y(), room.bottom() - frame.height() + 1))
+        return QPoint(x, y)
+
+    def place_initial(self) -> None:
+        if self.want is None:
+            self.check()
+            return
+        if self._skip():
+            return
+        left, top, right, bottom = self._chrome()
+        self._apply(start_rect(self.want, self._avail(), QSize(left + right, top + bottom)))
+
+    def _skip(self) -> bool:
+        w = self.win
+        return (not w.isVisible() or w.isMaximized() or w.isFullScreen() or w.isMinimized())
+
+    def check(self) -> bool:
+        """영역 밖이면 되돌림. 되돌렸으면 True."""
+        if self._skip():
+            return False
+        if QGuiApplication.mouseButtons() != Qt.MouseButton.NoButton:
+            self.timer.start()          # 아직 끄는 중 — 놓을 때까지 기다림
+            return False
+        fr = self.win.frameGeometry()
+        new = fit_rect(fr, self._avail())
+        if new == fr:
+            return False
+        # 더 줄일 수 없는 창(최소 크기)이 이미 '가능한 최선' 자리에 있으면
+        # 아무것도 안 합니다. 안 그러면 같은 이동을 끝없이 되풀이합니다.
+        mins = self.win.minimumSizeHint().expandedTo(self.win.minimumSize())
+        left, top, right, bottom = self._chrome()
+        cant_shrink = (new.width() - left - right < mins.width()
+                       or new.height() - top - bottom < mins.height())
+        if cant_shrink and self._position(fr) == fr.topLeft() \
+                and fr.width() - left - right <= max(mins.width(), new.width())  \
+                and fr.height() - top - bottom <= max(mins.height(), new.height()):
+            return False
+        before = QRect(fr)
+        self._apply(new)
+        return self.win.frameGeometry() != before
 
 
 def _mix(a: QColor, b: QColor, t: float) -> QColor:
@@ -478,6 +654,7 @@ class CourseEditor:
 
     def __init__(self, parent: QWidget | None, course: M.Course, title: str) -> None:
         self.dlg: QDialog = load_ui("course_dialog.ui", parent)
+        ScreenKeeper.attach(self.dlg)
         self.dlg.setWindowTitle(title)
         w = self.dlg.findChild
         self.name: QLineEdit = w(QLineEdit, "nameEdit")
@@ -584,6 +761,7 @@ def ask_holiday(parent: QWidget, existing: M.Holiday | None = None) -> M.Holiday
     """공휴일 추가(existing=None) 또는 수정 창."""
     dlg = QDialog(parent)
     dlg.setWindowTitle("공휴일 수정" if existing else "공휴일 추가")
+    ScreenKeeper.attach(dlg)
     form = QFormLayout(dlg)
     start = (QDate(existing.day.year, existing.day.month, existing.day.day)
              if existing else QDate.currentDate())
@@ -608,6 +786,7 @@ def ask_holiday_paste(parent: QWidget) -> list[M.Holiday]:
     dlg = QDialog(parent)
     dlg.setWindowTitle("붙여넣기로 공휴일 추가")
     dlg.resize(460, 480)
+    ScreenKeeper.attach(dlg)
     lay = QVBoxLayout(dlg)
     row = QHBoxLayout()
     row.addWidget(QLabel("연도"))
@@ -671,6 +850,7 @@ class SaveSummary(QDialog):
         self.win = win
         self.setWindowTitle("저장 결과 · 다가오는 일정")
         self.resize(520, 560)
+        ScreenKeeper.attach(self)
         lay = QVBoxLayout(self)
 
         self.state = QLabel()
@@ -681,7 +861,9 @@ class SaveSummary(QDialog):
         self.next_list = QListWidget()
         lay.addWidget(self.next_list, 3)
 
-        lay.addWidget(QLabel("<b>다가오는 공휴일</b> — 이 날의 수업은 녹화·송출하지 않습니다"))
+        hl = QLabel("<b>다가오는 공휴일</b> — 이 날의 수업은 녹화·송출하지 않습니다")
+        hl.setWordWrap(True)
+        lay.addWidget(hl)
         self.htable = QTableWidget(0, 2)
         self.htable.setHorizontalHeaderLabels(["날짜", "이름"])
         self.htable.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -817,7 +999,9 @@ class TimetableWindow(QMainWindow):
         cl.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
         self._build_menus()
-        self.resize(TIME_W + DAY_W * 5 + 80, 900)
+        # 크기를 고정하지 않습니다. 처음엔 이만큼을 원하되 작업 가능한 영역에
+        # 맞춰 줄이고, 그 뒤로도 영역 밖으로 나가면 되돌립니다.
+        self.keeper = ScreenKeeper.attach(self, QSize(TIME_W + DAY_W * 5 + 80, 900))
 
         # 다른 곳(메모장, 다른 PC 동기화, 두 번째 편집기)에서 config.toml 이
         # 바뀌는 것을 감시합니다. 저장은 임시 파일을 바꿔치기(os.replace)
@@ -938,6 +1122,7 @@ class TimetableWindow(QMainWindow):
         hint = QLabel("빈 칸 드래그 = 추가 · 블록 끌기 = 이동(Shift: 그 요일만) · "
                       "아래 가장자리 = 길이 · 더블클릭 = 수정 · 우클릭 = 메뉴")
         hint.setStyleSheet("color: #6B7280;")
+        hint.setWordWrap(True)   # 한 줄로 두면 창 최소 폭이 950px 로 묶여 작은 화면을 넘음
         lay.addWidget(hint)
         lay.addWidget(self.view, 1)
         return w
@@ -976,7 +1161,9 @@ class TimetableWindow(QMainWindow):
         w = QWidget()
         lay = QVBoxLayout(w)
         top = QHBoxLayout()
-        top.addWidget(QLabel("여기 적은 날짜의 수업은 녹화·송출 일정에서 건너뜁니다."))
+        note = QLabel("여기 적은 날짜의 수업은 녹화·송출 일정에서 건너뜁니다.")
+        note.setWordWrap(True)
+        top.addWidget(note, 1)
         top.addStretch(1)
         self.summary_btn = QPushButton("다가오는 일정 · 공휴일 보기")
         self.summary_btn.setToolTip("앞으로 녹화될 수업과 공휴일로 쉬는 회차를 확인합니다 (Ctrl+I)")

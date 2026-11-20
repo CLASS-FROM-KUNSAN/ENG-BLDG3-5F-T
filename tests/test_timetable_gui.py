@@ -27,10 +27,24 @@ def win(app, tmp_path, monkeypatch):
     # 모달 창이 테스트를 멈추지 않게.
     monkeypatch.setattr(QMessageBox, "question",
                         lambda *a, **k: QMessageBox.StandardButton.Discard)
+    # 예상 못 한 모달 창은 멈추지 말고 바로 실패. (창 맞춤이 드래그 도중 창을
+    # 옮겨 클릭이 빈 칸에 떨어지면 '수업 추가' 창이 떠서 테스트가 영원히
+    # 멈췄던 적이 있습니다.) 창이 필요한 테스트는 각자 다시 바꿉니다.
+    monkeypatch.setattr(gui.CourseEditor, "exec",
+                        lambda self: pytest.fail("예상 못 한 수업 창"))
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: pytest.fail("예상 못 한 메시지 창"))
+    for kind in ("critical", "warning", "information"):
+        monkeypatch.setattr(QMessageBox, kind, staticmethod(
+            lambda _p, title, text, *a, _k=kind, **kw: pytest.fail(f"예상 못 한 {_k}: {title}: {text}")))
     w = gui.TimetableWindow(p)
     w.resize(1000, 1400)
     w.show()
     app.processEvents()
+    # 창 맞춤(ScreenKeeper)을 먼저 끝내 둡니다. 늦게 끼어들면 드래그 좌표가 어긋남.
+    w.keeper.check()
+    w.keeper.timer.stop()
+    app.processEvents()
+    w.keeper.timer.stop()
     yield w
     w.undo.setClean()
     w.close()
@@ -365,3 +379,60 @@ def test_file_watcher_notices_a_real_outside_write(app, win):
         app.processEvents()
         time.sleep(0.05)
     assert win.tt.courses[0].end == "10:40"
+
+
+# -- 창을 작업 가능한 영역 안에 ------------------------------------------
+def test_fit_rect_rules():
+    from PySide6.QtCore import QRect
+
+    avail = QRect(0, 0, 1920, 1040)                        # 작업 표시줄 40px 뺀 영역
+    inside = QRect(100, 100, 800, 600)
+    assert gui.fit_rect(inside, avail) == inside           # 안이면 그대로(자리 존중)
+    too_tall = QRect(100, 50, 900, 1300)                   # 예전 고정 높이처럼 넘침
+    r = gui.fit_rect(too_tall, avail)
+    assert r.height() == 1040 - 2 * gui.FIT_MARGIN and r.bottom() <= avail.bottom()
+    off = QRect(-300, 900, 800, 600)                       # 왼쪽·아래로 나감
+    r = gui.fit_rect(off, avail)
+    assert avail.contains(r) and r.size() == off.size()
+    second = QRect(1920, 0, 1280, 1024)                    # 두 번째 모니터 영역 기준
+    r = gui.fit_rect(QRect(3000, 900, 600, 400), second)
+    assert second.contains(r)
+
+
+def test_start_rect_is_centered_and_capped():
+    from PySide6.QtCore import QRect, QSize
+
+    small = QRect(0, 0, 1366, 728)                        # 작은 노트북
+    r = gui.start_rect(QSize(792, 900), small, QSize(16, 39))
+    assert small.contains(r) and r.height() <= int(728 * gui.FIT_START_RATIO)
+    assert abs(r.center().x() - small.center().x()) <= 1
+    big = QRect(0, 0, 2560, 1400)
+    assert gui.start_rect(QSize(792, 900), big).size() == QSize(792, 900)
+
+
+def test_window_opens_and_stays_inside_available_area(app, win):
+    avail = win.screen().availableGeometry()
+    assert avail.contains(win.frameGeometry()), (avail, win.frameGeometry())
+    win.move(avail.right() - 50, avail.bottom() - 30)     # 거의 다 밖으로
+    app.processEvents()
+    assert win.keeper.check() is True
+    assert avail.contains(win.frameGeometry())
+    assert win.keeper.check() is False                     # 이미 안이면 손대지 않음
+
+
+def test_keeper_leaves_maximized_windows_alone(app, win):
+    win.showMaximized()
+    app.processEvents()
+    assert win.keeper.check() is False
+    win.showNormal()
+    app.processEvents()
+
+
+def test_dialogs_are_kept_inside_too(app, win):
+    s = win.show_summary()
+    app.processEvents()
+    s.move(-2000, -2000)
+    app.processEvents()
+    gui.ScreenKeeper.attach(s).check()
+    assert s.screen().availableGeometry().contains(s.frameGeometry())
+    assert gui.ScreenKeeper.attach(s) is gui.ScreenKeeper.attach(s)   # 창마다 하나

@@ -264,3 +264,37 @@ def test_same_timetable_written_by_hand_is_not_a_change(tmp_path):
     a = M.canonical(_tt().to_rows(), _tt().holiday_rows())
     rows = list(reversed(_tt().to_rows()))
     assert M.canonical(rows, _tt().holiday_rows()) == a
+
+
+def test_save_retries_when_windows_briefly_locks_the_file(tmp_path, monkeypatch):
+    """백신 등이 파일을 잠깐 잡아 바꿔치기가 PermissionError 가 나도 저장됨."""
+    from pathlib import Path
+
+    p = tmp_path / "config.toml"
+    p.write_text(CONFIG, encoding="utf-8")
+    real = Path.replace
+    fails = {"n": 2}
+
+    def flaky(self, target):
+        if fails["n"]:
+            fails["n"] -= 1
+            raise PermissionError(13, "잠김")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky)
+    M.save(p, _tt())
+    assert fails["n"] == 0 and len(M.load(p).courses) == 2
+    assert not (tmp_path / "config.toml.tmp").exists()
+
+
+def test_save_gives_up_cleanly_when_locked_for_good(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    p = tmp_path / "config.toml"
+    p.write_text(CONFIG, encoding="utf-8")
+    monkeypatch.setattr(Path, "replace", lambda self, t: (_ for _ in ()).throw(PermissionError(13, "잠김")))
+    monkeypatch.setattr(M.time, "sleep", lambda _s: None)
+    with pytest.raises(PermissionError):
+        M.save(p, _tt())
+    assert p.read_text(encoding="utf-8") == CONFIG
+    assert not (tmp_path / "config.toml.tmp").exists()
