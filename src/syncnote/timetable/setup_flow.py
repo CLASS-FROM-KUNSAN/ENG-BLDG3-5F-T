@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import reqcheck, setup_failures, setupcheck
+from .. import reqcheck, setup_failures, setup_history, setupcheck
 from . import eclass_fetch
 
 REPO_ROOT = eclass_fetch.REPO_ROOT
@@ -128,6 +128,8 @@ class SetupFlow(QDialog):
         self.attempts: dict[str, int] = {}
         self._remedies: set[str] = set()
         self.setup_out = ""
+        self.history: list[dict] = []
+        self.skipped_retry: dict[str, str] = {}
         self.deferred_force = False
         self.need_vcredist = False
         self.setup_rc = 0
@@ -262,8 +264,23 @@ class SetupFlow(QDialog):
 
     def devices_command(self) -> list[str]:
         if os.name == "nt":
-            return ["cmd.exe", "/d", "/c", str(SCRIPTS / "devices.bat"), "--json"]
-        return [self.venv_python(), "-m", "syncnote", "devices", "--json"]
+            return ["cmd.exe", "/d", "/c", str(SCRIPTS / "devices.bat"), "--json", "--probe"]
+        return [self.venv_python(), "-m", "syncnote", "devices", "--json", "--probe"]
+
+    def history_path(self) -> Path | None:
+        """<data_dir>/state/setup_history.json (config 의 data_dir 기준)."""
+        from .. import config as config_module
+
+        try:
+            from .. import settings_schema as S
+
+            raw = S.tomllib.loads(self.config_path.read_text(encoding="utf-8-sig"))
+        except Exception:  # noqa: BLE001 — 설정이 없거나 깨져도 기본 data_dir 로
+            raw = {}
+        try:
+            return config_module.Config(data=raw).data_dir / "state" / "setup_history.json"
+        except Exception:  # noqa: BLE001
+            return None
 
     def _env(self) -> dict[str, str]:
         env = dict(os.environ)
@@ -349,6 +366,14 @@ class SetupFlow(QDialog):
         """실패 원인이 '일시적' 이면 백오프 후 같은 명령을 다시(최대 MAX_TRIES)."""
         def finished(rc: int, out: str) -> None:
             cause = self._cause(rc, out) if rc != 0 else None
+            if (cause is not None and cause.kind == "transient" and attempt == 1
+                    and setup_history.repeated(self.history, step, cause.id) >= 2):
+                # 지난 두 번도 같은 이유로 실패 → 또 백오프해 봐야 같음. 바로 수동 방법을.
+                self.skipped_retry[step] = cause.id
+                self._say(f"! {cause.title} — 지난번에도 같은 이유로 실패해 자동 재시도를 생략합니다.")
+                self.causes[step] = cause
+                done(rc, out)
+                return
             if cause is not None and cause.kind == "transient" and attempt < self.MAX_TRIES:
                 wait = setup_failures.backoff(attempt, self.BACKOFF_BASE)
                 self.attempts[step] = attempt + 1
@@ -367,6 +392,8 @@ class SetupFlow(QDialog):
         c = self.causes.get(step)
         tries = self.attempts.get(step, 1)
         extra = f" ({tries}번 시도)" if tries > 1 else ""
+        if step in self.skipped_retry and c is not None:
+            return f"{c.title} — 지난번에도 같은 이유로 실패(자동 재시도 생략). {c.hint}"
         if c is None or c.id == "unknown":            # 모르는 원인보다 구체적인 사실이 낫다
             return (fallback + extra + " — 출력 보기") if fallback else c.title if c else ""
         return f"{c.title}{extra} — {c.hint}"
@@ -376,6 +403,8 @@ class SetupFlow(QDialog):
 
     # -- 단계 진행 --------------------------------------------------------
     def start(self) -> None:
+        hp = self.history_path()
+        self.history = setup_history.load(hp) if hp else []
         self._queue = [k for k, _ in STEPS]
         self.stack.setCurrentIndex(0)
         self._next()
@@ -439,6 +468,11 @@ class SetupFlow(QDialog):
     def _try_install_remedy(self, st: dict) -> bool:
         """setup.bat 을 통째로 다시 돌리지 않고, 빠진 것만 따로 다시(A7·A8).
         각 해결책은 한 번만. 돌렸으면 True(끝나면 _verify_install 이 다시 판정)."""
+        tried_before = {r for r in ("chromium", "ffmpeg")
+                        if setup_history.remedy_failed(self.history, "install", r)}
+        for r in tried_before - self._remedies:
+            self._say(f"! {r} 다시 받기는 지난번에도 해결하지 못해 이번에는 생략합니다.")
+            self._remedies.add(r)
         if not st.get("chromium") and "chromium" not in self._remedies:
             self._remedies.add("chromium")
             self._say("Playwright Chromium 만 다시 받습니다.")
@@ -659,6 +693,8 @@ class SetupFlow(QDialog):
             self.devices = last_json(out)
             if not isinstance(self.doctor, dict):
                 self._mark("check", "fail", "doctor 결과를 읽지 못함 — 출력 보기")
+            elif self.doctor.get("ok") and self.mic_status()[0] == "X":
+                self._mark("check", "warn", "점검은 정상이지만 마이크에 소리가 안 들어옴")
             elif self.doctor.get("ok"):
                 self._mark("check", "ok", "모두 정상")
             else:
@@ -667,7 +703,38 @@ class SetupFlow(QDialog):
         self._run(self.doctor_command(), doctor_done)
 
     # -- 끝: 결과 화면 ----------------------------------------------------
+    def _record_history(self) -> None:
+        hp = self.history_path()
+        if hp is None:
+            return
+        steps = {k: {"state": self.state[k],
+                     "cause": self.causes[k].id if k in self.causes else None,
+                     "remedies": sorted(self._remedies) if k == "install" else []}
+                 for k, _ in STEPS}
+        self.history = setup_history.append(hp, steps)
+
+    def mic_status(self) -> tuple[str, str]:
+        """(표시, 설명) — 쓰는 마이크(설정 또는 기본)에 소리가 들어오나(D3)."""
+        dev = self.devices if isinstance(self.devices, dict) else {}
+        mics = next((g["devices"] for g in dev.get("groups", []) if g.get("kind") == "microphone"),
+                    [])
+        measured = [m for m in mics if "dead" in m]
+        if not measured:
+            return "-", "측정 안 함"
+        want = str(self._config_values().get("recording.audio.mic_device", "") or "").lower()
+        used = next((m for m in measured if want and want in m["name"].lower()), None) \
+            or next((m for m in measured if m.get("default")), measured[0])
+        if all(m["dead"] for m in measured):
+            return "X", ("모든 마이크가 무음입니다 — Windows 설정 > 개인 정보 > 마이크 에서 "
+                         "앱의 마이크 사용을 켰는지 확인하세요")
+        if used["dead"]:
+            alive = [m["name"] for m in measured if not m["dead"]]
+            return "X", (f"쓰는 마이크 '{used['name']}' 에 소리가 안 들어옵니다(신호 경로 없음) — "
+                         f"recording.audio.mic_device 를 소리가 들어오는 장치로: {', '.join(alive)}")
+        return "O", f"'{used['name']}' 소리 들어옴(최대 {used['peak']:.3f})"
+
     def _finish(self) -> None:
+        self._record_history()
         bad = [k for k, s in self.state.items() if s in ("warn", "fail")]
         self.headline.setText("설치와 점검을 마쳤습니다. " + (
             "아래 ⚠·✖ 항목을 확인하세요." if bad else "모두 정상입니다."))
@@ -730,9 +797,11 @@ class SetupFlow(QDialog):
         dev = self.devices if isinstance(self.devices, dict) else {}
         set_sys = str(cfg.get("recording.audio.system_device", "") or "")
         set_mic = str(cfg.get("recording.audio.mic_device", "") or "")
-        s4 = ("O" if dev and not dev.get("audio_error") else "X",
+        mic_mark, mic_text = self.mic_status()
+        s4 = ("O" if dev and not dev.get("audio_error") and mic_mark != "X" else "X",
               "4) 오디오 장치 이름 확인 (scripts\\devices.bat)",
-              f"시스템 소리: {set_sys or '기본 장치'} · 마이크: {set_mic or '기본 장치'}"
+              (f"시스템 소리: {set_sys or '기본 장치'} · 마이크: {set_mic or '기본 장치'}"
+               + (f" · {mic_text}" if mic_mark != "-" else ""))
               if dev and not dev.get("audio_error") else (dev.get("audio_error") or "결과 없음"))
         return [s1, s2, s3, s4]
 
@@ -835,7 +904,15 @@ class SetupFlow(QDialog):
                         tags.append("기본")
                     if want and want.lower() in d_["name"].lower():
                         tags.append("← 지금 설정과 일치")
-                    self._row(grid, r, "O" if tags else "•", d_["name"], " · ".join(tags))
+                    mark = "O" if tags else "•"
+                    if "dead" in d_:
+                        if d_["dead"]:
+                            tags.append("⚠ 무음(신호 경로 없음)" + (f": {d_['error']}" if d_.get("error")
+                                                                  else ""))
+                            mark = "X"
+                        else:
+                            tags.append(f"소리 들어옴(최대 {d_.get('peak', 0):.3f})")
+                    self._row(grid, r, mark, d_["name"], " · ".join(tags))
                     r += 1
             head = QLabel("<b>화면</b>  <span style='color:#6B7280'>"
                           "→ [recording.video] monitor (0 = 전체 바탕화면)</span>")

@@ -176,3 +176,42 @@ def test_empty_output_failure_is_unknown_not_stall():
 
     assert SF_.classify("", rc=3).id == "unknown"
     assert SF_.classify("", rc=0) is None
+
+
+# -- setup_history ----------------------------------------------------------------
+def test_history_repeated_and_remedy_failed(tmp_path):
+    from syncnote import setup_history as H
+
+    p = tmp_path / "state" / "h.json"
+    assert H.load(p) == []
+    for cause in ("network", "network", "ssl"):
+        H.append(p, {"install": {"state": "fail", "cause": cause, "remedies": ["chromium"]}})
+    runs = H.load(p)
+    assert [r["steps"]["install"]["cause"] for r in runs] == ["ssl", "network", "network"]
+    assert H.repeated(runs, "install", "ssl") == 1                  # 가장 최근부터 연속만
+    assert H.repeated(runs, "install", "network") == 0
+    assert H.repeated(runs[1:], "install", "network") == 2
+    assert H.remedy_failed(runs, "install", "chromium")
+    assert not H.remedy_failed(runs, "install", "ffmpeg")
+    for _ in range(30):
+        H.append(p, {"install": {"state": "ok"}}, keep=5)
+    assert len(H.load(p)) == 5
+
+
+def test_history_survives_a_broken_file(tmp_path):
+    from syncnote import setup_history as H
+
+    p = tmp_path / "h.json"
+    p.write_text("{깨짐", encoding="utf-8")
+    assert H.load(p) == []
+    assert len(H.append(p, {"verify": {"state": "ok"}})) == 1
+
+
+def test_devices_json_probe_flag(capsys):
+    cli.main(["devices", "--json", "--probe"])
+    d = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert d["probed"] is True
+    for g in d["groups"]:
+        for dev in g["devices"]:
+            if g["kind"] != "microphone":
+                assert "dead" not in dev                    # 루프백·스피커는 재지 않음

@@ -128,6 +128,8 @@ def fakes(tmp_path, monkeypatch):
     monkeypatch.setattr(F, "ffmpeg_command", lambda self: cmds["ffmpeg"])
     monkeypatch.setattr(F, "venv_create_command", lambda self: cmds["venv_create"])
     monkeypatch.setattr(F, "BACKOFF_BASE", 0.01)
+    # 시도 이력은 임시 폴더에(실제 data_dir 에 쓰지 않게)
+    monkeypatch.setattr(F, "history_path", lambda self: tmp_path / "setup_history.json")
     monkeypatch.setattr(eclass_fetch, "NEW_CONSOLE", 0)
     return m
 
@@ -660,3 +662,101 @@ def test_window_passes_settings_editor_to_the_flow(app, tmp_path, win_factory, m
     w = make()
     w.run_setup_flow()
     assert seen["fix"] == w.edit_settings
+
+
+# -- 5. 시도 이력·반복 차단 + 마이크 실측(D3) --------------------------------
+def _seed_history(tmp_path, runs):
+    (tmp_path / "setup_history.json").write_text(json.dumps({"runs": runs}), encoding="utf-8")
+
+
+def test_same_failure_twice_before_skips_auto_retry(app, tmp_path, fakes, monkeypatch):
+    bad = {"steps": {"install": {"state": "fail", "cause": "network", "remedies": []}}}
+    _seed_history(tmp_path, [bad, bad])
+    s = _counting_setup(tmp_path, fakes, 99, "ConnectTimeoutError: connection timed out")
+    monkeypatch.setattr(SF.SetupFlow, "setup_command", lambda self: s)
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert (fakes / "setup_n").read_text(encoding="utf-8") == "1"          # 다시 안 함
+    assert dlg.state["install"] == "fail" and "지난번에도" in dlg.notes["install"]
+    runs = json.loads((tmp_path / "setup_history.json").read_text(encoding="utf-8"))["runs"]
+    assert len(runs) == 3 and runs[0]["steps"]["install"]["cause"] == "network"
+    dlg.close()
+
+
+def test_one_previous_failure_still_retries(app, tmp_path, fakes, monkeypatch):
+    bad = {"steps": {"install": {"state": "fail", "cause": "network", "remedies": []}}}
+    _seed_history(tmp_path, [bad])
+    s = _counting_setup(tmp_path, fakes, 1, "Read timed out")
+    monkeypatch.setattr(SF.SetupFlow, "setup_command", lambda self: s)
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert (fakes / "setup_n").read_text(encoding="utf-8") == "2" and dlg.state["install"] == "ok"
+    dlg.close()
+
+
+def test_remedy_that_did_not_help_last_time_is_skipped(app, tmp_path, fakes):
+    _seed_history(tmp_path, [{"steps": {"install": {"state": "warn", "cause": None,
+                                                    "remedies": ["chromium"]}}}])
+    for n in ("venv", "installed", "no_chromium"):
+        (fakes / n).write_text("x", encoding="utf-8")
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert not (fakes / "playwright_ran").exists()
+    assert "지난번에도 해결하지 못해" in dlg.log.toPlainText()
+    assert dlg.state["install"] == "warn"
+    dlg.close()
+
+
+def _devices_with_mics(tmp_path, mics, name="dev_mics"):
+    d = json.loads(json.dumps(DEVICES))
+    d["probed"] = True
+    d["groups"][1]["devices"] = mics
+    return _py(tmp_path, name, f"""
+        print({json.dumps(json.dumps(d, ensure_ascii=False))})
+    """)
+
+
+def _ready(m):
+    for n in ("venv", "installed", "pw"):
+        (m / n).write_text("x", encoding="utf-8")
+
+
+def test_silent_default_mic_is_flagged_with_a_working_alternative(app, tmp_path, fakes, monkeypatch):
+    _ready(fakes)
+    dv = _devices_with_mics(tmp_path, [
+        {"name": "마이크 배열(인텔)", "default": False, "peak": 0.0034, "dead": False, "error": None},
+        {"name": "마이크 배열(Audio Share)", "default": True, "peak": 0.0, "dead": True, "error": None}])
+    monkeypatch.setattr(SF.SetupFlow, "devices_command", lambda self: dv)
+    monkeypatch.setattr(SF.SetupFlow, "doctor_command", lambda self: _py(
+        tmp_path, "doc_ok", f"print({json.dumps(json.dumps({**DOCTOR, 'ok': True}))})"))
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    mark, text = dlg.mic_status()
+    assert mark == "X" and "Audio Share" in text and "인텔" in text
+    assert dlg.state["check"] == "warn" and dlg.checklist()[3][0] == "X"
+    texts = " ".join(w.text() for w in dlg.result_scroll.widget().findChildren(gui.QLabel))
+    assert "무음" in texts and "소리 들어옴" in texts
+    dlg.close()
+
+
+def test_configured_mic_overrides_default_and_all_silent_means_permission(app, tmp_path, fakes,
+                                                                         monkeypatch):
+    _ready(fakes)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[recording.audio]\nmic_device = "인텔"\n', encoding="utf-8")
+    alive = [{"name": "마이크 배열(인텔)", "default": False, "peak": 0.01, "dead": False, "error": None},
+             {"name": "마이크 배열(Audio Share)", "default": True, "peak": 0.0, "dead": True,
+              "error": None}]
+    monkeypatch.setattr(SF.SetupFlow, "devices_command", lambda self: _devices_with_mics(tmp_path, alive))
+    dlg = SF.SetupFlow(None, cfg)
+    _run(app, dlg)
+    assert dlg.mic_status()[0] == "O"                    # 설정한 인텔 마이크는 살아 있음
+    dlg.close()
+    dead = [{**m, "dead": True, "peak": 0.0} for m in alive]
+    monkeypatch.setattr(SF.SetupFlow, "devices_command",
+                        lambda self: _devices_with_mics(tmp_path, dead, "dev_dead"))
+    dlg = SF.SetupFlow(None, cfg)
+    _run(app, dlg)
+    mark, text = dlg.mic_status()
+    assert mark == "X" and ("권한" in text or "개인 정보" in text)
+    dlg.close()

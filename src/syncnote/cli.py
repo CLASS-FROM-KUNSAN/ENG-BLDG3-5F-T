@@ -238,7 +238,7 @@ def cmd_devices(args) -> int:
     from .recorder.monitors import enumerate_monitors
 
     if getattr(args, "json", False):
-        print(_devices_json(enumerate_monitors))
+        print(_devices_json(enumerate_monitors, probe=getattr(args, "probe", False)))
         return 0
     print(describe())
     print()
@@ -257,18 +257,31 @@ def cmd_devices(args) -> int:
     return 0
 
 
-def _devices_json(enumerate_monitors) -> str:
-    """오디오 장치·화면 목록을 구조화(describe() 와 같은 분류·같은 설정 키)."""
+def _devices_json(enumerate_monitors, probe: bool = False) -> str:
+    """오디오 장치·화면 목록을 구조화(describe() 와 같은 분류·같은 설정 키).
+
+    probe=True 면 **마이크만** 잠깐(1초) 열어 최대 레벨을 잽니다(디스크에 안 씀,
+    devices.probe_mic). 정확히 0 이면 '신호 경로 없음'(가상 장치·권한 꺼짐).
+    시스템 소리(루프백)는 재생 중인 게 없으면 0 이 정상이라 재지 않습니다.
+    """
     import json
 
     from .recorder import devices as dev
 
-    out: dict = {"audio_error": None, "groups": [], "monitors": []}
+    out: dict = {"audio_error": None, "groups": [], "monitors": [], "probed": bool(probe)}
     try:
         found = dev.list_devices()
     except Exception as exc:  # noqa: BLE001 — soundcard 없음 등도 화면에 보여 줌
         out["audio_error"] = str(exc)
         found = []
+    levels: dict[str, dict] = {}
+    if probe and found:
+        try:
+            for mic in dev._sc().all_microphones(include_loopback=False):
+                r = dev.probe_mic(mic, duration_sec=1.0)
+                levels[str(mic.name)] = {"peak": r.peak, "dead": r.dead, "error": r.error}
+        except Exception as exc:  # noqa: BLE001
+            out["probe_error"] = str(exc)
     for kind, title, key in (
         ("loopback", "시스템 소리 캡처용", "recording.audio.system_device"),
         ("microphone", "마이크", "recording.audio.mic_device"),
@@ -276,7 +289,8 @@ def _devices_json(enumerate_monitors) -> str:
     ):
         out["groups"].append({
             "kind": kind, "title": title, "config_key": key,
-            "devices": [{"name": d.name, "default": bool(d.is_default)}
+            "devices": [{"name": d.name, "default": bool(d.is_default),
+                         **(levels.get(d.name, {}) if kind == "microphone" else {})}
                         for d in found if d.kind == kind]})
     try:
         out["monitors"] = [{"index": m.index, "text": m.describe(), "primary": bool(m.primary)}
@@ -1588,6 +1602,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_doctor)
     p = sub.add_parser("devices", help="오디오 장치 목록")
     p.add_argument("--json", action="store_true", help="결과를 JSON 한 줄로(시간표 편집기용)")
+    p.add_argument("--probe", action="store_true",
+                   help="--json 과 함께: 마이크를 1초씩 열어 소리가 들어오는지 잼(저장 안 함)")
     p.set_defaults(func=cmd_devices)
 
     p = sub.add_parser("secrets", help="비밀번호/토큰 관리")
