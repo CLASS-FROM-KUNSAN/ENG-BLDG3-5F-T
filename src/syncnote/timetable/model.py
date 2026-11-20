@@ -18,6 +18,7 @@ config.toml 은 사람이 주석을 달아 쓰는 파일이라 통째로 다시 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -532,6 +533,63 @@ def saved_rows(path: str | Path) -> tuple[list, list]:
     if not isinstance(rec, dict):
         return [], []
     return list(rec.get("timetable", []) or []), list(rec.get("holidays", []) or [])
+
+
+def fingerprint(path: str | Path) -> str | None:
+    """파일 내용 지문(sha256). 없으면 None. 수정 시각은 안 씁니다 — 초 단위라
+    같은 초에 두 번 저장하면 못 알아보고, 내용이 같아도 바뀐 걸로 보입니다."""
+    p = Path(path)
+    try:
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return None
+
+
+def canonical(rows, holiday_rows) -> tuple:
+    """시간표 부분만의 비교용 형태. 손으로 쓴 표·편집기 블록·줄 순서가 달라도
+    뜻이 같으면 같게 나옵니다. 깨진 행이 있으면 원문 그대로 비교합니다."""
+    try:
+        tt = Timetable.from_rows(rows, holiday_rows)
+        return (tuple(json.dumps(r, sort_keys=True, ensure_ascii=False) for r in tt.to_rows()),
+                tuple(json.dumps(r, sort_keys=True, ensure_ascii=False)
+                      for r in tt.holiday_rows()))
+    except (TimetableError, KeyError, ValueError, TypeError):
+        return (json.dumps(rows, sort_keys=True, ensure_ascii=False, default=str),
+                json.dumps(holiday_rows, sort_keys=True, ensure_ascii=False, default=str))
+
+
+@dataclass
+class DiskState:
+    """편집기가 마지막으로 읽거나 쓴 순간의 파일 상태."""
+    sig: str | None
+    timetable: tuple
+
+    @classmethod
+    def read(cls, path: str | Path) -> DiskState:
+        try:
+            rows, hrows = saved_rows(path)
+        except tomllib.TOMLDecodeError:
+            rows, hrows = [], []
+        return cls(fingerprint(path), canonical(rows, hrows))
+
+
+def disk_change(path: str | Path, base: DiskState) -> str:
+    """base 이후 파일이 어떻게 바뀌었나.
+
+    'same'      — 그대로
+    'other'     — 바뀌었지만 시간표·공휴일은 같음(다른 설정만). 저장해도 안전:
+                  저장은 표시줄 사이만 바꾸므로 바깥 변경은 그대로 남습니다.
+    'timetable' — 시간표·공휴일이 바뀜(덮어쓰면 그 변경을 잃음)
+    'broken'    — 지금 파일이 올바른 TOML 이 아님(누가 고치는 중일 수 있음)
+    """
+    sig = fingerprint(path)
+    if sig == base.sig:
+        return "same"
+    try:
+        rows, hrows = saved_rows(path)
+    except tomllib.TOMLDecodeError:
+        return "broken"
+    return "other" if canonical(rows, hrows) == base.timetable else "timetable"
 
 
 def upcoming(rows, holiday_rows, *, now: datetime | None = None, count: int = 5,

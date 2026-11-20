@@ -26,6 +26,7 @@ from PySide6.QtCore import (
     QDate,
     QEvent,
     QFile,
+    QFileSystemWatcher,
     QIODevice,
     QLibraryInfo,
     QLocale,
@@ -809,11 +810,126 @@ class TimetableWindow(QMainWindow):
         self.tabs.addTab(self._build_grid_tab(), "시간표")
         self.tabs.addTab(self._build_list_tab(), "수업 목록")
         self.tabs.addTab(self._build_holiday_tab(), "공휴일")
-        self.setCentralWidget(self.tabs)
+        central = QWidget()
+        cl = QVBoxLayout(central)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.addWidget(self._build_banner())
+        cl.addWidget(self.tabs, 1)
+        self.setCentralWidget(central)
         self._build_menus()
         self.resize(TIME_W + DAY_W * 5 + 80, 900)
 
+        # 다른 곳(메모장, 다른 PC 동기화, 두 번째 편집기)에서 config.toml 이
+        # 바뀌는 것을 감시합니다. 저장은 임시 파일을 바꿔치기(os.replace)
+        # 하므로 파일 감시가 끊길 수 있어 폴더도 같이 보고, 매번 다시 겁니다.
+        self._disk = M.DiskState(None, ())
+        self.watcher = QFileSystemWatcher(self)
+        self.watcher.fileChanged.connect(self._on_disk_event)
+        self.watcher.directoryChanged.connect(self._on_disk_event)
+        self._disk_timer = QTimer(self)
+        self._disk_timer.setSingleShot(True)
+        self._disk_timer.setInterval(300)     # 저장 도중의 중간 상태를 피하려고 잠깐 기다림
+        self._disk_timer.timeout.connect(self.check_disk)
+
         self.reload_from_disk()
+
+    # -- 다른 곳에서 바뀐 파일 -------------------------------------------
+    def _build_banner(self) -> QWidget:
+        self.banner = QWidget()
+        self.banner.setObjectName("diskBanner")
+        self.banner.setStyleSheet("#diskBanner { background: #FFF4CE; } "
+                                  "#diskBanner QLabel { color: #5C4400; }")
+        lay = QHBoxLayout(self.banner)
+        lay.setContentsMargins(10, 6, 10, 6)
+        self.banner_label = QLabel()
+        self.banner_label.setWordWrap(True)
+        lay.addWidget(self.banner_label, 1)
+        self.banner_reload = QPushButton("디스크 내용 다시 읽기")
+        self.banner_reload.setToolTip("편집기에서 바꾼 것은 버리고 파일의 시간표를 불러옵니다")
+        self.banner_reload.clicked.connect(lambda: self._reload_discarding())
+        self.banner_keep = QPushButton("내 변경 유지")
+        self.banner_keep.setToolTip("띠를 닫습니다. 저장할 때 덮어쓸지 다시 묻습니다")
+        self.banner_keep.clicked.connect(lambda: self.banner.hide())
+        lay.addWidget(self.banner_reload)
+        lay.addWidget(self.banner_keep)
+        self.banner.hide()
+        return self.banner
+
+    def _watch(self) -> None:
+        old = self.watcher.files() + self.watcher.directories()
+        if old:
+            self.watcher.removePaths(old)
+        if self.path.parent.exists():
+            self.watcher.addPath(str(self.path.parent))
+        if self.path.exists():
+            self.watcher.addPath(str(self.path))
+
+    def _remember_disk(self) -> None:
+        self._disk = M.DiskState.read(self.path)
+        self.banner.hide()
+        self._watch()
+
+    def _on_disk_event(self, _path: str) -> None:
+        self._disk_timer.start()
+
+    def check_disk(self) -> str:
+        """파일이 다른 곳에서 바뀌었는지 보고 알맞게 대응. 반환은 disk_change 결과."""
+        self._watch()
+        change = M.disk_change(self.path, self._disk)
+        if change == "same":
+            return change
+        if change == "other":
+            # 시간표 밖만 바뀜: 저장해도 그 변경은 남으니 기준만 갱신.
+            self._disk = M.DiskState.read(self.path)
+            self.statusBar().showMessage(
+                f"{self.path.name} 의 다른 설정이 바뀌었습니다. 시간표에는 영향 없습니다.", 6000)
+        elif change == "timetable" and self.undo.isClean():
+            # 편집 중인 것이 없으면 조용히 따라갑니다.
+            self._load_into_editor()
+            self.statusBar().showMessage(
+                f"다른 곳에서 {self.path.name} 의 시간표가 바뀌어 다시 읽었습니다.", 6000)
+        elif change == "timetable":
+            self.banner_label.setText(
+                f"⚠ 이 편집기를 연 뒤 다른 곳에서 {self.path.name} 의 시간표·공휴일이 "
+                "바뀌었습니다. 지금 저장하면 그 변경을 덮어씁니다.")
+            self.banner.show()
+        elif change == "broken":
+            self.banner_label.setText(
+                f"⚠ {self.path.name} 이 지금 올바른 TOML 이 아닙니다(다른 곳에서 고치는 중일 수 "
+                "있음). 고쳐질 때까지 저장하지 마세요.")
+            self.banner.show()
+        return change
+
+    def _conflict_ok(self) -> bool:
+        """저장 직전 확인. True 면 저장해도 됨(덮어쓰기에 동의했거나 충돌 없음)."""
+        change = M.disk_change(self.path, self._disk)
+        if change in ("same", "other"):
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("다른 곳에서 바뀐 파일")
+        if change == "broken":
+            box.setText(f"{self.path.name} 이 지금 올바른 TOML 이 아니라 저장할 수 없습니다.\n"
+                        "다른 곳에서 고치는 중이면 끝난 뒤 다시 저장하세요.")
+            box.addButton(QMessageBox.StandardButton.Ok)
+            box.exec()
+            return False
+        box.setText(f"이 편집기를 연 뒤 다른 곳에서 {self.path.name} 의 시간표·공휴일이 "
+                    "바뀌었습니다.")
+        box.setInformativeText("덮어쓰면 그쪽 변경은 사라집니다(원본은 .bak 으로 남음).")
+        over = box.addButton("내 것으로 덮어쓰기", QMessageBox.ButtonRole.DestructiveRole)
+        reload = box.addButton("디스크 내용 다시 읽기", QMessageBox.ButtonRole.ResetRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is over:
+            return True
+        if box.clickedButton() is reload:
+            self._load_into_editor()
+        return False
+
+    def _reload_discarding(self) -> None:
+        self._load_into_editor()
+        self.statusBar().showMessage(f"{self.path.name} 을 다시 읽었습니다.", 6000)
 
     # -- 화면 구성 ------------------------------------------------------
     def _build_grid_tab(self) -> QWidget:
@@ -859,7 +975,14 @@ class TimetableWindow(QMainWindow):
     def _build_holiday_tab(self) -> QWidget:
         w = QWidget()
         lay = QVBoxLayout(w)
-        lay.addWidget(QLabel("여기 적은 날짜의 수업은 녹화·송출 일정에서 건너뜁니다."))
+        top = QHBoxLayout()
+        top.addWidget(QLabel("여기 적은 날짜의 수업은 녹화·송출 일정에서 건너뜁니다."))
+        top.addStretch(1)
+        self.summary_btn = QPushButton("다가오는 일정 · 공휴일 보기")
+        self.summary_btn.setToolTip("앞으로 녹화될 수업과 공휴일로 쉬는 회차를 확인합니다 (Ctrl+I)")
+        self.summary_btn.clicked.connect(self.show_summary)
+        top.addWidget(self.summary_btn)
+        lay.addLayout(top)
         self.htable = QTableWidget(0, 2)
         self.htable.setHorizontalHeaderLabels(["날짜", "이름"])
         self.htable.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -1150,13 +1273,22 @@ class TimetableWindow(QMainWindow):
     def reload_from_disk(self) -> None:
         if not self._confirm_discard():
             return
+        self._load_into_editor(report_errors=True)
+
+    def _load_into_editor(self, report_errors: bool = False) -> None:
+        """확인 없이 파일을 읽어 편집기를 그것으로 바꿉니다(실행 취소 기록도 비움)."""
         try:
             tt = M.load(self.path)
         except M.TimetableError as exc:
-            QMessageBox.critical(self, "읽기 실패", str(exc))
+            if report_errors:
+                QMessageBox.critical(self, "읽기 실패", str(exc))
+            else:
+                self.statusBar().showMessage(f"다시 읽지 못했습니다: {exc}", 8000)
+                return
             tt = M.Timetable()
         self.undo.clear()
         self._set_model(tt)
+        self._remember_disk()
         if not self.path.exists():
             self.statusBar().showMessage(
                 f"{self.path} 가 없습니다. 저장하면 새로 만듭니다(나머지 설정은 기본값).")
@@ -1172,12 +1304,15 @@ class TimetableWindow(QMainWindow):
             self.reload_from_disk()
 
     def save(self, show_summary: bool = True) -> bool:
+        if not self._conflict_ok():
+            return False
         try:
             commented = M.save(self.path, self.tt)
         except (M.TimetableError, OSError) as exc:
             QMessageBox.critical(self, "저장 실패", str(exc))
             return False
         self.undo.setClean()
+        self._remember_disk()        # 내가 쓴 것을 '다른 곳의 변경' 으로 오인하지 않게
         note = f"저장했습니다: {self.path} (원본은 {self.path.name}.bak)"
         if commented:
             QMessageBox.information(
