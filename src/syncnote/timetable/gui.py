@@ -53,7 +53,6 @@ from PySide6.QtGui import (
     QPalette,
     QPen,
     QScreen,
-    QTextDocument,
     QUndoCommand,
     QUndoStack,
 )
@@ -64,6 +63,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QCompleter,
     QDateEdit,
     QDialog,
     QDialogButtonBox,
@@ -87,6 +87,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -97,6 +98,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..eclass import catalog as eclass_catalog
 from . import model as M
 
 # 격자 크기 (1분 = 1px)
@@ -412,17 +414,20 @@ class ScreenKeeper(QObject):
 
 
 def natural_width(label: QLabel) -> int:
-    """줄바꿈 없이 한 줄로 그릴 때의 글자 폭(여백 포함)."""
-    text = label.text()
-    if label.textFormat() != Qt.TextFormat.PlainText and "<" in text:
-        doc = QTextDocument()
-        doc.setDefaultFont(label.font())
-        doc.setHtml(text)
-        text = doc.toPlainText()
-    m = label.contentsMargins()
-    return label.fontMetrics().horizontalAdvance(text) + m.left() + m.right() \
-        + 2 * label.margin() + 4
+    """줄바꿈 없이 한 줄로 그릴 때의 폭.
 
+    글꼴 지표(fontMetrics)로 직접 재면 안 됩니다. 한글이 기본 글꼴에 없으면
+    대체 글꼴로 그려 실제 폭이 더 넓은데, 지표는 기본 글꼴 기준이라 좁게
+    나와 결국 두 줄로 접혔습니다. QLabel 이 실제로 쓰는 배치로 잽니다.
+    """
+    wrap = label.wordWrap()
+    if wrap:
+        label.setWordWrap(False)
+    try:
+        return label.sizeHint().width()
+    finally:
+        if wrap:
+            label.setWordWrap(True)
 
 def _mix(a: QColor, b: QColor, t: float) -> QColor:
     """a 에서 b 쪽으로 t 만큼(0=a, 1=b)."""
@@ -667,12 +672,29 @@ def load_ui(name: str, parent: QWidget | None = None) -> QWidget:
 _DAY_WIDGETS = ("dayMon", "dayTue", "dayWed", "dayThu", "dayFri", "daySat", "daySun")
 
 
+class _OnResize(QObject):
+    """위젯 크기가 바뀔 때마다 콜백(줄바꿈 글자의 높이 맞추기용)."""
+
+    def __init__(self, widget: QWidget, callback: Callable[[], None]) -> None:
+        super().__init__(widget)
+        self._cb = callback
+        widget.installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            self._cb()
+        return False
+
+
 class CourseEditor:
     """course_dialog.ui 를 감싸 Course 를 주고받습니다."""
 
-    def __init__(self, parent: QWidget | None, course: M.Course, title: str) -> None:
+    def __init__(self, parent: QWidget | None, course: M.Course, title: str,
+                 catalog: list[eclass_catalog.Entry] | None = None) -> None:
+        self.catalog = list(catalog or [])
         self.dlg: QDialog = load_ui("course_dialog.ui", parent)
-        ScreenKeeper.attach(self.dlg)
+        # 처음 폭은 eClass 제안 문구가 한 줄로 들어가게(자리가 있을 때만).
+        ScreenKeeper.attach(self.dlg, self._preferred_size)
         self.dlg.setWindowTitle(title)
         w = self.dlg.findChild
         self.name: QLineEdit = w(QLineEdit, "nameEdit")
@@ -685,6 +707,13 @@ class CourseEditor:
         self.end: QTimeEdit = w(QTimeEdit, "endTime")
         self.preview: QLabel = w(QLabel, "previewLabel")
         self.error: QLabel = w(QLabel, "errorLabel")
+        self.suggestion: QLabel = w(QLabel, "eclassSuggestion")
+        self.apply_btn: QPushButton = w(QPushButton, "eclassApply")
+        # 버튼은 글자 폭만, 남는 폭은 제안 문구가 씁니다.
+        self.apply_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        row = self.dlg.findChild(QHBoxLayout, "eclassRow")
+        if row is not None:
+            row.setStretch(0, 1)
         grid: QGridLayout = self.dlg.findChild(QGridLayout, "colorGrid")
         buttons: QDialogButtonBox = w(QDialogButtonBox, "buttonBox")
 
@@ -725,8 +754,83 @@ class CourseEditor:
             cb.toggled.connect(self._refresh)
         buttons.accepted.connect(self._try_accept)
         buttons.rejected.connect(self.dlg.reject)
+
+        # eClass 과목 연결: 이름 자동 완성 + 가장 가까운 과목 제안.
+        self._sugg: eclass_catalog.Suggestion | None = None
+        if self.catalog:
+            comp = QCompleter([e.name for e in self.catalog], self.dlg)
+            comp.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            comp.setFilterMode(Qt.MatchFlag.MatchContains)
+            comp.activated.connect(lambda _t: self._suggest())
+            self.name.setCompleter(comp)
+        self.name.textChanged.connect(self._suggest)
+        self.course_id.textChanged.connect(self._suggest)
+        self.apply_btn.clicked.connect(self.apply_suggestion)
+        self._wrap_filter = _OnResize(self.suggestion, self._fit_suggestion_height)
+        self._suggest()
         self._refresh()
 
+    def _preferred_size(self) -> QSize:
+        hint = self.dlg.sizeHint()
+        extra = natural_width(self.suggestion) - self.suggestion.width()
+        return QSize(max(hint.width(), self.dlg.width() + max(0, extra)), hint.height())
+
+    def _fit_suggestion_height(self) -> None:
+        # 접혔을 때만 줄 높이가 늘도록(폼 안의 줄바꿈 글자는 스스로 안 늘어남).
+        # 실제 폭을 아직 모르면(창이 뜨기 전) 높이를 묶지 않습니다 — 폭이
+        # 정해지면 WrapHeight 필터가 다시 부릅니다.
+        w = self.suggestion.width()
+        h = self.suggestion.heightForWidth(w) if self.suggestion.isVisible() and w > 0 else 0
+        self.suggestion.setMinimumHeight(max(0, h))
+
+    # -- eClass 과목 ----------------------------------------------------
+    def _suggest(self, *_a) -> None:
+        try:
+            self._suggest_text()
+        finally:
+            self._fit_suggestion_height()
+
+    def _suggest_text(self) -> None:
+        if not self.catalog:
+            self._sugg = None
+            self.suggestion.setText("과목 목록이 아직 없습니다. eClass 수집을 한 번 돌리면 "
+                                    "과목코드를 고를 수 있습니다.")
+            self.suggestion.setStyleSheet("color: #6B7280;")
+            self.apply_btn.setEnabled(False)
+            return
+        s = eclass_catalog.suggest(self.name.text(), self.catalog, self.course_id.text())
+        self._sugg = s
+        cid = self.course_id.text().strip()
+        if s.entry is None:
+            self.suggestion.setText("비슷한 eClass 과목이 없습니다." if self.name.text().strip()
+                                    else "수업명을 적으면 eClass 과목을 찾아 드립니다.")
+            self.suggestion.setStyleSheet("color: #6B7280;")
+            self.apply_btn.setEnabled(False)
+            return
+        linked = bool(cid) and cid == s.entry.id and self.name.text().strip() == s.entry.name
+        if linked:
+            self.suggestion.setText(f"✔ 연결됨: {s.entry.name} [{s.entry.id}]")
+            self.suggestion.setToolTip(s.entry.label)
+            self.suggestion.setStyleSheet("color: #15803D;")
+            self.apply_btn.setEnabled(False)
+            return
+        warn = " · ⚠ 비슷한 과목이 여럿" if s.ambiguous else ""
+        no_id = " · 코드 모름" if not s.entry.id else ""
+        code = f" [{s.entry.id}]" if s.entry.id else ""
+        self.suggestion.setText(f"{s.entry.name}{code} · 일치 {s.score:.0%}{warn}{no_id}")
+        self.suggestion.setToolTip(s.entry.label)
+        self.suggestion.setStyleSheet("")
+        self.apply_btn.setEnabled(True)
+
+    def apply_suggestion(self) -> None:
+        """제안된 과목의 정식 이름과 코드로 채웁니다(코드를 모르면 이름만)."""
+        s = self._sugg
+        if s is None or s.entry is None:
+            return
+        self.name.setText(s.entry.name)
+        if s.entry.id:
+            self.course_id.setText(s.entry.id)
+        self._suggest()
     def _pick(self, hex_: str) -> None:
         self.color = hex_.upper()
         for b in self._swatches:
@@ -991,6 +1095,80 @@ class SaveSummary(QDialog):
         self.del_btn.setEnabled(has)
 
 
+class LinkDialog(QDialog):
+    """과목코드가 빈 수업을 eClass 과목과 한꺼번에 연결.
+
+    확신 있는 제안(임계값 이상·1·2위가 붙지 않음·코드 있음)만 미리 체크합니다.
+    적용하면 수업명을 eClass 정식 이름으로, 과목코드를 채웁니다(한 번에 실행 취소).
+    """
+
+    def __init__(self, parent: QWidget, tt: M.Timetable,
+                 catalog: list[eclass_catalog.Entry]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("eClass 과목과 연결")
+        self.resize(640, 420)
+        ScreenKeeper.attach(self)
+        self.tt = tt
+        self.applied = 0
+        lay = QVBoxLayout(self)
+        info = QLabel("과목코드가 비어 있는 수업입니다. 체크한 줄은 eClass 과목명과 과목코드로 "
+                      "바뀝니다. 과목코드가 있으면 녹화 파일이 어느 과목인지 정확히 판정됩니다.")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+        self.rows: list[tuple[int, QComboBox]] = []
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["연결", "시간표 수업", "eClass 과목"])
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.verticalHeader().setVisible(False)
+        coded = [e for e in catalog if e.id]
+        for idx, c in enumerate(tt.courses):
+            if c.course_id.strip():
+                continue
+            s = eclass_catalog.suggest(c.name, coded)
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            check = QTableWidgetItem()
+            check.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            check.setCheckState(Qt.CheckState.Checked if s.confident
+                                else Qt.CheckState.Unchecked)
+            self.table.setItem(r, 0, check)
+            self.table.setItem(r, 1, QTableWidgetItem(f"{c.name}  ({c.days_text})"))
+            combo = QComboBox()
+            combo.addItem("— 연결 안 함 —", None)
+            for e in coded:
+                combo.addItem(e.label, e)
+            if s.entry is not None:
+                combo.setCurrentIndex(coded.index(s.entry) + 1)
+                combo.setToolTip(f"일치 {s.score:.0%}" + (" · 비슷한 과목이 여럿" if s.ambiguous else ""))
+            combo.currentIndexChanged.connect(
+                lambda i, item=check: item.setCheckState(
+                    Qt.CheckState.Checked if i > 0 else Qt.CheckState.Unchecked))
+            self.table.setCellWidget(r, 2, combo)
+            self.rows.append((idx, combo))
+        if not self.rows:
+            lay.addWidget(QLabel("모든 수업에 이미 과목코드가 있습니다."))
+        lay.addWidget(self.table, 1)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                              | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    def result_timetable(self) -> M.Timetable | None:
+        new = self.tt.copy()
+        self.applied = 0
+        for r, (idx, combo) in enumerate(self.rows):
+            entry = combo.currentData()
+            if self.table.item(r, 0).checkState() != Qt.CheckState.Checked or entry is None:
+                continue
+            new.courses[idx] = new.courses[idx].copy(name=entry.name, course_id=entry.id)
+            self.applied += 1
+        return new if self.applied else None
+
+
 # ---------------------------------------------------------------------------
 # 메인 창
 # ---------------------------------------------------------------------------
@@ -1003,6 +1181,7 @@ class TimetableWindow(QMainWindow):
         self.undo.cleanChanged.connect(lambda _c: self._update_title())
         self.show_weekend = False
         self.summary: SaveSummary | None = None
+        self.catalog: list[eclass_catalog.Entry] = []
 
         self.scene = TimetableScene()
         q = Qt.ConnectionType.QueuedConnection   # 블록 이벤트 안에서 장면을 지우지 않도록
@@ -1053,6 +1232,43 @@ class TimetableWindow(QMainWindow):
                     natural_width(self.hint) + pad,
                     natural_width(self.holiday_note) + hol_btn + pad)
         return QSize(width, 900)
+
+    # -- eClass 과목 연결 ------------------------------------------------
+    def _load_catalog(self) -> list[eclass_catalog.Entry]:
+        """config 의 data_dir 아래 수집 기록 + course_repos + 수집 폴더.
+        설정 전체 검증은 하지 않습니다(다른 설정이 틀려도 시간표는 고칠 수 있게)."""
+        from .. import config as config_module
+
+        try:
+            raw = M.tomllib.loads(self.path.read_text(encoding="utf-8-sig")) \
+                if self.path.exists() else {}
+        except (OSError, M.tomllib.TOMLDecodeError, UnicodeDecodeError):
+            raw = {}
+        try:
+            data_dir = config_module.Config(data=raw).data_dir
+        except Exception:  # noqa: BLE001 — 경로를 못 구해도 config 쪽 목록은 씀
+            data_dir = None
+        repos = (raw.get("eclass", {}) or {}).get("course_repos", []) \
+            if isinstance(raw.get("eclass"), dict) else []
+        try:
+            return eclass_catalog.gather(data_dir, repos)
+        except OSError:
+            return eclass_catalog.gather(None, repos)
+
+    def link_courses(self) -> None:
+        if not self.catalog:
+            QMessageBox.information(
+                self, "eClass 과목과 연결",
+                "아직 eClass 과목 목록이 없습니다.\n"
+                "scripts\\eclass_sync.bat 으로 수집을 한 번 돌리면 이 PC 에 과목 목록이 "
+                "남고, 그다음부터 여기서 과목코드를 채울 수 있습니다.")
+            return
+        dlg = LinkDialog(self, self.tt, self.catalog)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new = dlg.result_timetable()
+        if new is not None:
+            self._apply(new, f"eClass 과목 {dlg.applied}개 연결")
 
     # -- 다른 곳에서 바뀐 파일 -------------------------------------------
     def _build_banner(self) -> QWidget:
@@ -1264,6 +1480,8 @@ class TimetableWindow(QMainWindow):
         e.addSeparator()
         act(e, "수업 추가…", lambda: self.add_course(), QKeySequence.StandardKey.New)
         act(e, "선택한 수업 삭제", self._delete_selected, QKeySequence.StandardKey.Delete)
+        e.addSeparator()
+        act(e, "eClass 과목과 연결…", self.link_courses)
 
         v = self.menuBar().addMenu("보기(&V)")
         wk = act(v, "주말(토·일) 표시", self._toggle_weekend)
@@ -1325,7 +1543,7 @@ class TimetableWindow(QMainWindow):
         base = prefill or M.Course(name="", days=["mon"], color=color)
         if prefill and prefill.color == M.DEFAULT_COLOR:
             base = prefill.copy(color=color)
-        got = CourseEditor(self, base, "수업 추가").exec()
+        got = CourseEditor(self, base, "수업 추가", self.catalog).exec()
         if got:
             new = self.tt.copy()
             new.courses.append(got)
@@ -1334,7 +1552,7 @@ class TimetableWindow(QMainWindow):
     def edit_course(self, idx: int) -> None:
         if not (0 <= idx < len(self.tt.courses)):
             return
-        got = CourseEditor(self, self.tt.courses[idx], "수업 수정").exec()
+        got = CourseEditor(self, self.tt.courses[idx], "수업 수정", self.catalog).exec()
         if got:
             new = self.tt.copy()
             new.courses[idx] = got
@@ -1516,6 +1734,7 @@ class TimetableWindow(QMainWindow):
                 return
             tt = M.Timetable()
         self.undo.clear()
+        self.catalog = self._load_catalog()
         self._set_model(tt)
         self._remember_disk()
         if not self.path.exists():
@@ -1533,6 +1752,8 @@ class TimetableWindow(QMainWindow):
             self.reload_from_disk()
 
     def save(self, show_summary: bool = True) -> bool:
+        if not self.path.exists() and not self._create_config():
+            return False
         if not self._conflict_ok():
             return False
         try:
@@ -1553,6 +1774,44 @@ class TimetableWindow(QMainWindow):
             self.show_summary()
         return True
 
+    # -- config.toml 이 없을 때 ------------------------------------------
+    def _example_path(self) -> Path | None:
+        """config.example.toml: 대상 파일 옆 → 레포 루트 순서로 찾음."""
+        from .. import config as config_module
+
+        repo_root = Path(config_module.__file__).resolve().parents[2]
+        for cand in (self.path.with_name("config.example.toml"),
+                     repo_root / "config.example.toml"):
+            if cand.is_file():
+                return cand
+        return None
+
+    def _create_config(self) -> bool:
+        """config.toml 이 없으면 예시 파일로 설정을 고르게 한 뒤 만듭니다.
+        True 면 계속 저장(시간표 블록을 그 뒤에 붙임)."""
+        example = self._example_path()
+        if example is None:
+            ans = QMessageBox.question(
+                self, "설정 파일 없음",
+                f"{self.path.name} 도, 바탕으로 쓸 config.example.toml 도 찾지 못했습니다.\n"
+                "시간표만 담긴 설정 파일을 만들까요? (다른 설정은 기본값으로 동작)")
+            return ans == QMessageBox.StandardButton.Yes
+        from .config_wizard import NewConfigDialog
+
+        try:
+            dlg = NewConfigDialog(self, example, self.path)
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            QMessageBox.critical(self, "예시 파일을 읽을 수 없습니다", f"{example}\n{exc}")
+            return False
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            self.statusBar().showMessage("설정 파일을 만들지 않아 저장하지 않았습니다.", 6000)
+            return False
+        text = dlg.result_text()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(text, encoding="utf-8")
+        self.statusBar().showMessage(
+            f"{example.name} 을 바탕으로 {self.path.name} 을 만들었습니다.", 6000)
+        return True
     def show_summary(self) -> SaveSummary:
         """저장 결과 창. 모달이 아니라 편집을 막지 않고, 하나만 띄웁니다."""
         if self.summary is None:

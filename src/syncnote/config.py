@@ -635,6 +635,14 @@ def _validate_activity(cfg: Config, errors: list[str]) -> None:
 
 def validate(cfg: Config) -> None:
     """잘못된 설정을 한 번에 모아서 알려줍니다."""
+    errors = problems(cfg)
+    if errors:
+        bullet = "\n  - ".join(errors)
+        raise ConfigError(f"설정 오류 {len(errors)}건:\n  - {bullet}")
+
+
+def problems(cfg: Config) -> list[str]:
+    """설정 오류 목록(예외 없이). 화면에서 실시간으로 보여 줄 때 씁니다."""
     errors: list[str] = []
     _validate_stream(cfg, errors)
     _validate_activity(cfg, errors)
@@ -771,9 +779,7 @@ def validate(cfg: Config) -> None:
             if len(monitors_val) != len(set(monitors_val)):
                 errors.append("recording.video.monitors 에 같은 번호가 중복됩니다")
 
-    if errors:
-        bullet = "\n  - ".join(errors)
-        raise ConfigError(f"설정 오류 {len(errors)}건:\n  - {bullet}")
+    return errors
 
 
 def warnings_for(cfg: Config) -> list[str]:
