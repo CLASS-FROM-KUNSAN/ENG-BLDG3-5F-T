@@ -149,8 +149,8 @@ python -m syncnote audio tools                 # 무엇이 깔려 있고 무엇�
 
 #### 실시간 송출 — Tailscale 망 + 링크를 GitHub 이슈로
 
-PC 소리(또는 마이크)를 실시간으로 내보내고 **같은 tailnet 의 기기만**
-듣게 합니다. 링크가 생길 때마다(시작, 기기 주소 변경) 저장소 이슈로
+PC 소리(또는 마이크)를 실시간으로 내보내고 **토큰이 담긴 링크를 받은 사람만**
+듣게 합니다. 듣는 사람은 Tailscale 앱이 없어도 됩니다(송출 PC 의 `tailscale funnel`). 링크가 생길 때마다(시작, 기기 주소 변경) 저장소 이슈로
 올라가고, 끝나면 이슈에 길이·청취 수를 남기고 닫습니다.
 
 ```bat
@@ -159,7 +159,8 @@ python -m syncnote stream link              REM Tailscale 상태와 링크 미�
 ```
 
 - 오디오 서버: 내장 HTTP 서버(설치 없음) 또는 **Icecast**(오픈소스 스트리밍 서버)
-- 노출: `serve`(tailnet 전용 HTTPS, 기본) / `direct` / `funnel`(인터넷 공개, 명시적 허용 필요)
+- 노출: `funnel`(기본, 앱 없이 토큰 링크로) / `serve`(tailnet 전용 HTTPS) / `direct`
+- Tailscale 은 pip 패키지가 아니라 `scripts\setup.bat` 이 winget 으로 설치합니다(송출 PC 만).
 - **시간표가 최우선**: `stream schedule` 은 `[[recording.timetable]]` 수업마다 송출하고
   수업이 끝나는 시각에 끝냅니다. 그 전에는 어떤 조건으로도 멈추지 않습니다.
 - **멈추지 않고 롤백**: 멈춤 조건은 기본으로 전부 없음. 인코더가 죽거나 최대 송출

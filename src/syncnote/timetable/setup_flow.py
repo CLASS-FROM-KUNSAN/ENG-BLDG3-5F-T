@@ -2,7 +2,7 @@
 
 시간표 편집기에서 저장하면(설정 확인·저장이 끝난 뒤) 이 창이 이어서 엽니다.
 
-  1. 설치        scripts/setup.bat 을 실행(가상환경·라이브러리·브라우저·ffmpeg).
+  1. 설치        scripts/setup.bat 을 실행(가상환경·라이브러리·브라우저·ffmpeg·Tailscale).
                  출력은 이 창에 보이고, 끝나면 다음 단계로 넘어갑니다(bat 의
                  마지막 pause 는 입력을 닫아 기다리지 않게 함).
   2. 라이브러리  requirements.txt 와 실제 설치(.venv)를 맞춰 보고(syncnote.reqcheck),
@@ -199,6 +199,13 @@ class SetupFlow(QDialog):
         if os.name != "nt":
             return None
         return ["cmd.exe", "/d", "/c", str(SCRIPTS / "install_ffmpeg.bat")]
+
+    def tailscale_command(self) -> list[str] | None:
+        """송출 PC 에 Tailscale 설치(pip 패키지가 아니라 winget). 관리자 확인 창이 뜹니다."""
+        if os.name != "nt":
+            return None
+        return ["winget", "install", "--id", "Tailscale.Tailscale", "-e", "--silent",
+                "--accept-package-agreements", "--accept-source-agreements"]
 
     def state_command(self) -> list[str]:
         """설치가 이미 됐는지(setupcheck) — .venv 의 파이썬으로 봐야 그 환경을 봄."""
@@ -468,7 +475,7 @@ class SetupFlow(QDialog):
     def _try_install_remedy(self, st: dict) -> bool:
         """setup.bat 을 통째로 다시 돌리지 않고, 빠진 것만 따로 다시(A7·A8).
         각 해결책은 한 번만. 돌렸으면 True(끝나면 _verify_install 이 다시 판정)."""
-        tried_before = {r for r in ("chromium", "ffmpeg")
+        tried_before = {r for r in ("chromium", "ffmpeg", "tailscale")
                         if setup_history.remedy_failed(self.history, "install", r)}
         for r in tried_before - self._remedies:
             self._say(f"! {r} 다시 받기는 지난번에도 해결하지 못해 이번에는 생략합니다.")
@@ -483,6 +490,13 @@ class SetupFlow(QDialog):
         if not st.get("ffmpeg") and cmd is not None and "ffmpeg" not in self._remedies:
             self._remedies.add("ffmpeg")
             self._say("ffmpeg 만 다시 받습니다.")
+            self._run_retrying("install", lambda: cmd,
+                               lambda _rc, _o: self._verify_install(), kind="remedy")
+            return True
+        cmd = self.tailscale_command()
+        if not st.get("tailscale") and cmd is not None and "tailscale" not in self._remedies:
+            self._remedies.add("tailscale")
+            self._say("Tailscale 만 다시 설치합니다(winget, 관리자 확인 창이 뜰 수 있음).")
             self._run_retrying("install", lambda: cmd,
                                lambda _rc, _o: self._verify_install(), kind="remedy")
             return True

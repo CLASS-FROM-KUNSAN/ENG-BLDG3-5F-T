@@ -605,8 +605,8 @@ max_listeners = 0
 # 이만큼 밀린 청취자 한 명만 끊습니다(송출은 계속, 그 청취자는 다시 접속하면 됨).
 client_buffer_kb = 2048
 
-# 접속 토큰. 링크 끝에 ?t=... 로 붙습니다. tailnet 안이라도 링크를
-# 모르는 사람은 못 듣게 합니다.
+# 접속 토큰. 링크 끝에 ?t=... 로 붙습니다. 링크(토큰)를 받은 사람만 듣게 합니다.
+# funnel(기본)에서는 끌 수 없습니다.
 require_token = true
 # 비우면 송출마다 새로 만듭니다(권장). 고정하려면 12자 이상.
 token = ""
@@ -649,13 +649,14 @@ fallback_default_device = true
 [stream.tailscale]
 # false 면 Tailscale 없이 127.0.0.1 에서만 열고, 이슈도 올리지 않습니다.
 enabled = true
-# "serve"  : tailnet 안에 HTTPS 로 (tailscale serve)                  [권장]
+# "funnel" : tailscale funnel 로 HTTPS 링크를 엶. 듣는 사람은 Tailscale 앱이
+#            없어도 링크(?t=토큰)만 있으면 들음. 토큰이 필수입니다.      [기본]
+# "serve"  : tailnet 안에만 HTTPS 로 (tailscale serve). 듣는 사람도 Tailscale 앱 필요
 # "direct" : 이 기기의 Tailscale IP 에 HTTP 로 직접. 방화벽 허용이 필요할 수 있음
-# "funnel" : 인터넷 전체 공개 (tailscale funnel). allow_funnel = true 필요
-mode = "serve"
+# 송출하는 이 PC 에만 Tailscale 이 있으면 됩니다(scripts\setup.bat 이 설치).
+mode = "funnel"
 https_port = 443           # serve/funnel 의 HTTPS 포트 (funnel 은 443, 8443, 10000 만 됩니다)
 use_magicdns = true        # 링크에 기기 이름(…ts.net)을 씀. false 면 100.x IP
-allow_funnel = false
 exe = ""                   # tailscale 실행 파일 경로 (비우면 자동)
 # 이 간격(초)마다 tailnet 상태를 다시 읽어 링크가 바뀌면 다시 올립니다 (0 = 안 봄)
 link_check_sec = 60

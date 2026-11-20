@@ -70,12 +70,28 @@ def test_devices_json_shape(capsys):
 def test_setupcheck_missing_reasons():
     from syncnote import setupcheck
 
-    full = {"in_venv": True, "reqs_bad": [], "ffmpeg": "f.exe", "chromium": True}
+    full = {"in_venv": True, "reqs_bad": [], "ffmpeg": "f.exe", "chromium": True,
+            "tailscale": "tailscale.exe"}
     assert setupcheck.missing(full) == []
     gaps = setupcheck.missing({"in_venv": False, "reqs_bad": ["psutil"], "ffmpeg": None,
-                               "chromium": False})
+                               "chromium": False, "tailscale": None})
     assert gaps == ["가상환경(.venv) 없음", "패키지: psutil", "ffmpeg 없음",
-                    "Playwright Chromium 없음"]
+                    "Playwright Chromium 없음", "Tailscale 없음"]
+
+
+def test_setupcheck_reports_tailscale_path_or_none(tmp_path, monkeypatch):
+    from syncnote import setupcheck
+    from syncnote.stream import tailnet
+
+    req = tmp_path / "r.txt"
+    req.write_text("", encoding="utf-8")
+    monkeypatch.setattr(tailnet, "find_exe", lambda configured="": "C:/ts/tailscale.exe")
+    assert setupcheck.report(req)["tailscale"] == "C:/ts/tailscale.exe"
+
+    def gone(configured=""):
+        raise tailnet.TailscaleError("없음")
+    monkeypatch.setattr(tailnet, "find_exe", gone)
+    assert setupcheck.report(req)["tailscale"] is None
 
 
 def test_setupcheck_finds_chromium_where_playwright_puts_it(tmp_path, monkeypatch):
