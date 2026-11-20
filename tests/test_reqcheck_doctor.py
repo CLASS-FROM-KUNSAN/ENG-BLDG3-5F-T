@@ -139,3 +139,40 @@ def test_deferred_install_waits_for_a_real_process():
     p = sp.Popen([_sys.executable, "-c", "import time; time.sleep(0.5)"])
     assert D.wait_pid(p.pid, timeout=10)
     assert D.wait_pid(0)
+
+
+# -- 실패 원인 표 ----------------------------------------------------------------
+def test_failure_table_classifies_known_outputs():
+    from syncnote import setup_failures as SF_
+
+    cases = {
+        "[X] Python 이 설치돼 있지 않습니다.": ("python_missing", "auto"),
+        "OSError: [WinError 32] 다른 프로세스가 파일을 사용 중": ("file_lock", "transient"),
+        "pip._vendor.urllib3.exceptions.ReadTimeoutError: Read timed out.": ("network", "transient"),
+        "ProxyError('Cannot connect to proxy.')": ("proxy", "transient"),
+        "SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED]": ("ssl", "user"),
+        "ERROR: No matching distribution found for ctranslate2": ("no_wheel", "fatal"),
+        "OSError: [Errno 28] No space left on device": ("disk_full", "user"),
+        "[WinError 206] The filename or extension is too long": ("long_path", "user"),
+    }
+    for text, (cid, kind) in cases.items():
+        c = SF_.classify(text)
+        assert (c.id, c.kind) == (cid, kind), text
+    assert SF_.classify("모두 잘 됨", rc=0) is None
+    assert SF_.classify("알 수 없는 오류", rc=1).id == "unknown"
+
+
+def test_backoff_grows_and_caps():
+    from syncnote.setup_failures import backoff
+
+    assert [backoff(n) for n in (1, 2, 3, 4)] == [2, 4, 8, 16]
+    assert backoff(10, cap=30) == 30
+
+
+def test_empty_output_failure_is_unknown_not_stall():
+    """'안 맞는' 패턴을 \\A\\Z 로 쓰면 빈 출력에 맞아, 말없이 끝난 실패를 '멈춤' 으로
+    오인해 세 번 다시 돌렸습니다(실제로 그랬음)."""
+    from syncnote import setup_failures as SF_
+
+    assert SF_.classify("", rc=3).id == "unknown"
+    assert SF_.classify("", rc=0) is None

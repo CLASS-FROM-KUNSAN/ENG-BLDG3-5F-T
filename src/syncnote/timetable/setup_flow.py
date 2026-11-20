@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -45,7 +46,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import reqcheck, setupcheck
+from .. import reqcheck, setup_failures, setupcheck
 from . import eclass_fetch
 
 REPO_ROOT = eclass_fetch.REPO_ROOT
@@ -85,6 +86,13 @@ def _esc(s: Any) -> str:
 
 
 class SetupFlow(QDialog):
+    # 일시적 실패(파일 잠김·네트워크·멈춤)는 2→4→8초 뒤 다시, 최대 이 횟수까지.
+    MAX_TRIES = 3
+    BACKOFF_BASE = 2.0
+    # (전체 시간 한도, 출력 없이 버틸 시간) 초. 멈춤 감지용.
+    TIMEOUTS = {"setup": (1800, 300), "pip": (900, 300), "remedy": (900, 300),
+                "quick": (120, 60)}
+
     def __init__(self, parent: QWidget | None, config_path: Path) -> None:
         super().__init__(parent)
         from .gui import ScreenKeeper
@@ -107,6 +115,10 @@ class SetupFlow(QDialog):
         self.install_state: dict | None = None
         self._locked: set[str] = set()
         self.deferred: list[str] = []
+        self.causes: dict[str, setup_failures.Cause] = {}
+        self.attempts: dict[str, int] = {}
+        self._remedies: set[str] = set()
+        self.setup_out = ""
         self.deferred_force = False
         self.need_vcredist = False
         self.setup_rc = 0
@@ -159,6 +171,18 @@ class SetupFlow(QDialog):
 
     def venv_python(self) -> str:
         return str(self.venv_path()) if self.venv_exists() else sys.executable
+
+    def venv_create_command(self) -> list[str]:
+        """'파이썬을 찾지 못함' 해결책: 편집기의 파이썬으로 .venv 를 먼저 만듦."""
+        return [sys.executable, "-m", "venv", str(REPO_ROOT / ".venv")]
+
+    def playwright_command(self) -> list[str]:
+        return [self.venv_python(), "-m", "playwright", "install", "chromium"]
+
+    def ffmpeg_command(self) -> list[str] | None:
+        if os.name != "nt":
+            return None
+        return ["cmd.exe", "/d", "/c", str(SCRIPTS / "install_ffmpeg.bat")]
 
     def state_command(self) -> list[str]:
         """설치가 이미 됐는지(setupcheck) — .venv 의 파이썬으로 봐야 그 환경을 봄."""
@@ -236,8 +260,11 @@ class SetupFlow(QDialog):
         return env
 
     # -- 프로세스 하나 돌리기 ---------------------------------------------
-    def _run(self, cmd: list[str], done: Callable[[int, str], None]) -> None:
+    def _run(self, cmd: list[str], done: Callable[[int, str], None],
+             kind: str = "quick") -> None:
+        """kind 의 시간 한도를 넘거나 출력 없이 오래 멈추면 끊고 종료 코드 -2 로 알림."""
         self._say(f"> {' '.join(cmd)}")
+        total, idle = self.TIMEOUTS.get(kind, self.TIMEOUTS["quick"])
         p = QProcess(self)
         p.setWorkingDirectory(str(REPO_ROOT))
         env = QProcessEnvironment()
@@ -247,18 +274,37 @@ class SetupFlow(QDialog):
         p.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         buf: list[str] = []
 
+        clock = {"start": time.monotonic(), "last": time.monotonic(), "stalled": False}
+        watch = QTimer(p)
+        watch.setInterval(500)
+
+        def tick() -> None:
+            now = time.monotonic()
+            if now - clock["start"] > total or now - clock["last"] > idle:
+                clock["stalled"] = True
+                watch.stop()
+                self._say(f"! {'시간 한도' if now - clock['start'] > total else '출력 없이'} "
+                          "너무 오래 걸려 끊습니다.")
+                eclass_fetch._kill_tree(int(p.processId()))
+                p.kill()
+
+        watch.timeout.connect(tick)
+
         def read() -> None:
             chunk = bytes(p.readAllStandardOutput()).decode("utf-8", errors="replace")
+            if chunk:
+                clock["last"] = time.monotonic()
             buf.append(chunk)
             for line in chunk.replace("\r\n", "\n").splitlines():
                 if line.strip() and not line.lstrip().startswith(("{", "[")):
                     self._say(line)
 
         def finished(code: int, _status) -> None:
+            watch.stop()
             read()
             if self.proc is p:
                 self.proc = None
-            done(int(code), "".join(buf))
+            done(-2 if clock["stalled"] else int(code), "".join(buf))
 
         def failed(err) -> None:
             if err == QProcess.ProcessError.FailedToStart:
@@ -273,6 +319,41 @@ class SetupFlow(QDialog):
         self.proc = p
         p.start(cmd[0], cmd[1:])
         p.closeWriteChannel()             # bat 끝의 pause 가 기다리지 않게
+        watch.start()
+
+    # -- 원인 짐작 + 일시적 실패 다시 시도 --------------------------------
+    def _cause(self, rc: int, out: str) -> setup_failures.Cause | None:
+        if rc == -2:
+            return setup_failures.BY_ID["stall"]
+        return setup_failures.classify(out, rc)
+
+    def _run_retrying(self, step: str, make_cmd: Callable[[], list[str]],
+                      done: Callable[[int, str], None], kind: str = "quick",
+                      attempt: int = 1) -> None:
+        """실패 원인이 '일시적' 이면 백오프 후 같은 명령을 다시(최대 MAX_TRIES)."""
+        def finished(rc: int, out: str) -> None:
+            cause = self._cause(rc, out) if rc != 0 else None
+            if cause is not None and cause.kind == "transient" and attempt < self.MAX_TRIES:
+                wait = setup_failures.backoff(attempt, self.BACKOFF_BASE)
+                self.attempts[step] = attempt + 1
+                msg = f"{cause.title} — {wait:g}초 뒤 다시 ({attempt + 1}/{self.MAX_TRIES}회째)"
+                self._say(f"! {msg}")
+                self._mark(step, "run", msg)
+                QTimer.singleShot(int(wait * 1000), lambda: self._run_retrying(
+                    step, make_cmd, done, kind, attempt + 1))
+                return
+            if cause is not None:
+                self.causes[step] = cause
+            done(rc, out)
+        self._run(make_cmd(), finished, kind)
+
+    def _fail_note(self, step: str, fallback: str) -> str:
+        c = self.causes.get(step)
+        tries = self.attempts.get(step, 1)
+        extra = f" ({tries}번 시도)" if tries > 1 else ""
+        if c is None or c.id == "unknown":            # 모르는 원인보다 구체적인 사실이 낫다
+            return (fallback + extra + " — 출력 보기") if fallback else c.title if c else ""
+        return f"{c.title}{extra} — {c.hint}"
 
     def _say(self, text: str) -> None:
         self.log.appendPlainText(text.rstrip("\n"))
@@ -333,10 +414,29 @@ class SetupFlow(QDialog):
             self._next()
             return
 
-        def done(rc: int, _out: str) -> None:
+        def done(rc: int, out: str) -> None:
             self.setup_rc = rc
+            self.setup_out = out
             self._verify_install()
-        self._run(cmd, done)
+        self._run_retrying("install", lambda: cmd, done, kind="setup")
+
+    def _try_install_remedy(self, st: dict) -> bool:
+        """setup.bat 을 통째로 다시 돌리지 않고, 빠진 것만 따로 다시(A7·A8).
+        각 해결책은 한 번만. 돌렸으면 True(끝나면 _verify_install 이 다시 판정)."""
+        if not st.get("chromium") and "chromium" not in self._remedies:
+            self._remedies.add("chromium")
+            self._say("Playwright Chromium 만 다시 받습니다.")
+            self._run_retrying("install", self.playwright_command,
+                               lambda _rc, _o: self._verify_install(), kind="remedy")
+            return True
+        cmd = self.ffmpeg_command()
+        if not st.get("ffmpeg") and cmd is not None and "ffmpeg" not in self._remedies:
+            self._remedies.add("ffmpeg")
+            self._say("ffmpeg 만 다시 받습니다.")
+            self._run_retrying("install", lambda: cmd,
+                               lambda _rc, _o: self._verify_install(), kind="remedy")
+            return True
+        return False
 
     def _verify_install(self) -> None:
         """setup.bat 뒤: 종료 코드가 아니라 실제 설치 상태로 판정합니다.
@@ -344,7 +444,18 @@ class SetupFlow(QDialog):
         echo 가 실패해도 0 이 아닐 수 있습니다.)"""
         rc = getattr(self, "setup_rc", 0)
         if not self.venv_exists():
-            self._mark("install", "fail", f"가상환경(.venv)이 만들어지지 않음 (setup.bat 종료 코드 {rc})")
+            cause = setup_failures.classify(self.setup_out, rc or 1)
+            if cause is not None and cause.id == "python_missing" and "venv" not in self._remedies:
+                # 해결책: 편집기의 파이썬으로 .venv 를 만들고 setup.bat 을 다시(setup.bat 은
+                # .venv 가 있으면 그 파이썬을 씀).
+                self._remedies.add("venv")
+                self._say(f"! {cause.title} — {cause.hint}")
+                self._run(self.venv_create_command(), lambda _rc, _o: self._run_setup())
+                return
+            if cause is not None and cause.id != "unknown":
+                self.causes["install"] = cause
+            self._mark("install", "fail", self._fail_note(
+                "install", f"가상환경(.venv)이 만들어지지 않음 (setup.bat 종료 코드 {rc})"))
             self._next()
             return
 
@@ -359,6 +470,8 @@ class SetupFlow(QDialog):
             code = f" (setup.bat 종료 코드 {rc})" if rc else ""
             if not gaps:
                 self._mark("install", "ok", "설치 완료" + code)
+            elif self._try_install_remedy(st):
+                return                    # 해결책을 돌린 뒤 다시 _verify_install
             elif gaps == ["패키지: " + ", ".join(st.get("reqs_bad", []))]:
                 # 패키지만 남음 → 바로 다음 '라이브러리 확인' 단계가 채우도록 만든 흐름.
                 self._mark("install", "ok", "설치됨 — 남은 패키지는 다음 단계에서 채움" + code)
@@ -411,13 +524,15 @@ class SetupFlow(QDialog):
             scan(out)
             if broken:
                 self._say(f"import 가 안 되는 {len(broken)}개를 다시 설치합니다.")
-                self._run(self.pip_install_command(broken, force=True), after_broken)
+                self._run_retrying("verify", lambda: self.pip_install_command(broken, force=True),
+                                   after_broken, kind="pip")
             else:
                 self._step_verify(retried=True)
 
         if plain:
             self._say(f"빠졌거나 버전이 안 맞는 {len(plain)}개를 설치합니다.")
-            self._run(self.pip_install_command(plain), after_plain)
+            self._run_retrying("verify", lambda: self.pip_install_command(plain), after_plain,
+                               kind="pip")
         else:
             after_plain(0, "")
 
@@ -428,6 +543,8 @@ class SetupFlow(QDialog):
         rest = [i for i in bad if i not in held]
         if rest:
             parts.append("고치지 못함: " + ", ".join(i["name"] for i in rest))
+            if "verify" in self.causes:
+                parts.append(self._fail_note("verify", ""))
             if any(i["status"] == "broken" for i in rest):
                 parts.append("DLL 오류라면 VC++ 재배포 패키지를 설치하세요")
                 self.need_vcredist = True

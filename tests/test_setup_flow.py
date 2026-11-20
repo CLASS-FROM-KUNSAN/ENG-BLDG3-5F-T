@@ -64,8 +64,9 @@ def fakes(tmp_path, monkeypatch):
             e = lambda n: os.path.exists(os.path.join(r"{m}", n))
             print(json.dumps({{"python": "x", "in_venv": e("venv"),
                               "reqs_bad": [] if e("installed") else ["psutil"],
-                              "ffmpeg": None if e("no_ffmpeg") else "ffmpeg.exe",
-                              "chromium": True}}))
+                              "ffmpeg": None if e("no_ffmpeg") and not e("ffmpeg_fixed")
+                                        else "ffmpeg.exe",
+                              "chromium": not e("no_chromium") or e("chromium_fixed")}}))
         """),
         "reqcheck": _py(tmp_path, "reqcheck", f"""
             import json, os
@@ -97,6 +98,18 @@ def fakes(tmp_path, monkeypatch):
             print({json.dumps(json.dumps(DOCTOR, ensure_ascii=False))})
             print("Press any key to continue . . .")
         """),
+        "playwright": _py(tmp_path, "playwright", f"""
+            open(r"{m / 'chromium_fixed'}", "w").write("x")
+            open(r"{m / 'playwright_ran'}", "a").write("x")
+            print("Downloading Chromium ... done")
+        """),
+        "ffmpeg": _py(tmp_path, "ffmpeg", f"""
+            open(r"{m / 'ffmpeg_ran'}", "a").write("x")
+            print("ffmpeg 내려받기 실패(가짜)")
+        """),
+        "venv_create": _py(tmp_path, "venv_create", f"""
+            open(r"{m / 'venv'}", "w").write("x")
+        """),
         "devices": _py(tmp_path, "devices", f"""
             print({json.dumps(json.dumps(DEVICES, ensure_ascii=False))})
         """),
@@ -111,6 +124,10 @@ def fakes(tmp_path, monkeypatch):
     monkeypatch.setattr(F, "password_command", lambda self: cmds["password"])
     monkeypatch.setattr(F, "doctor_command", lambda self: cmds["doctor"])
     monkeypatch.setattr(F, "devices_command", lambda self: cmds["devices"])
+    monkeypatch.setattr(F, "playwright_command", lambda self: cmds["playwright"])
+    monkeypatch.setattr(F, "ffmpeg_command", lambda self: cmds["ffmpeg"])
+    monkeypatch.setattr(F, "venv_create_command", lambda self: cmds["venv_create"])
+    monkeypatch.setattr(F, "BACKOFF_BASE", 0.01)
     monkeypatch.setattr(eclass_fetch, "NEW_CONSOLE", 0)
     return m
 
@@ -301,6 +318,7 @@ def test_partially_installed_runs_setup_and_reports_what_is_still_missing(app, t
     dlg = SF.SetupFlow(None, tmp_path / "config.toml")
     _run(app, dlg)
     assert (fakes / "setup_ran").exists()
+    assert (fakes / "ffmpeg_ran").exists()                          # ffmpeg 만 따로 다시 시도
     assert dlg.state["install"] == "warn" and "ffmpeg" in dlg.notes["install"]
     dlg.close()
 
@@ -438,4 +456,118 @@ def test_editor_holds_only_when_running_from_the_same_venv(app, tmp_path, monkey
     monkeypatch.setattr(SF.SetupFlow, "editor_in_venv", lambda self: True)
     assert dlg.editor_holds("PySide6")             # 이 테스트 프로세스에 PySide6 가 올라와 있음
     assert not dlg.editor_holds("zz-not-loaded")
+    dlg.close()
+
+
+# -- 3. 원인 분류 + 일시적 실패 백오프 + 멈춤 감지 -----------------------------
+def _counting_setup(tmp_path, m, fail_times, fail_text, sleep=0.0):
+    return _py(tmp_path, "setup_n", f"""
+        import os, sys, time
+        n_file = r"{m / 'setup_n'}"
+        n = int(open(n_file).read()) if os.path.exists(n_file) else 0
+        open(n_file, "w").write(str(n + 1))
+        if n < {fail_times}:
+            time.sleep({sleep})
+            print({fail_text!r})
+            sys.exit(1)
+        open(r"{m / 'venv'}", "w").write("x")
+        open(r"{m / 'installed'}", "w").write("x")
+        print("설치 완료")
+    """)
+
+
+def test_transient_network_failure_is_retried_with_backoff(app, tmp_path, fakes, monkeypatch):
+    s = _counting_setup(tmp_path, fakes, 2, "pip._vendor.urllib3: Read timed out.")
+    monkeypatch.setattr(SF.SetupFlow, "setup_command", lambda self: s)
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert (fakes / "setup_n").read_text(encoding="utf-8") == "3"
+    assert dlg.state["install"] == "ok" and dlg.attempts["install"] == 3
+    assert "네트워크" in dlg.log.toPlainText() and "3/3회째" in dlg.log.toPlainText()
+    dlg.close()
+
+
+def test_transient_failure_gives_up_after_max_tries_with_reason(app, tmp_path, fakes, monkeypatch):
+    s = _counting_setup(tmp_path, fakes, 99, "ConnectTimeoutError: connection timed out")
+    monkeypatch.setattr(SF.SetupFlow, "setup_command", lambda self: s)
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert (fakes / "setup_n").read_text(encoding="utf-8") == "3"            # 최대 3번
+    assert dlg.state["install"] == "fail"
+    assert "네트워크" in dlg.notes["install"] and "3번 시도" in dlg.notes["install"]
+    dlg.close()
+
+
+def test_fatal_cause_is_not_retried(app, tmp_path, fakes, monkeypatch):
+    s = _counting_setup(tmp_path, fakes, 99, "ERROR: No matching distribution found for x")
+    monkeypatch.setattr(SF.SetupFlow, "setup_command", lambda self: s)
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert (fakes / "setup_n").read_text(encoding="utf-8") == "1"
+    assert dlg.state["install"] == "fail" and "3.11" in dlg.notes["install"]
+    dlg.close()
+
+
+def test_stalled_process_is_killed_and_retried(app, tmp_path, fakes, monkeypatch):
+    s = _counting_setup(tmp_path, fakes, 1, "", sleep=30)          # 첫 번째는 말없이 멈춤
+    monkeypatch.setattr(SF.SetupFlow, "setup_command", lambda self: s)
+    monkeypatch.setattr(SF.SetupFlow, "TIMEOUTS", {**SF.SetupFlow.TIMEOUTS, "setup": (20, 1.0)})
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert "출력 없이" in dlg.log.toPlainText()
+    assert dlg.state["install"] == "ok" and dlg.attempts["install"] == 2
+    dlg.close()
+
+
+def test_python_missing_creates_venv_with_editor_python_then_reruns(app, tmp_path, fakes,
+                                                                    monkeypatch):
+    m = fakes
+    s = _py(tmp_path, "setup_py", f"""
+        import os, sys
+        if not os.path.exists(r"{m / 'venv'}"):
+            print("[X] Python 이 설치돼 있지 않습니다.")
+            sys.exit(1)
+        open(r"{m / 'installed'}", "w").write("x")
+        print("설치 완료")
+    """)
+    monkeypatch.setattr(SF.SetupFlow, "setup_command", lambda self: s)
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert dlg.state["install"] == "ok", dlg.log.toPlainText()
+    assert "venv" in dlg._remedies and "파이썬을 찾지 못함" in dlg.log.toPlainText()
+    dlg.close()
+
+
+def test_only_chromium_missing_reinstalls_just_chromium(app, tmp_path, fakes):
+    for n in ("venv", "installed", "no_chromium"):
+        (fakes / n).write_text("x", encoding="utf-8")
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert (fakes / "playwright_ran").exists() and not (fakes / "ffmpeg_ran").exists()
+    assert dlg.state["install"] == "ok"
+    dlg.close()
+
+
+def test_pip_transient_failure_is_retried(app, tmp_path, fakes, monkeypatch):
+    m = fakes
+    (m / "venv").write_text("x", encoding="utf-8")
+    (m / "installed").write_text("x", encoding="utf-8")
+    rq = _reqcheck_fake(tmp_path, m, [_item("psutil", "missing")], [_item("psutil", "ok")])
+    monkeypatch.setattr(SF.SetupFlow, "reqcheck_command", lambda self: rq)
+    pip = _py(tmp_path, "pip_n", f"""
+        import os, sys
+        f = r"{m / 'pip_n'}"
+        n = int(open(f).read()) if os.path.exists(f) else 0
+        open(f, "w").write(str(n + 1))
+        if n == 0:
+            print("WARNING: Retrying ... ProxyError('Cannot connect to proxy.')")
+            sys.exit(1)
+        open(r"{m / 'fixed'}", "w").write("x")
+    """)
+    monkeypatch.setattr(SF.SetupFlow, "pip_install_command",
+                        lambda self, lines, force=False: pip + lines)
+    monkeypatch.setattr(SF.SetupFlow, "editor_holds", lambda self, d: False)
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert (m / "pip_n").read_text(encoding="utf-8") == "2" and dlg.state["verify"] == "ok"
     dlg.close()
