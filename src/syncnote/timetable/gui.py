@@ -100,6 +100,7 @@ from PySide6.QtWidgets import (
 
 from .. import settings_schema
 from ..eclass import catalog as eclass_catalog
+from ..recorder import schedule as sched
 from . import model as M
 
 # 격자 크기 (1분 = 1px)
@@ -143,7 +144,7 @@ class _Snapshot(QUndoCommand):
 # ---------------------------------------------------------------------------
 class CourseBlock(QGraphicsRectItem):
     def __init__(self, scene: TimetableScene, idx: int, course: M.Course, day: str,
-                 rect: QRectF, warn: bool) -> None:
+                 rect: QRectF, warn: list[str] | bool) -> None:
         super().__init__(rect)
         self.grid = scene
         self.idx, self.course, self.day = idx, course, day
@@ -157,7 +158,9 @@ class CourseBlock(QGraphicsRectItem):
         tip = f"{course.name}\n{course.days_text}  {course.time_text}"
         if course.room:
             tip += f"\n{course.room}"
-        if warn:
+        if isinstance(warn, list):
+            tip += "".join(f"\n⚠ {w}" for w in warn)
+        elif warn:
             tip += "\n⚠ 같은 요일의 다른 수업과 시간이 겹칩니다"
         self.setToolTip(tip)
 
@@ -555,7 +558,9 @@ class TimetableScene(QGraphicsScene):
                 and HEADER_H <= pos.y() <= self.y_of(self.h1 * 60))
 
     # -- 그리기 ---------------------------------------------------------
-    def rebuild(self, tt: M.Timetable, show_weekend: bool) -> None:
+    def rebuild(self, tt: M.Timetable, show_weekend: bool,
+                lost: dict[tuple[str, str], list[str]] | None = None) -> None:
+        """lost: (수업 이름, 요일) → 녹화 안 되는 구간 문구. 없으면 단순 겹침으로 표시."""
         self.clear()
         self._rubber = None
         used = {d for c in tt.courses for d in c.days}
@@ -597,7 +602,7 @@ class TimetableScene(QGraphicsScene):
                 lab.setDefaultTextColor(th.dim)
                 lab.setPos(TIME_W - lab.boundingRect().width() - 4, y - 9)
 
-        warn = {id(c) for _d, a, b in tt.overlaps() for c in (a, b)}
+        simple = {id(c) for _d, a, b in tt.overlaps() for c in (a, b)} if lost is None else set()
         for d in self.days:
             todays = [(idx, c) for idx, c in enumerate(tt.courses)
                       if d in c.days and not c.problems()]
@@ -606,7 +611,8 @@ class TimetableScene(QGraphicsScene):
                 r = QRectF(self.x_of(d) + 2 + lane * w, self.y_of(c.start_min) + 1,
                            w - (1 if lanes > 1 else 0),
                            (c.end_min - c.start_min) * PX_PER_MIN - 2)
-                self.addItem(CourseBlock(self, idx, c, d, r, id(c) in warn))
+                mark = (lost.get((c.name, d), []) if lost is not None else id(c) in simple)
+                self.addItem(CourseBlock(self, idx, c, d, r, mark))
         self.setSceneRect(QRectF(0, 0, width + 8, bottom + 8))
 
     # -- 빈 칸 드래그로 추가 --------------------------------------------
@@ -1206,6 +1212,8 @@ class TimetableWindow(QMainWindow):
         self.show_weekend = False
         self.summary: SaveSummary | None = None
         self.catalog: list[eclass_catalog.Entry] = []
+        self.rec_params = {"pre": 0.0, "post": 0.0, "policy": "first"}
+        self.lost: list = []
 
         self.scene = TimetableScene()
         q = Qt.ConnectionType.QueuedConnection   # 블록 이벤트 안에서 장면을 지우지 않도록
@@ -1347,6 +1355,8 @@ class TimetableWindow(QMainWindow):
         if change == "other":
             # 시간표 밖만 바뀜: 저장해도 그 변경은 남으니 기준만 갱신.
             self._disk = M.DiskState.read(self.path)
+            self.rec_params = self.read_rec_params()      # 겹침 정책·여유 시간이 바뀌었을 수 있음
+            self._refresh()
             self.statusBar().showMessage(
                 f"{self.path.name} 의 다른 설정이 바뀌었습니다. 시간표에는 영향 없습니다.", 6000)
         elif change == "timetable" and self.undo.isClean():
@@ -1527,7 +1537,12 @@ class TimetableWindow(QMainWindow):
         self.undo.push(_Snapshot(self, self.tt.copy(), new, text))
 
     def _refresh(self) -> None:
-        self.scene.rebuild(self.tt, self.show_weekend)
+        self.lost = self.recording_losses()
+        lost_map: dict[tuple[str, str], list[str]] = {}
+        for wd, x in self.lost:
+            lost_map.setdefault((x.slot.name, M.DAYS[wd]), []).append(
+                sched.describe_lost(wd, x, self.rec_params["policy"]))
+        self.scene.rebuild(self.tt, self.show_weekend, lost_map)
         self.table.setRowCount(len(self.tt.courses))
         for r, c in enumerate(self.tt.courses):
             vals = [c.name, c.days_text, c.time_text, c.room, c.professor,
@@ -1550,12 +1565,51 @@ class TimetableWindow(QMainWindow):
             self.htable.setItem(r, 1, QTableWidgetItem(h.name))
         self._update_status()
 
+    def read_rec_params(self) -> dict:
+        """녹화가 겹침을 어떻게 나눌지(config 의 pre/post roll·recording.overlap).
+        설정 전체 검증 없이 값만 읽습니다(파일이 없거나 깨지면 기본값)."""
+        from .. import config as config_module
+
+        vals: dict = {}
+        if self.path.exists():
+            try:
+                vals = settings_schema.current_values(M.read_text(self.path))
+            except (OSError, UnicodeDecodeError, settings_schema.SchemaError):
+                vals = {}
+        rec = config_module.DEFAULTS["recording"]
+
+        def num(key: str, default: float) -> float:
+            try:
+                return float(vals.get(f"recording.{key}", default))
+            except (TypeError, ValueError):
+                return float(default)
+        policy = str(vals.get("recording.overlap", rec.get("overlap", "first")))
+        return {"pre": num("pre_roll_minutes", rec.get("pre_roll_minutes", 0)),
+                "post": num("post_roll_minutes", rec.get("post_roll_minutes", 0)),
+                "policy": policy if policy in sched.OVERLAP_POLICIES else "first"}
+
+    def recording_losses(self) -> list:
+        """녹화기와 같은 계획으로 '녹화되지 않는 수업 시간'. [(요일 번호, Lost)]"""
+        p = self.rec_params
+        try:
+            slots = sched.parse(self.tt.to_rows())
+        except Exception:  # noqa: BLE001 — 잘못된 수업이 섞여 있으면 경고 계산만 건너뜀
+            return []
+        return sched.overlap_report(slots, p["pre"], p["post"], p["policy"])
+
     def _update_status(self) -> None:
         ov = self.tt.overlaps()
         msg = f"수업 {len(self.tt.courses)}개 · 공휴일 {len(self.tt.holidays)}일 · {self.path}"
-        if ov:
-            pairs = "; ".join(f"{M.DAY_KR[M.DAY_INDEX[d]]} {a.name}↔{b.name}" for d, a, b in ov[:3])
-            msg = f"⚠ 시간 겹침 {len(ov)}건 ({pairs}) · " + msg
+        lost = getattr(self, "lost", [])
+        policy = self.rec_params["policy"]
+        if lost:
+            first = sched.describe_lost(*lost[0], policy)
+            more = f" 외 {len(lost) - 1}건" if len(lost) > 1 else ""
+            msg = f"⚠ 겹침: {first}{more} · " + msg
+        elif ov:
+            # merge 처럼 잃는 시간이 없어도 겹침 자체는 알려 줌
+            msg = (f"겹침 {len(ov)}건 — {sched.OVERLAP_POLICIES.get(policy, policy)}"
+                   f"(잃는 시간 없음) · " + msg)
         self.statusBar().showMessage(msg)
         self._update_title()
 
@@ -1772,6 +1826,7 @@ class TimetableWindow(QMainWindow):
         self.undo.clear()
         self.catalog = self._load_catalog()
         self._load_example()
+        self.rec_params = self.read_rec_params()
         self._set_model(tt)
         self._remember_disk()
         if not self.path.exists():
@@ -1913,6 +1968,8 @@ class TimetableWindow(QMainWindow):
         M.write_text(self.path, dlg.result_text(), original=raw)
         self._remember_disk()                   # 내 저장을 바깥 변경으로 보지 않게
         self.catalog = self._load_catalog()     # data_dir·course_repos 가 바뀌었을 수 있음
+        self.rec_params = self.read_rec_params()   # 겹침 정책·여유 시간이 바뀌었을 수 있음
+        self._refresh()
         self.statusBar().showMessage(
             f"설정 {len(dlg.changes())}개를 {self.path.name} 에 저장했습니다 "
             f"(원본은 {self.path.name}.bak).", 6000)

@@ -785,20 +785,22 @@ def cmd_record_schedule(args) -> int:
         print(sched.describe(slots))
         return 1
 
-    print(sched.describe(slots, off))
+    pre = float(cfg.get("recording.pre_roll_minutes", 0))
+    post = float(cfg.get("recording.post_roll_minutes", 0))
+    # 겹치는 수업은 정책대로 나눈 '녹화 창' 을 따릅니다(시간표 편집기 경고와 같은 계산).
+    policy = str(cfg.get("recording.overlap", "first"))
+
+    print(sched.describe(slots, off, pre_roll_min=pre, post_roll_min=post, policy=policy))
     if args.show:
         return 0
 
-    pre = float(cfg.get("recording.pre_roll_minutes", 0))
-    post = float(cfg.get("recording.post_roll_minutes", 0))
-
     while True:
-        nxt = sched.next_occurrence(slots, pre_roll_min=pre, post_roll_min=post,
-                                    skip_days=off)
+        nxt = sched.next_window(slots, pre_roll_min=pre, post_roll_min=post,
+                                skip_days=off, policy=policy)
         if nxt is None:
             log.info("예정된 수업이 없습니다.")
             return 0
-        log.info("다음 녹화: %s  %s ~ %s", nxt.slot.name,
+        log.info("다음 녹화: %s  %s ~ %s", nxt.name,
                  nxt.start.strftime("%m-%d %H:%M"), nxt.end.strftime("%H:%M"))
         if not sched.wait_until(nxt.start):
             return 0
@@ -807,7 +809,11 @@ def cmd_record_schedule(args) -> int:
         # 않고 진짜 수업 시작에 맞춰 켭니다 — 그 사이 강의실 PC 앞에
         # 앉은 사람의 화면이 찍혀 올라가면 안 됩니다. 소리는 당겨서
         # 받으므로 수업이 일찍 시작해도 말은 놓치지 않습니다.
-        video_at = (nxt.start + timedelta(minutes=pre)).timestamp() if pre > 0 else 0.0
+        # 계획이 정한 화면 시작(넘겨받은 창이면 그 시각)이 있으면 그것을.
+        if getattr(nxt, "video_from", None) is not None:
+            video_at = nxt.video_from.timestamp()
+        else:
+            video_at = (nxt.start + timedelta(minutes=pre)).timestamp() if pre > 0 else 0.0
         course = _resolve_course(
             cfg,
             course_id=str(getattr(nxt.slot, "course_id", "") or ""),
@@ -817,13 +823,13 @@ def cmd_record_schedule(args) -> int:
         # 신호입니다 — 이게 없으면 다음 날 아침 로그를 봐도 그 수업이
         # 유실된 줄 모릅니다. '녹화 시작' 은 찍히고 '녹화 종료' 는
         # 안 찍히는 모양이라 눈에 안 띕니다.
-        result = _run_recording(cfg, layout, nxt.slot.name, minutes=minutes,
+        result = _run_recording(cfg, layout, nxt.name, minutes=minutes,
                                 upload=not args.no_upload, dry_run=args.dry_run,
                                 language=nxt.slot.language, course=course,
                                 stop_on_silence=True, video_not_before=video_at)
         if result is None:
             log.error("[%s] 녹화를 시작하지 못했습니다(다른 녹화가 돌고 있습니다). "
-                      "이 수업은 녹화되지 않았습니다.", nxt.slot.name)
+                      "이 수업은 녹화되지 않았습니다.", nxt.name)
         if args.once:
             return 0 if result is not None else 1
 
@@ -1425,28 +1431,32 @@ def cmd_stream_schedule(args) -> int:
     s = _stream_settings(cfg, args)
     slots = live.timetable(cfg, s)
     off = sched.holidays(cfg.get("recording.holidays", []))
-    print(sched.describe(slots, off).replace("다음 녹화", "다음 송출"))
+    policy = str(cfg.get("recording.overlap", "first"))
+    print(sched.describe(slots, off, pre_roll_min=s.pre_roll_minutes,
+                         post_roll_min=s.post_roll_minutes, policy=policy)
+          .replace("다음 녹화", "다음 송출"))
     if not slots or args.show:
         return 0 if slots else 1
     live.check(s)
 
     while True:
-        nxt = sched.next_occurrence(slots, pre_roll_min=s.pre_roll_minutes,
-                                    post_roll_min=s.post_roll_minutes, skip_days=off)
+        nxt = sched.next_window(slots, pre_roll_min=s.pre_roll_minutes,
+                                post_roll_min=s.post_roll_minutes, skip_days=off,
+                                policy=policy)
         if nxt is None:
             log.info("예정된 수업이 없습니다.")
             return 0
-        log.info("다음 송출: %s  %s ~ %s", nxt.slot.name,
+        log.info("다음 송출: %s  %s ~ %s", nxt.name,
                  nxt.start.strftime("%m-%d %H:%M"), nxt.end.strftime("%H:%M"))
         if not sched.wait_until(nxt.start):
             return 0
-        session = live.Session(settings=s, label=nxt.slot.name, machine=cfg.machine_label,
+        session = live.Session(settings=s, label=nxt.name, machine=cfg.machine_label,
                                dry_run=args.dry_run, until=nxt.end, slots=slots)
         try:
             code = session.run(_stream_notifier(cfg, layout, s, dry_run=args.dry_run))
         except (live.StreamError, tailnet.TailscaleError, capture.CaptureError) as exc:
             # 상시 실행이라 한 수업이 실패해도 다음 수업은 기다립니다.
-            log.error("[%s] 송출하지 못했습니다: %s", nxt.slot.name, exc)
+            log.error("[%s] 송출하지 못했습니다: %s", nxt.name, exc)
             code = 2
         if args.once:
             return code

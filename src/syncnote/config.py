@@ -182,6 +182,8 @@ DEFAULTS: dict[str, Any] = {
             "watch_stop_grace_sec": 60,
         },
         "timetable": [],
+        # 시간이 겹치는 수업: first(앞 수업 우선) / last(뒤 수업 우선) / merge(하나로)
+        "overlap": "first",
         # 쉬는 날. 이 날짜의 수업은 녹화·송출 일정에서 건너뜁니다.
         # [[recording.holidays]] date = "YYYY-MM-DD", name = "..."
         "holidays": [],
@@ -519,6 +521,7 @@ _VALID_BATCH_MODES = {"immediate", "queue"}
 _VALID_SOURCE_TRACKS = {"system", "mic", "both"}
 _VALID_FORMATS = {"txt", "srt", "vtt", "json"}
 _DAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+_VALID_OVERLAP = {"first", "last", "merge"}
 
 
 def _choice(cfg: Config, key: str, allowed: set[str], errors: list[str]) -> None:
@@ -648,6 +651,7 @@ def problems(cfg: Config) -> list[str]:
     _validate_activity(cfg, errors)
 
     _choice(cfg, "github.tag_strategy", _VALID_TAG_STRATEGIES, errors)
+    _choice(cfg, "recording.overlap", _VALID_OVERLAP, errors)
     _choice(cfg, "github.tag_strategy_eclass", _VALID_TAG_STRATEGIES, errors)
     _choice(cfg, "recording.audio.track_layout", _VALID_TRACK_LAYOUTS, errors)
     _choice(cfg, "recording.video.backend", _VALID_VIDEO_BACKENDS, errors)
