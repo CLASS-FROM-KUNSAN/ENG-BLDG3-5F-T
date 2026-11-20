@@ -16,8 +16,8 @@ from syncnote.timetable import model as M  # noqa: E402
 
 
 @pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+def app(qt_app):
+    return qt_app        # 세션 하나짜리(conftest) — 파일마다 만들면 정리 순서로 죽음
 
 
 @pytest.fixture

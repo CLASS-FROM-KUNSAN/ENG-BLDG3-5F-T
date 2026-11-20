@@ -69,8 +69,26 @@ def _form_inventory(page) -> list[dict[str, Any]]:
     )
 
 
-def run(
-    site: Site,
+def _remember_catalog(state_dir: Path, term: str, courses: list[dict]) -> None:
+    """과목 목록을 시간표 편집기용으로 남김(크롤러와 같은 형식·같은 이름 정리).
+    실패해도 탐색은 계속합니다."""
+    from types import SimpleNamespace
+
+    from . import catalog
+    from .crawler import _clean
+
+    try:
+        path = catalog.save(state_dir, term, [
+            SimpleNamespace(course_id=c["course_id"], name=_clean(c["name"]) or c["course_id"],
+                            open_type=c.get("open_type", "")) for c in courses])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("과목 목록을 남기지 못했습니다(탐색은 계속): %s", exc)
+        return
+    # 시간표 편집기가 이 줄로 '목록을 받았다' 를 압니다. 문구를 바꾸면 gui 도 같이.
+    print(f"과목 목록 {len(courses)}개를 남겼습니다: {path}", flush=True)
+
+
+def run(    site: Site,
     username: str,
     out_dir: Path,
     *,
@@ -81,6 +99,8 @@ def run(
     course_limit: int = 1,
     do_redact: bool = True,
     include_risky: bool = False,
+    catalog_dir: Path | None = None,
+    term: str = "",
 ) -> Path:
     """탐색을 수행하고 결과 폴더 경로를 돌려줍니다."""
     out_dir = Path(out_dir) / f"probe-{datetime.now():%Y%m%d-%H%M%S}"
@@ -132,6 +152,8 @@ def run(
                 )
         report["courses"] = courses
         log.info("과목 %d개를 찾았습니다.", len(courses))
+        if catalog_dir is not None and courses:
+            _remember_catalog(catalog_dir, term, courses)
         if not courses:
             report["notes"].append(
                 "과목 목록을 찾지 못했습니다. select[name='courseDTO.courseId'] 선택자가 바뀌었을 수 있습니다."

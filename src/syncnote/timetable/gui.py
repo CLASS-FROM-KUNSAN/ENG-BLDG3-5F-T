@@ -288,8 +288,7 @@ class ScreenKeeper(QObject):
     DELAY_MS = 250
 
     def __init__(self, win: QWidget, want: QSize | Callable[[], QSize] | None = None) -> None:
-        super().__init__(win)
-        self.win = win
+        super().__init__(win)            # Qt 부모 = 창. 창 참조는 parent() 로만 얻음
         self.want = want
         self._placed = False
         self._screen: QScreen | None = None
@@ -297,18 +296,32 @@ class ScreenKeeper(QObject):
         self.timer.setSingleShot(True)
         self.timer.setInterval(self.DELAY_MS)
         self.timer.timeout.connect(self.check)
+        # 창이 이 객체를 붙잡게 합니다(안 그러면 PySide 가 파이썬 쪽을 정리해
+        # eventFilter 가 속성 없는 객체로 불림 — 실제로 났음). 반대로 이 객체는
+        # 창을 속성으로 들지 않습니다: 서로 붙잡으면 순환 참조가 되고, GC 가 그것을
+        # 아무 때나 치우면서 Qt 의 부모·자식 정리와 엇갈려 접근 위반으로 죽었습니다.
+        win._screen_keeper = self
         win.installEventFilter(self)
 
     # 창마다 하나. 이미 있으면 그것을 돌려줍니다.
     @classmethod
     def attach(cls, win: QWidget,
                want: QSize | Callable[[], QSize] | None = None) -> ScreenKeeper:
-        k = win.findChild(ScreenKeeper, options=Qt.FindChildOption.FindDirectChildrenOnly)
-        return k if k is not None else cls(win, want)
+        k = getattr(win, "_screen_keeper", None)
+        return k if isinstance(k, ScreenKeeper) else cls(win, want)
+
+    @property
+    def win(self) -> QWidget | None:
+        return self.parent()
 
     def eventFilter(self, obj, event) -> bool:
+        if "want" not in self.__dict__:   # 정리 중인 객체 — 아무것도 안 함
+            return False
+        win = self.win
+        if win is None:
+            return False
         t = event.type()
-        if obj is self.win:
+        if obj is win:
             if t == QEvent.Type.Show:
                 self._hook_screen()
                 if not self._placed:
@@ -386,6 +399,8 @@ class ScreenKeeper(QObject):
 
     def _skip(self) -> bool:
         w = self.win
+        if w is None:
+            return True
         return (not w.isVisible() or w.isMaximized() or w.isFullScreen() or w.isMinimized())
 
     def check(self) -> bool:
@@ -1125,6 +1140,9 @@ class LinkDialog(QDialog):
         hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setVisible(False)
         coded = [e for e in catalog if e.id]
+        # 콤보 데이터에는 번호만 넣습니다. 파이썬 객체를 QVariant 로 넣으면 다른 창이
+        # 정리되는 순간과 겹칠 때 접근 위반으로 죽은 적이 있습니다.
+        self.coded = coded
         for idx, c in enumerate(tt.courses):
             if c.course_id.strip():
                 continue
@@ -1138,9 +1156,9 @@ class LinkDialog(QDialog):
             self.table.setItem(r, 0, check)
             self.table.setItem(r, 1, QTableWidgetItem(f"{c.name}  ({c.days_text})"))
             combo = QComboBox()
-            combo.addItem("— 연결 안 함 —", None)
-            for e in coded:
-                combo.addItem(e.label, e)
+            combo.addItem("— 연결 안 함 —", -1)
+            for n, e in enumerate(coded):
+                combo.addItem(e.label, n)
             if s.entry is not None:
                 combo.setCurrentIndex(coded.index(s.entry) + 1)
                 combo.setToolTip(f"일치 {s.score:.0%}" + (" · 비슷한 과목이 여럿" if s.ambiguous else ""))
@@ -1162,7 +1180,8 @@ class LinkDialog(QDialog):
         new = self.tt.copy()
         self.applied = 0
         for r, (idx, combo) in enumerate(self.rows):
-            entry = combo.currentData()
+            n = combo.currentData()
+            entry = self.coded[n] if isinstance(n, int) and n >= 0 else None
             if self.table.item(r, 0).checkState() != Qt.CheckState.Checked or entry is None:
                 continue
             new.courses[idx] = new.courses[idx].copy(name=entry.name, course_id=entry.id)
@@ -1256,13 +1275,18 @@ class TimetableWindow(QMainWindow):
         except OSError:
             return eclass_catalog.gather(None, repos)
 
+    def fetch_course_list(self) -> bool:
+        """eclass_probe.bat 로 과목 목록을 받아 옴(비밀번호가 없으면 set_password.bat 1)."""
+        from .eclass_fetch import CourseListFetcher
+
+        ok = CourseListFetcher(self, self.path).exec() == QDialog.DialogCode.Accepted
+        self.catalog = self._load_catalog()
+        return ok and bool(self.catalog)
+
     def link_courses(self) -> None:
-        if not self.catalog:
-            QMessageBox.information(
-                self, "eClass 과목과 연결",
-                "아직 eClass 과목 목록이 없습니다.\n"
-                "scripts\\eclass_sync.bat 으로 수집을 한 번 돌리면 이 PC 에 과목 목록이 "
-                "남고, 그다음부터 여기서 과목코드를 채울 수 있습니다.")
+        # 과목 목록이 없으면 안내 대신 바로 받아 옵니다.
+        if not self.catalog and not self.fetch_course_list():
+            self.statusBar().showMessage("eClass 과목 목록을 받지 못해 연결하지 않았습니다.", 6000)
             return
         dlg = LinkDialog(self, self.tt, self.catalog)
         if dlg.exec() != QDialog.DialogCode.Accepted:

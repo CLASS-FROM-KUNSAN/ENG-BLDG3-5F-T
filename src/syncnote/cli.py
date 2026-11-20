@@ -237,6 +237,8 @@ def cmd_eclass_probe(args) -> int:
         course_limit=args.courses,
         do_redact=not args.no_redact,
         include_risky=False,
+        catalog_dir=layout.state,           # 시간표 편집기가 과목코드를 채우는 데 씀
+        term=_term_label(),
     )
     return 0
 
