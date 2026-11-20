@@ -640,6 +640,23 @@ def test_bundle_kind_main_for_courses_sub_for_menus():
     assert bundle_kind("_계정") == "sub"
     assert bundle_filename("영어2_23") == "main_영어2_23.zip"
     assert bundle_filename("_쪽지") == "sub__쪽지.zip"
+    # 접두어로 추측하지 않음: '_' 로 시작해도 목록에 없으면 과목.
+    assert bundle_kind("_특강") == "main"
+    # macOS 등에서 NFD 로 들어와도 같은 판정.
+    import unicodedata
+    assert bundle_kind(unicodedata.normalize("NFD", "_쪽지")) == "sub"
+
+
+def test_crawler_writes_term_level_folders_only_from_the_registry():
+    """크롤러가 목록 밖 비과목 폴더를 만들면 업로드에서 main 으로 섞입니다."""
+    import re
+    from pathlib import Path
+
+    import syncnote.eclass.crawler as crawler
+
+    src = Path(crawler.__file__).read_text(encoding="utf-8")
+    literals = re.findall(r"(?:menu_dir|course_dir)\(\s*self\.term,\s*(['\"][^'\"]*['\"])", src)
+    assert literals == [], f"폴더 이름을 문자열로 직접 씀: {literals} — paths.py 상수를 쓰세요"
 
 
 def test_bundle_asset_names_carry_main_or_sub_before_the_hash():

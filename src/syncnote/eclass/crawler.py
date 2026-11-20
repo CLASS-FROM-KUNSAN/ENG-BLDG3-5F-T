@@ -27,7 +27,13 @@ from pathlib import Path
 from typing import Any
 
 from ..logging_setup import get as get_logger
-from ..paths import Layout, safe_name, unique_path
+from ..paths import (
+    ECLASS_ACCOUNT_DIR,
+    ECLASS_MESSAGE_DIR,
+    Layout,
+    safe_name,
+    unique_path,
+)
 from ..state import Store, sha256_file, sha256_text
 from . import anon, filedown, singlefile, snapshot
 from .browser import EclassBrowser
@@ -1344,7 +1350,7 @@ class Crawler:
         return "\n".join(lines), names
 
     def crawl_account(self) -> None:
-        out_dir = self.layout.menu_dir(self.term, "_계정", "계정정보")
+        out_dir = self.layout.menu_dir(self.term, ECLASS_ACCOUNT_DIR, "계정정보")
         out_dir.mkdir(parents=True, exist_ok=True)
         own = ""
         sections = []
@@ -1384,7 +1390,7 @@ class Crawler:
 
     def crawl_messages(self, box: str = "RECEIVE") -> None:
         """쪽지함 하나를 끝까지 긁습니다."""
-        out_dir = self.layout.menu_dir(self.term, "_쪽지", MENU_LABELS["message"])
+        out_dir = self.layout.menu_dir(self.term, ECLASS_MESSAGE_DIR, MENU_LABELS["message"])
         out_dir.mkdir(parents=True, exist_ok=True)
         total = 0
 

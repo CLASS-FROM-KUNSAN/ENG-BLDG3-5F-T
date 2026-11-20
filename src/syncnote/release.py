@@ -899,16 +899,20 @@ def group_by_top_folder(root: Path, files: Iterable[Path]) -> dict[str, list[Pat
     return groups
 
 
-# 학기 폴더 바로 아래에서 '_' 로 시작하는 폴더는 과목이 아닙니다
-# (크롤러가 만드는 `_쪽지`, `_계정` 등). 과목 폴더는 과목 이름 그대로입니다.
-NON_COURSE_MARK = "_"
 KIND_MAIN = "main"   # 실제 과목
 KIND_SUB = "sub"     # 쪽지·계정 등 과목이 아닌 메뉴
 
 
 def bundle_kind(folder: str) -> str:
-    """학기 폴더 바로 아래 폴더가 과목이면 'main', 아니면 'sub'."""
-    return KIND_SUB if str(folder).startswith(NON_COURSE_MARK) else KIND_MAIN
+    """학기 폴더 바로 아래 폴더가 과목이면 'main', 아니면 'sub'.
+
+    접두어('_')로 추측하지 않고 paths.ECLASS_NON_COURSE_DIRS 목록으로만
+    가릅니다. 그래야 이름이 '_' 로 시작하는 과목도 main 으로 남습니다.
+    """
+    from .paths import ECLASS_NON_COURSE_DIRS
+
+    name = unicodedata.normalize("NFC", str(folder))
+    return KIND_SUB if name in ECLASS_NON_COURSE_DIRS else KIND_MAIN
 
 
 def bundle_filename(folder: str) -> str:
