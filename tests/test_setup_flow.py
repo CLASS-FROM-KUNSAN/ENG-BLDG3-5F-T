@@ -324,3 +324,118 @@ def test_zero_exit_without_venv_counts_as_failure(app, tmp_path, fakes, monkeypa
     _run(app, dlg)
     assert dlg.state["install"] == "fail" and "만들어지지 않음" in dlg.notes["install"]
     dlg.close()
+
+
+# -- 2. 편집기가 쓰는 패키지(A1) · 깨진 설치(B2) -------------------------------
+def _reqcheck_fake(tmp_path, m, items_before, items_after, name="rq2"):
+    return _py(tmp_path, name, f"""
+        import json, os
+        after = os.path.exists(r"{m / 'fixed'}")
+        items = {items_after!r} if after else {items_before!r}
+        print(json.dumps({{"python": "x", "items": items}}, ensure_ascii=False))
+    """)
+
+
+def _item(name, status, line=None):
+    return {"line": line or f"{name}>=1", "name": name, "spec": ">=1", "status": status,
+            "installed": "1" if status != "missing" else None, "detail": status}
+
+
+def _pip_fake(tmp_path, m, out="ok", rc=0):
+    return _py(tmp_path, "pip2", f"""
+        import sys
+        open(r"{m / 'pip_args'}", "a", encoding="utf-8").write(" ".join(sys.argv[1:]) + "\\n")
+        open(r"{m / 'fixed'}", "w").write("x")
+        print({out!r})
+        sys.exit({rc})
+    """)
+
+
+def test_broken_package_is_force_reinstalled_once(app, tmp_path, fakes, monkeypatch):
+    m = fakes
+    (m / "venv").write_text("x", encoding="utf-8")
+    (m / "installed").write_text("x", encoding="utf-8")
+    rq = _reqcheck_fake(tmp_path, m, [_item("numpy", "broken")], [_item("numpy", "ok")])
+    monkeypatch.setattr(SF.SetupFlow, "reqcheck_command", lambda self: rq)
+    pip = _pip_fake(tmp_path, m)
+    monkeypatch.setattr(SF.SetupFlow, "pip_install_command",
+                        lambda self, lines, force=False: pip + (["--force"] if force else []) + lines)
+    monkeypatch.setattr(SF.SetupFlow, "editor_holds", lambda self, d: False)
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert dlg.state["verify"] == "ok"
+    assert (m / "pip_args").read_text(encoding="utf-8").strip() == "--force numpy>=1"
+    dlg.close()
+
+
+def test_package_held_by_editor_is_deferred_not_installed(app, tmp_path, fakes, monkeypatch):
+    m = fakes
+    (m / "venv").write_text("x", encoding="utf-8")
+    (m / "installed").write_text("x", encoding="utf-8")
+    rq = _reqcheck_fake(tmp_path, m, [_item("PySide6", "mismatch", "PySide6>=9"),
+                                      _item("psutil", "missing")],
+                        [_item("PySide6", "mismatch", "PySide6>=9"), _item("psutil", "ok")])
+    monkeypatch.setattr(SF.SetupFlow, "reqcheck_command", lambda self: rq)
+    pip = _pip_fake(tmp_path, m)
+    monkeypatch.setattr(SF.SetupFlow, "pip_install_command",
+                        lambda self, lines, force=False: pip + lines)
+    monkeypatch.setattr(SF.SetupFlow, "editor_holds", lambda self, d: d == "PySide6")
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert (m / "pip_args").read_text(encoding="utf-8").split() == ["psutil>=1"]   # PySide6 은 안 건드림
+    assert dlg.state["verify"] == "warn" and dlg.deferred == ["PySide6>=9"]
+    assert "닫은 뒤 설치" in dlg.notes["verify"]
+    # '편집기를 닫고 설치' → 별도 콘솔을 띄우고 편집기 종료
+    launched, quit_ = {}, []
+    monkeypatch.setattr(SF.subprocess, "Popen", lambda cmd, **k: launched.setdefault("cmd", cmd))
+    monkeypatch.setattr(SF.QApplication, "instance",
+                        staticmethod(lambda: type("A", (), {"quit": lambda s: quit_.append(1)})()))
+    dlg.deferred_btn.click()
+    app.processEvents()
+    cmd = " ".join(launched["cmd"])
+    assert "syncnote.deferred_install" in cmd and "--relaunch" in cmd and cmd.endswith("PySide6>=9")
+    assert f"--pid {os.getpid()}" in cmd and quit_
+
+
+def test_pip_lock_error_moves_package_to_after_close(app, tmp_path, fakes, monkeypatch):
+    m = fakes
+    (m / "venv").write_text("x", encoding="utf-8")
+    (m / "installed").write_text("x", encoding="utf-8")
+    rq = _reqcheck_fake(tmp_path, m, [_item("numpy", "mismatch")], [_item("numpy", "mismatch")])
+    monkeypatch.setattr(SF.SetupFlow, "reqcheck_command", lambda self: rq)
+    pip = _pip_fake(tmp_path, m, out="ERROR: [WinError 32] 다른 프로세스가 파일을 사용 중", rc=1)
+    monkeypatch.setattr(SF.SetupFlow, "pip_install_command",
+                        lambda self, lines, force=False: pip + lines)
+    monkeypatch.setattr(SF.SetupFlow, "editor_holds", lambda self, d: False)
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert dlg.deferred == ["numpy>=1"] and "잠겨" in dlg.log.toPlainText()
+    dlg.close()
+
+
+def test_still_broken_after_reinstall_suggests_vc_redist(app, tmp_path, fakes, monkeypatch):
+    m = fakes
+    (m / "venv").write_text("x", encoding="utf-8")
+    (m / "installed").write_text("x", encoding="utf-8")
+    rq = _reqcheck_fake(tmp_path, m, [_item("numpy", "broken")], [_item("numpy", "broken")])
+    monkeypatch.setattr(SF.SetupFlow, "reqcheck_command", lambda self: rq)
+    pip = _pip_fake(tmp_path, m)
+    monkeypatch.setattr(SF.SetupFlow, "pip_install_command",
+                        lambda self, lines, force=False: pip + lines)
+    monkeypatch.setattr(SF.SetupFlow, "editor_holds", lambda self, d: False)
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert dlg.need_vcredist and "VC++" in dlg.notes["verify"]
+    texts = " ".join(w.text() for w in dlg.result_scroll.widget().findChildren(gui.QLabel))
+    assert "vc_redist" in texts
+    dlg.close()
+
+
+def test_editor_holds_only_when_running_from_the_same_venv(app, tmp_path, monkeypatch):
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    monkeypatch.setattr(SF.SetupFlow, "editor_in_venv", lambda self: False)
+    assert not dlg.editor_holds("PySide6")
+    monkeypatch.setattr(SF.SetupFlow, "editor_in_venv", lambda self: True)
+    assert dlg.editor_holds("PySide6")             # 이 테스트 프로세스에 PySide6 가 올라와 있음
+    assert not dlg.editor_holds("zz-not-loaded")
+    dlg.close()

@@ -94,3 +94,48 @@ def test_setupcheck_report_shape(tmp_path):
     req.write_text("pytest>=1\nzz-not-installed-pkg\n", encoding="utf-8")
     rep = setupcheck.report(req)
     assert rep["reqs_bad"] == ["zz-not-installed-pkg"] and isinstance(rep["in_venv"], bool)
+
+
+# -- reqcheck --import (B2) · deferred_install (A1) ----------------------------
+def test_reqcheck_import_failure_is_broken(monkeypatch):
+    monkeypatch.setattr(reqcheck, "try_import",
+                        lambda m: "OSError: DLL load failed" if m == "pytest" else None)
+    item = reqcheck.check_line("pytest>=1", imports=True)
+    assert item["status"] == "broken" and "DLL load failed" in item["detail"]
+    assert reqcheck.check_line("pytest>=1")["status"] == "ok"       # --import 없으면 버전만
+
+
+def test_import_names_ignores_path_fragments(monkeypatch):
+    monkeypatch.setattr(reqcheck.metadata, "packages_distributions",
+                        lambda: {"PySide6/QtCore": ["PySide6"], "PySide6": ["PySide6"],
+                                 "_priv": ["PySide6"], "faster_whisper": ["faster-whisper"]})
+    assert reqcheck.import_names("PySide6") == ["PySide6"]
+    assert reqcheck.import_names("faster-whisper") == ["faster_whisper"]
+    assert reqcheck.import_names("unknown-pkg") == ["unknown_pkg"]
+
+
+def test_deferred_install_parses_and_installs_then_relaunches(monkeypatch):
+    from syncnote import deferred_install as D
+
+    assert D.parse(["--pid", "42", "--force", "--relaunch", "--", "a>=1", "b"]) == (
+        42, True, True, ["a>=1", "b"])
+    assert D.pip_args(["a"], force=True)[-3:] == ["--force-reinstall", "--no-deps", "a"]
+    calls = {}
+    monkeypatch.setattr(D, "wait_pid", lambda pid, timeout=120.0: calls.setdefault("pid", pid) or True)
+    monkeypatch.setattr(D.subprocess, "call", lambda args: calls.setdefault("pip", args) and 0)
+    monkeypatch.setattr(D.subprocess, "Popen", lambda args, **k: calls.setdefault("relaunch", args))
+    monkeypatch.setattr(D.time, "sleep", lambda s: None)
+    assert D.main(["--pid", "7", "--relaunch", "--", "psutil>=5.9"]) == 0
+    assert calls["pid"] == 7 and calls["pip"][-1] == "psutil>=5.9"
+    assert "timetable" in " ".join(calls["relaunch"]) or "timetable_edit.bat" in " ".join(calls["relaunch"])
+
+
+def test_deferred_install_waits_for_a_real_process():
+    import subprocess as sp
+    import sys as _sys
+
+    from syncnote import deferred_install as D
+
+    p = sp.Popen([_sys.executable, "-c", "import time; time.sleep(0.5)"])
+    assert D.wait_pid(p.pid, timeout=10)
+    assert D.wait_pid(0)

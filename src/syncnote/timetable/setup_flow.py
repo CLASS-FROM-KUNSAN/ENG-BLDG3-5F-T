@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -27,6 +28,7 @@ from typing import Any
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QGridLayout,
@@ -43,10 +45,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import setupcheck
+from .. import reqcheck, setupcheck
 from . import eclass_fetch
 
 REPO_ROOT = eclass_fetch.REPO_ROOT
+VC_REDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+# pip 가 파일 잠김으로 실패할 때(편집기·백신이 파일을 잡고 있음)
+LOCK_HINT = re.compile(r"WinError (5|32)\b|Access is denied|액세스가 거부|being used by another "
+                       r"process|다른 프로세스가 파일을 사용", re.I)
 SCRIPTS = eclass_fetch.SCRIPTS
 
 STEPS = (
@@ -99,6 +105,10 @@ class SetupFlow(QDialog):
         self._queue: list[str] = []
         self._pw_rounds = 0
         self.install_state: dict | None = None
+        self._locked: set[str] = set()
+        self.deferred: list[str] = []
+        self.deferred_force = False
+        self.need_vcredist = False
         self.setup_rc = 0
 
         lay = QVBoxLayout(self)
@@ -161,10 +171,41 @@ class SetupFlow(QDialog):
         return ["cmd.exe", "/d", "/c", str(SCRIPTS / "setup.bat")]
 
     def reqcheck_command(self) -> list[str]:
-        return [self.venv_python(), "-m", "syncnote.reqcheck", str(REPO_ROOT / "requirements.txt")]
+        # --import: 버전만 맞고 실제로는 import 가 안 되는(DLL 등) 경우까지 잡음
+        return [self.venv_python(), "-m", "syncnote.reqcheck",
+                str(REPO_ROOT / "requirements.txt"), "--import"]
 
-    def pip_install_command(self, lines: list[str]) -> list[str]:
-        return [self.venv_python(), "-m", "pip", "install", *lines]
+    def pip_install_command(self, lines: list[str], force: bool = False) -> list[str]:
+        flags = ["--force-reinstall", "--no-deps"] if force else []
+        return [self.venv_python(), "-m", "pip", "install", *flags, *lines]
+
+    def deferred_install_command(self, lines: list[str], force: bool) -> list[str]:
+        """편집기를 닫은 뒤 설치하고 다시 여는 별도 콘솔(syncnote.deferred_install)."""
+        return [self.venv_python(), "-m", "syncnote.deferred_install", "--pid", str(os.getpid()),
+                *(["--force"] if force else []), "--relaunch", "--", *lines]
+
+    # -- 편집기가 쓰는 중인 패키지(A1) -------------------------------------
+    def editor_in_venv(self) -> bool:
+        """이 편집기가 바로 그 .venv 의 파이썬으로 돌고 있나."""
+        try:
+            return Path(sys.prefix).resolve() == (REPO_ROOT / ".venv").resolve()
+        except OSError:
+            return False
+
+    def editor_loaded(self) -> set[str]:
+        """편집기 프로세스에 올라와 있는 배포 이름들(정규화)."""
+        from importlib import metadata
+
+        try:
+            mapping = metadata.packages_distributions()
+        except Exception:  # noqa: BLE001
+            return set()
+        loaded = {name.split(".")[0] for name in list(sys.modules)}
+        return {reqcheck.norm(d) for mod, ds in mapping.items() if mod in loaded for d in ds}
+
+    def editor_holds(self, dist: str) -> bool:
+        """그 패키지를 지금 바꾸면 파일이 잠겨 실패할까(편집기가 같은 .venv 에서 씀)."""
+        return self.editor_in_venv() and reqcheck.norm(dist) in self.editor_loaded()
 
     def status_command(self) -> list[str]:
         return [self.venv_python(), "-c",
@@ -326,7 +367,7 @@ class SetupFlow(QDialog):
             self._next()
         self._run(self.state_command(), post)
 
-    # 2. 라이브러리
+    # 2. 라이브러리 — 확인 → (빠짐·버전·깨짐) 고치기 → 다시 확인
     def _step_verify(self, retried: bool = False) -> None:
         def done(_rc: int, out: str) -> None:
             data = last_json(out)
@@ -335,21 +376,66 @@ class SetupFlow(QDialog):
                 self._next()
                 return
             self.reqs = data.get("items", [])
-            bad = [i for i in self.reqs if i["status"] in ("missing", "mismatch")]
             for i in self.reqs:
                 self._say(f"  {i['status']:<9} {i['name']:<16} {i.get('detail', '')}")
+            bad = [i for i in self.reqs if i["status"] in ("missing", "mismatch", "broken")]
+            # 편집기가 지금 쓰는 패키지는 바꾸면 잠겨 실패 → 닫은 뒤 설치로 미룸(A1).
+            held = [i for i in bad if i["status"] != "missing" and self.editor_holds(i["name"])]
+            held += [i for i in bad if i["name"] in self._locked and i not in held]
+            todo = [i for i in bad if i not in held]
             if not bad:
                 self._mark("verify", "ok", f"{len(self.reqs)}줄 모두 맞음")
                 self._next()
-            elif retried:
-                self._mark("verify", "warn", "설치 뒤에도 안 맞음: "
-                           + ", ".join(i["name"] for i in bad))
-                self._next()
+            elif retried or not todo:
+                self._finish_verify(bad, held)
             else:
-                self._say(f"빠졌거나 버전이 안 맞는 {len(bad)}개를 설치합니다.")
-                self._run(self.pip_install_command([i["line"] for i in bad]),
-                          lambda _rc, _o: self._step_verify(retried=True))
+                self._fix_packages(todo)
         self._run(self.reqcheck_command(), done)
+
+    def _fix_packages(self, todo: list[dict]) -> None:
+        plain = [i["line"] for i in todo if i["status"] != "broken"]
+        broken = [i["line"] for i in todo if i["status"] == "broken"]
+
+        def scan(out: str) -> None:
+            # pip 가 파일 잠김으로 실패한 패키지는 '닫은 뒤 설치' 로(A1 을 미리 못 맞힌 경우).
+            if LOCK_HINT.search(out):
+                for i in todo:
+                    self._locked.add(i["name"])
+                self._say("! 파일이 잠겨 설치하지 못했습니다(편집기·백신이 쓰는 중일 수 있음).")
+
+        def after_broken(_rc: int, out: str) -> None:
+            scan(out)
+            self._step_verify(retried=True)
+
+        def after_plain(_rc: int, out: str) -> None:
+            scan(out)
+            if broken:
+                self._say(f"import 가 안 되는 {len(broken)}개를 다시 설치합니다.")
+                self._run(self.pip_install_command(broken, force=True), after_broken)
+            else:
+                self._step_verify(retried=True)
+
+        if plain:
+            self._say(f"빠졌거나 버전이 안 맞는 {len(plain)}개를 설치합니다.")
+            self._run(self.pip_install_command(plain), after_plain)
+        else:
+            after_plain(0, "")
+
+    def _finish_verify(self, bad: list[dict], held: list[dict]) -> None:
+        self.deferred = [i["line"] for i in held]
+        self.deferred_force = any(i["status"] == "broken" for i in held)
+        parts = []
+        rest = [i for i in bad if i not in held]
+        if rest:
+            parts.append("고치지 못함: " + ", ".join(i["name"] for i in rest))
+            if any(i["status"] == "broken" for i in rest):
+                parts.append("DLL 오류라면 VC++ 재배포 패키지를 설치하세요")
+                self.need_vcredist = True
+        if held:
+            parts.append("편집기가 쓰는 중이라 닫은 뒤 설치: "
+                         + ", ".join(i["name"] for i in held))
+        self._mark("verify", "warn", " · ".join(parts))
+        self._next()
 
     # 3. 비밀번호
     def _step_password(self) -> None:
@@ -499,6 +585,20 @@ class SetupFlow(QDialog):
             st = self.state[key]
             mark = {"ok": "O", "warn": "!", "fail": "X", "skip": "-"}.get(st, "-")
             self._row(grid, r, mark, title, self.notes.get(key, ""))
+        r = len(STEPS)
+        if self.deferred:
+            self.deferred_btn = QPushButton("편집기를 닫고 설치 (끝나면 다시 엶)")
+            self.deferred_btn.setToolTip("새 콘솔 창이 편집기가 닫히기를 기다렸다가 설치합니다: "
+                                         + " ".join(self.deferred))
+            self.deferred_btn.clicked.connect(self.install_after_close)
+            grid.addWidget(self.deferred_btn, r, 1, 1, 2)
+            r += 1
+        if self.need_vcredist:
+            link = QLabel(f"DLL 오류: <a href='{VC_REDIST_URL}'>Microsoft VC++ 재배포 패키지</a> "
+                          "를 설치한 뒤 다시 실행하세요.")
+            link.setOpenExternalLinks(True)
+            link.setWordWrap(True)
+            grid.addWidget(link, r, 1, 1, 2)
         lay.addWidget(box)
 
         # 라이브러리
@@ -586,6 +686,24 @@ class SetupFlow(QDialog):
         lay.addWidget(box)
         lay.addStretch(1)
         return body
+
+    def install_after_close(self) -> None:
+        """편집기를 닫은 뒤 설치하는 콘솔을 띄우고 편집기를 닫습니다(A1)."""
+        cmd = self.deferred_install_command(self.deferred, self.deferred_force)
+        self._say(f"> {' '.join(cmd)}")
+        try:
+            subprocess.Popen(cmd, cwd=str(REPO_ROOT), env=self._env(),
+                             creationflags=eclass_fetch.NEW_CONSOLE)
+        except OSError as exc:
+            self.headline.setText(f"설치 창을 열지 못했습니다: {exc}")
+            return
+        self.accept()
+        win = self.parent()
+        if win is not None:
+            win.close()                   # 저장은 이미 끝났음(이 창은 저장 뒤에 뜸)
+        app = QApplication.instance()
+        if app is not None:
+            QTimer.singleShot(0, app.quit)
 
     # -- 정리 --------------------------------------------------------------
     def done(self, r: int) -> None:
