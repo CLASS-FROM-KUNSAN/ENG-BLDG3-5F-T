@@ -136,11 +136,22 @@ REM 또는: python -m syncnote timetable edit [-c config.toml]
   제안합니다(띄어쓰기·음절 순서 무관). `적용` 을 누르면 eClass 정식 과목명과
   과목코드로 채웁니다. 편집 메뉴 `eClass 과목과 연결…` 은 과목코드가 빈 수업을
   한꺼번에 연결합니다(확신 있는 것만 미리 체크, 한 번에 실행 취소).
-  - 과목 목록은 eClass 수집(`scripts\eclass_sync.bat`)을 한 번 돌리면
-    `<data_dir>/state/eclass_courses.json` 에 남습니다(과목코드·과목명·학기만,
-    교수 이름은 남기지 않음). 그 전에는 `[[eclass.course_repos]]` 와 수집 폴더
-    이름만 씁니다.
-  - 과목코드가 있으면 녹화 파일이 어느 과목인지 이름이 조금 달라도 정확히 판정됩니다.
+  - 과목 목록이 아직 없으면 `eClass 과목과 연결…` 이 **바로 `scripts\eclass_probe.bat` 을
+    실행**해 받아 옵니다(브라우저 창이 뜸, 출력은 편집기 창에 표시). 비밀번호가 저장돼
+    있지 않아 `secrets set eclass` 안내가 나오면, 편집기가 probe 를 닫고
+    `scripts\set_password.bat 1` 을 새 콘솔 창으로 엽니다. 거기에 비밀번호를 넣고 창을
+    닫으면 probe 를 다시 돌려 목록을 받습니다(두 번째도 비밀번호를 달라고 하면 멈추고 알림).
+  - 받은 목록은 `<data_dir>/state/eclass_courses.json` 에 남습니다(과목코드·과목명·학기만,
+    교수 이름은 남기지 않음). `eclass sync`·`eclass probe` 둘 다 이 파일을 갱신합니다.  - 과목코드가 있으면 녹화 파일이 어느 과목인지 이름이 조금 달라도 정확히 판정됩니다.
+
+**파일 → 설정 편집…(Ctrl+,)** 으로 언제든 설정을 고칠 수 있습니다. config.toml 이
+있으면 지금 값을 보여 주고, 저장하면 바꾼 줄만 고칩니다(주석·시간표 그대로, 원본은
+`.bak`). config.toml 에 없는 항목을 바꾸면 그 섹션 끝에 넣고, 섹션이 없으면 새로
+만듭니다. 창을 연 사이 파일이 다른 곳에서 바뀌었으면 저장하지 않습니다.
+`예시 값으로` 는 config.example.toml 의 값으로 되돌립니다.
+
+`config.example.toml` 은 편집기를 열 때 읽어 둡니다. 예시 파일을 고쳤다면
+**파일 → 디스크에서 다시 읽기(F5)** 로 config.toml 과 함께 다시 읽으세요.
 
 **config.toml 이 아직 없으면** 저장 전에 `새 config.toml 만들기` 창이 뜹니다.
 

@@ -72,3 +72,26 @@ def config_file(tmp: Path, example_config_text: str):
         return path
 
     return _make
+
+
+# ---------------------------------------------------------------------------
+# Qt: QApplication 은 테스트 세션 전체에 하나만, 끝까지 붙잡아 둡니다.
+# ---------------------------------------------------------------------------
+# 테스트 파일마다 `QApplication.instance() or QApplication([])` 를 모듈 범위
+# fixture 로 두면, 앞 파일의 범위가 끝날 때 마지막 참조가 사라져 앱이 정리되고,
+# 다음 파일이 남은 Qt 객체 위에서 새 앱을 만들며 접근 위반으로 죽었습니다
+# (죽는 줄이 매번 달라 추적이 어려웠음). 여기서 하나를 만들어 계속 들고 있습니다.
+_QT_APP = None
+
+
+@pytest.fixture(scope="session")
+def qt_app():
+    pytest.importorskip("PySide6")
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    global _QT_APP
+    _QT_APP = QApplication.instance() or QApplication([])
+    return _QT_APP

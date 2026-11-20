@@ -357,18 +357,31 @@ def save(path: str | Path, tt: Timetable) -> int:
     """config.toml 에 저장. 원본은 <이름>.bak. 반환: 주석 처리한 손 작성 표 수."""
     p = Path(path)
     raw = p.read_bytes() if p.exists() else b""
-    crlf = b"\r\n" in raw
     text = raw.decode("utf-8-sig") if raw else ""
     new, commented = apply_to_text(text, tt)
-    if crlf:
-        new = new.replace("\n", "\r\n")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    if raw:
-        p.with_name(p.name + ".bak").write_bytes(raw)
-    tmp = p.with_name(p.name + ".tmp")
-    tmp.write_bytes(new.encode("utf-8"))
-    _replace_with_retry(tmp, p)
+    write_text(p, new, original=raw)
     return commented
+
+
+def read_text(path: str | Path) -> str:
+    """설정 파일 본문(BOM 제거, 줄바꿈은 \\n 으로)."""
+    return Path(path).read_bytes().decode("utf-8-sig").replace("\r\n", "\n")
+
+
+def write_text(path: str | Path, text: str, original: bytes | None = None) -> None:
+    """설정 파일 쓰기 공통: 원래 CRLF 면 CRLF 유지, 원본은 <이름>.bak,
+    임시 파일에 쓴 뒤 바꿔치기(잠깐 잠겨 있으면 다시 시도)."""
+    p = Path(path)
+    if original is None:
+        original = p.read_bytes() if p.exists() else b""
+    if b"\r\n" in original:
+        text = text.replace("\r\n", "\n").replace("\n", "\r\n")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if original:
+        p.with_name(p.name + ".bak").write_bytes(original)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_bytes(text.encode("utf-8"))
+    _replace_with_retry(tmp, p)
 
 
 def _replace_with_retry(src: Path, dst: Path, tries: int = 20, wait: float = 0.05) -> None:

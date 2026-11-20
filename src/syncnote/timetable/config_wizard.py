@@ -77,8 +77,8 @@ class FieldRow(QFrame):
         self.editor = self._make_editor()
         row = QHBoxLayout()
         row.addWidget(self.editor, 1)
-        self.reset_btn = QPushButton("기본값으로")
-        self.reset_btn.setToolTip(f"예시 값: {_fmt(f.value)}")
+        self.reset_btn = QPushButton("예시 값으로")
+        self.reset_btn.setToolTip(f"config.example.toml 의 값: {_fmt(f.value)}")
         self.reset_btn.clicked.connect(self.reset)
         row.addWidget(self.reset_btn)
         lay.addLayout(row)
@@ -178,12 +178,13 @@ class FieldRow(QFrame):
     # -- 표시 -----------------------------------------------------------
     def restyle(self) -> None:
         v = self.dlg.values.get(self.field.dotted)
-        changed = v is not _BAD and v != self.field.value
+        changed = v is not _BAD and v != self.dlg.base_value(self.field)
         bad = v is _BAD
+        off_default = v is not _BAD and v != self.field.value
         issues = self.dlg.issues_for(self.field)
         color = "#C0392B" if (bad or issues) else ("#2F6FB5" if changed else "transparent")
         self.setStyleSheet(f"#fieldRow {{ border-left: 4px solid {color}; }}")
-        self.reset_btn.setVisible(changed or bad)
+        self.reset_btn.setVisible(off_default or bad)
         msgs = (["값을 읽을 수 없습니다(형식 확인)"] if bad else []) + issues
         self.note.setText("\n".join(f"⚠ {m}" for m in msgs))
         self.note.setVisible(bool(msgs))
@@ -201,31 +202,52 @@ def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-class NewConfigDialog(QDialog):
-    def __init__(self, parent: QWidget | None, example: Path, target: Path) -> None:
+class SettingsDialog(QDialog):
+    """설정 창. base_text 가 없으면 '새로 만들기', 있으면 '기존 설정 편집'.
+
+    항목 목록·설명·분류는 예시 본문(example_text)에서, 지금 값은 base_text
+    에서 읽습니다. 예시에 없는 키(손으로 더한 것)는 화면에 없지만 그대로
+    남습니다. 결과는 base(없으면 예시) 본문에 바꾼 값만 넣은 것입니다.
+    """
+
+    def __init__(self, parent: QWidget | None, example_text: str, target: Path,
+                 base_text: str | None = None,
+                 example_name: str = "config.example.toml") -> None:
         super().__init__(parent)
         from .gui import ScreenKeeper  # 순환 import 피함
 
-        self.example, self.target = Path(example), Path(target)
-        self.text = self.example.read_text(encoding="utf-8-sig")
+        self.target = Path(target)
+        self.example_name = example_name
+        self.text = example_text
+        self.edit_mode = base_text is not None
+        self.base = base_text if base_text is not None else example_text
         self.sections = S.parse(self.text)
         self.cats = S.categories(self.sections)
         self.fields = [f for s in self.sections for f in s.fields]
         self.by_dotted = {f.dotted: f for f in self.fields}
-        self.values: dict[str, Any] = {f.dotted: f.value for f in self.fields}
+        self.base_vals = S.current_values(self.base) if self.edit_mode else {}
+        self.values: dict[str, Any] = {f.dotted: self.base_value(f) for f in self.fields}
         self.problem_list: list[str] = []
         self.rows: dict[str, FieldRow] = {}
 
-        self.setWindowTitle(f"새 {self.target.name} 만들기")
+        self.setWindowTitle(f"설정 편집 — {self.target.name}" if self.edit_mode
+                            else f"새 {self.target.name} 만들기")
         self.resize(980, 720)
         ScreenKeeper.attach(self)
         lay = QVBoxLayout(self)
 
-        intro = QLabel(
-            f"<b>{_esc(self.target.name)}</b> 이 없어 <b>{_esc(self.example.name)}</b> 의 설정 "
-            f"{len(self.fields)}개를 불러왔습니다. 필요한 것만 고친 뒤 <b>만들기</b> 를 누르세요. "
-            "고치지 않은 항목은 예시 값 그대로 들어가고, 설명 주석도 그대로 남습니다. "
-            "비밀번호·토큰은 여기 적지 않습니다(<code>python -m syncnote secrets set</code>).")
+        missing = sum(1 for f in self.fields if f.dotted not in self.base_vals)
+        if self.edit_mode:
+            msg = (f"<b>{_esc(self.target.name)}</b> 의 지금 값을 보여 줍니다. 항목과 설명은 "
+                   f"<b>{_esc(example_name)}</b> 에서 읽었습니다(설정 {len(self.fields)}개"
+                   + (f", 이 파일에 없는 항목 {missing}개는 예시 값으로 표시" if missing else "")
+                   + "). 저장하면 바꾼 줄만 고치고 주석·시간표는 그대로 둡니다. ")
+        else:
+            msg = (f"<b>{_esc(self.target.name)}</b> 이 없어 <b>{_esc(example_name)}</b> 의 설정 "
+                   f"{len(self.fields)}개를 불러왔습니다. 필요한 것만 고친 뒤 <b>만들기</b> 를 "
+                   "누르세요. 고치지 않은 항목은 예시 값 그대로 들어가고, 설명 주석도 그대로 남습니다. ")
+        intro = QLabel(msg + "비밀번호·토큰은 여기 적지 않습니다"
+                       "(<code>python -m syncnote secrets set</code>).")
         intro.setWordWrap(True)
         lay.addWidget(intro)
 
@@ -259,7 +281,8 @@ class NewConfigDialog(QDialog):
         lay.addWidget(self.check_list)
 
         bb = QDialogButtonBox()
-        self.create_btn = bb.addButton("만들기", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.create_btn = bb.addButton("저장" if self.edit_mode else "만들기",
+                                       QDialogButtonBox.ButtonRole.AcceptRole)
         bb.addButton(QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(self._try_accept)
         bb.rejected.connect(self.reject)
@@ -276,16 +299,20 @@ class NewConfigDialog(QDialog):
         self.tree.setCurrentItem(first)
 
     # -- 값 -------------------------------------------------------------
+    def base_value(self, f: S.Field) -> Any:
+        """지금 파일의 값(파일에 없으면 예시 값)."""
+        return self.base_vals.get(f.dotted, f.value)
+
     def changes(self) -> dict[str, Any]:
         return {d: v for d, v in self.values.items()
-                if v is not _BAD and v != self.by_dotted[d].value}
+                if v is not _BAD and v != self.base_value(self.by_dotted[d])}
 
     def on_edit(self, f: S.Field, value: Any) -> None:
         self.values[f.dotted] = value
         self._timer.start()
 
     def result_text(self) -> str:
-        return S.apply(self.text, self.changes())
+        return S.apply(self.base, self.changes(), known=set(self.by_dotted))
 
     # -- 검사 -----------------------------------------------------------
     def revalidate(self) -> None:
@@ -448,3 +475,13 @@ class NewConfigDialog(QDialog):
             if ans != QMessageBox.StandardButton.Yes:
                 return
         self.accept()
+
+
+class NewConfigDialog(SettingsDialog):
+    """예시 파일 경로로 '새로 만들기' 창을 여는 지름길."""
+
+    def __init__(self, parent: QWidget | None, example: Path, target: Path) -> None:
+        example = Path(example)
+        super().__init__(parent, example.read_text(encoding="utf-8-sig"), target,
+                         example_name=example.name)
+        self.example = example
