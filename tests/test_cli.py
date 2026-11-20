@@ -161,9 +161,8 @@ def test_timetable_edit_without_pyside_explains_which_python(monkeypatch, capsys
     """PySide6 가 없으면 '어느 파이썬에' 깔지까지 알려 주고 1 로 끝납니다."""
     import sys
 
-    from syncnote import cli
-
     import syncnote.timetable as tt_pkg
+    from syncnote import cli
 
     # import 실패 흉내. sys.modules 만 막으면 안 됩니다 — pytest 가 테스트를
     # 모을 때 test_timetable_gui 가 gui 를 이미 import 해 패키지 속성으로
