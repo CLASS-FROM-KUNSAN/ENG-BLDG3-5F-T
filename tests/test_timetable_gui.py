@@ -153,3 +153,30 @@ def test_dropping_a_block_in_place_changes_nothing(app, win):
     drag(app, win.view, p, QPointF(p.x() + 3, p.y() + 1))   # 5분 단위 안에서 흔들기
     assert win.undo.count() == 0 and win.undo.isClean()
     assert len(win.tt.courses) == 1
+
+
+def test_dark_palette_keeps_day_names_readable(app, win):
+    """다크 모드에서 요일 이름이 흰 배경에 흰 글자로 사라졌던 버그."""
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QGraphicsTextItem
+
+    old = app.palette()
+    dark = QPalette(old)
+    for role, c in ((QPalette.ColorRole.Base, "#1E1E1E"), (QPalette.ColorRole.Window, "#202020"),
+                    (QPalette.ColorRole.Text, "#F0F0F0"), (QPalette.ColorRole.WindowText, "#F0F0F0")):
+        dark.setColor(role, QColor(c))
+    try:
+        app.setPalette(dark)
+        app.processEvents()
+        s = win.scene
+        assert s.theme.dark and s.backgroundBrush().color().lightness() < 80
+        heads = [i for i in s.items() if isinstance(i, QGraphicsTextItem)
+                 and i.toPlainText() in ("월", "화", "수", "목", "금")]
+        assert len(heads) == 5
+        bg = s.backgroundBrush().color().lightness()
+        for h in heads:
+            assert abs(h.defaultTextColor().lightness() - bg) > 100, h.toPlainText()
+    finally:
+        app.setPalette(old)
+        app.processEvents()
+    assert not win.scene.theme.dark
