@@ -41,14 +41,41 @@ def wait_pid(pid: int, timeout: float = 120.0) -> bool:
             return kernel32.WaitForSingleObject(handle, int(timeout * 1000)) == 0
         finally:
             kernel32.CloseHandle(handle)
-    end = time.monotonic() + timeout     # pragma: no cover
+    end = time.monotonic() + timeout
     while time.monotonic() < end:
-        try:
-            os.kill(pid, 0)
-        except OSError:
+        if _gone_posix(pid):
             return True
-        time.sleep(0.3)
+        time.sleep(0.1)
     return False
+
+
+def _gone_posix(pid: int) -> bool:
+    """POSIX 에서 그 프로세스가 끝났나.
+
+    끝났어도 부모가 거두기 전에는 좀비로 남아 os.kill(pid, 0) 이 성공합니다
+    (리눅스 CI 에서 실제로 10초 내내 '살아 있음' 으로 보였음). 그래서
+      1) 내 자식이면 waitpid(WNOHANG) 로 거두고,
+      2) 아니면 /proc/<pid>/stat 의 상태가 Z(좀비)인지도 봅니다.
+    """
+    try:
+        done, _status = os.waitpid(pid, os.WNOHANG)
+        if done == pid:
+            return True
+    except ChildProcessError:
+        pass                              # 내 자식이 아님 — 아래로
+    except OSError:
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False                      # 남의 프로세스지만 살아 있음
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii", errors="replace")
+        return stat.rsplit(")", 1)[1].split()[0] == "Z"
+    except (OSError, IndexError):
+        return False
 
 
 def parse(argv: list[str]) -> tuple[int, bool, bool, list[str]]:
