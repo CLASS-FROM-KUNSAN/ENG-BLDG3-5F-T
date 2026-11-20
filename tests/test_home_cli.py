@@ -12,9 +12,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from gymhall import cli
-from gymhall.backup.homestate import HomeState
-from gymhall.paths import Layout
+from syncnote import cli
+from syncnote.backup.homestate import HomeState
+from syncnote.paths import Layout
 
 
 class _Cfg:
@@ -68,7 +68,7 @@ def _prune_result(**kw):
 
 
 def _patch_backup(monkeypatch, box, result):
-    import gymhall.backup.run as run_mod
+    import syncnote.backup.run as run_mod
 
     def fake(**kw):
         box["calls"].append(kw)
@@ -79,7 +79,7 @@ def _patch_backup(monkeypatch, box, result):
 
 
 def _patch_prune(monkeypatch, box, result):
-    import gymhall.backup.prune as prune_mod
+    import syncnote.backup.prune as prune_mod
 
     def fake(**kw):
         box["calls"].append(kw)
@@ -222,7 +222,7 @@ def test_root_parent_of_home_is_refused(env, monkeypatch):
 
 
 def test_prune_skips_while_backup_holds_the_lock(env, monkeypatch):
-    from gymhall.backup.lock import exclusive
+    from syncnote.backup.lock import exclusive
 
     box, _, layout = env
     _patch_prune(monkeypatch, box, _prune_result())
@@ -233,7 +233,7 @@ def test_prune_skips_while_backup_holds_the_lock(env, monkeypatch):
 
 
 def test_backup_gives_up_when_lock_stays_busy(env, monkeypatch, capsys):
-    from gymhall.backup.lock import exclusive
+    from syncnote.backup.lock import exclusive
 
     box, _, layout = env
     monkeypatch.setattr(cli, "HOME_LOCK_WAIT_SEC", 0)

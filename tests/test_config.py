@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from gymhall import config as cfgmod
+from syncnote import config as cfgmod
 
 
 def test_example_config_is_valid(config_file):
@@ -137,7 +137,7 @@ def test_data_dir_resolution(tmp, monkeypatch):
     path.write_text('[github]\nowner="o"\nrepo="r"\n[eclass]\nenabled=false\n', encoding="utf-8")
     monkeypatch.setenv("LOCALAPPDATA", str(tmp / "appdata"))
     cfg = cfgmod.load(path)
-    assert cfg.data_dir == (tmp / "appdata" / "gym-w-hall-2f").resolve()
+    assert cfg.data_dir == (tmp / "appdata" / "sync-note").resolve()
 
 
 def test_dotted_get_and_missing_key(config_file):

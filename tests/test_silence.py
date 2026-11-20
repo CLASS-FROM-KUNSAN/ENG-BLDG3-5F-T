@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from gymhall.recorder.audio import TrackResult
-from gymhall.recorder.session import RecordingSession
+from syncnote.recorder.audio import TrackResult
+from syncnote.recorder.session import RecordingSession
 
 
 class Cfg:
@@ -37,7 +37,7 @@ def track(name, silent_for, error=None):
 
 
 def session(tmp_path, *, stop_on_silence=True, stop=900, abort=3600):
-    from gymhall.paths import Layout
+    from syncnote.paths import Layout
 
     cfg = Cfg({
         "recording.audio.silence_stop_sec": stop,
@@ -144,7 +144,7 @@ class _FakeTrack:
 
 
 def _real_recorder(tmp_path, tracks):
-    from gymhall.recorder.audio import AudioRecorder
+    from syncnote.recorder.audio import AudioRecorder
 
     rec = AudioRecorder(out_dir=tmp_path)
     rec.tracks = [_FakeTrack(t) for t in tracks]
@@ -173,7 +173,7 @@ def test_silence_peak_reaches_the_track(tmp_path, monkeypatch):
     AudioRecorder 가 silence_peak 을 들고만 있고 AudioTrack 에
     안 넘기면, 설정 키는 있는데 아무 일도 안 하는 상태가 됩니다.
     """
-    from gymhall.recorder import audio as audio_mod
+    from syncnote.recorder import audio as audio_mod
 
     made = []
 

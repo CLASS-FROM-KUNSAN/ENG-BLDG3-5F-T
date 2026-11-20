@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from gymhall.release import (
+from syncnote.release import (
     GITHUB_ASSET_LIMIT,
     ReleaseError,
     ReleaseUploader,
@@ -299,7 +299,7 @@ def _make(tmp_path, name: str, size: int = 10):
 
 
 def test_upload_filter_passes_everything_by_default(tmp_path):
-    from gymhall.release import upload_filter
+    from syncnote.release import upload_filter
 
     files = [_make(tmp_path, "a.pdf"), _make(tmp_path, "b.zip")]
     keep, dropped = upload_filter(files)
@@ -308,7 +308,7 @@ def test_upload_filter_passes_everything_by_default(tmp_path):
 
 
 def test_allow_extensions_actually_drops_other_files(tmp_path):
-    from gymhall.release import upload_filter
+    from syncnote.release import upload_filter
 
     pdf = _make(tmp_path, "강의안.pdf")
     exe = _make(tmp_path, "setup.exe")
@@ -319,7 +319,7 @@ def test_allow_extensions_actually_drops_other_files(tmp_path):
 
 
 def test_max_file_mb_actually_drops_big_files(tmp_path):
-    from gymhall.release import upload_filter
+    from syncnote.release import upload_filter
 
     small = _make(tmp_path, "small.pdf", 1024)
     big = _make(tmp_path, "big.pdf", 3 * 1024 * 1024)
@@ -331,7 +331,7 @@ def test_max_file_mb_actually_drops_big_files(tmp_path):
 
 def test_dropped_files_stay_on_disk(tmp_path):
     """뺀 파일은 지우지 않습니다. 로컬 보관이 목적입니다."""
-    from gymhall.release import upload_filter
+    from syncnote.release import upload_filter
 
     big = _make(tmp_path, "big.pdf", 2 * 1024 * 1024)
     upload_filter([big], max_file_mb=1)
@@ -339,7 +339,7 @@ def test_dropped_files_stay_on_disk(tmp_path):
 
 
 def test_missing_file_is_dropped_not_raised(tmp_path):
-    from gymhall.release import upload_filter
+    from syncnote.release import upload_filter
 
     gone = tmp_path / "없는파일.pdf"
     keep, dropped = upload_filter([gone], max_file_mb=1)
@@ -348,7 +348,7 @@ def test_missing_file_is_dropped_not_raised(tmp_path):
 
 
 def test_extension_matching_ignores_case_and_dots(tmp_path):
-    from gymhall.release import upload_filter
+    from syncnote.release import upload_filter
 
     f = _make(tmp_path, "자료.PDF")
     keep, _ = upload_filter([f], allow_extensions=[".pdf"])
@@ -392,14 +392,14 @@ def _term_tree(tmp_path):
 
 def test_same_filename_in_different_courses_got_one_asset_name(tmp_path):
     """고치기 전 동작을 못으로 박아 둡니다 — 파일 이름만 보면 전부 같습니다."""
-    from gymhall.release import asset_name
+    from syncnote.release import asset_name
 
     names = {asset_name("강의목록.md") for _ in REAL_COURSES}
     assert names == {"809b1351.md"}, names
 
 
 def test_relative_path_makes_every_asset_name_unique(tmp_path):
-    from gymhall.release import asset_name
+    from syncnote.release import asset_name
 
     root, files = _term_tree(tmp_path)
     names = [
@@ -412,7 +412,7 @@ def test_relative_path_makes_every_asset_name_unique(tmp_path):
 
 def test_upload_many_uploads_every_file_under_a_distinct_name(tmp_path):
     """실제 실행을 그대로 재현합니다. 하나도 덮어쓰지 않아야 합니다."""
-    from gymhall.release import upload_many
+    from syncnote.release import upload_many
 
     root, files = _term_tree(tmp_path)
     seen: list[str] = []
@@ -421,7 +421,7 @@ def test_upload_many_uploads_every_file_under_a_distinct_name(tmp_path):
         def upload(self, path, tag, *, prefix="", rel_path=None, **kw):
             import pathlib
 
-            from gymhall.release import asset_name
+            from syncnote.release import asset_name
             name = asset_name(pathlib.Path(path).name, prefix=prefix,
                               unique_key=rel_path or pathlib.Path(path).name)
             seen.append(name)
@@ -440,7 +440,7 @@ def test_upload_many_refuses_to_overwrite_within_one_run(tmp_path, caplog):
     """
     import logging
 
-    from gymhall.release import upload_many
+    from syncnote.release import upload_many
 
     _root, files = _term_tree(tmp_path)
 
@@ -525,7 +525,7 @@ def _tree(tmp_path):
 
 
 def test_files_are_grouped_by_their_top_folder(tmp_path):
-    from gymhall.release import group_by_top_folder
+    from syncnote.release import group_by_top_folder
 
     root, files = _tree(tmp_path)
     groups = group_by_top_folder(root, files)
@@ -534,7 +534,7 @@ def test_files_are_grouped_by_their_top_folder(tmp_path):
 
 
 def test_a_file_directly_under_the_term_folder_is_not_grouped(tmp_path):
-    from gymhall.release import group_by_top_folder
+    from syncnote.release import group_by_top_folder
 
     root, files = _tree(tmp_path)
     loose = root / "읽어보세요.md"
@@ -546,7 +546,7 @@ def test_a_file_directly_under_the_term_folder_is_not_grouped(tmp_path):
 def test_archive_keeps_korean_paths_inside(tmp_path):
     import zipfile
 
-    from gymhall.release import group_by_top_folder, make_archive
+    from syncnote.release import group_by_top_folder, make_archive
 
     root, files = _tree(tmp_path)
     members = group_by_top_folder(root, files)["영어2_23"]
@@ -559,7 +559,7 @@ def test_archive_keeps_korean_paths_inside(tmp_path):
 def test_archive_contents_round_trip(tmp_path):
     import zipfile
 
-    from gymhall.release import group_by_top_folder, make_archive
+    from syncnote.release import group_by_top_folder, make_archive
 
     root, files = _tree(tmp_path)
     members = group_by_top_folder(root, files)["영어2_23"]
@@ -578,7 +578,7 @@ def test_archive_is_byte_identical_for_the_same_input(tmp_path):
     import os
     import time
 
-    from gymhall.release import group_by_top_folder, make_archive
+    from syncnote.release import group_by_top_folder, make_archive
 
     root, files = _tree(tmp_path)
     members = group_by_top_folder(root, files)["영어2_23"]
@@ -592,7 +592,7 @@ def test_archive_is_byte_identical_for_the_same_input(tmp_path):
 
 
 def test_archive_changes_when_a_file_changes(tmp_path):
-    from gymhall.release import group_by_top_folder, make_archive
+    from syncnote.release import group_by_top_folder, make_archive
 
     root, files = _tree(tmp_path)
     members = group_by_top_folder(root, files)["영어2_23"]
@@ -603,13 +603,13 @@ def test_archive_changes_when_a_file_changes(tmp_path):
 
 
 def test_archive_of_nothing_is_none(tmp_path):
-    from gymhall.release import make_archive
+    from syncnote.release import make_archive
 
     assert make_archive(tmp_path, [], tmp_path / "x.zip") is None
 
 
 def test_each_course_zip_gets_its_own_asset_name(tmp_path):
-    from gymhall.release import asset_name
+    from syncnote.release import asset_name
 
     names = {asset_name(f"{c}.zip", unique_key=f"{c}.zip")
              for c in ("영어2_23", "운동과건강_01", "_쪽지")}
@@ -618,7 +618,7 @@ def test_each_course_zip_gets_its_own_asset_name(tmp_path):
 
 def test_index_maps_asset_names_back_to_folders(tmp_path):
     """에셋 이름이 해시라 목차 없이는 어느 과목인지 알 수 없습니다."""
-    from gymhall.release import write_index
+    from syncnote.release import write_index
 
     rows = [("2_23_84aadfbc.zip", "영어2_23", 3, 571),
             ("56740f8b.zip", "_쪽지", 1, 221)]
@@ -631,7 +631,7 @@ def test_index_maps_asset_names_back_to_folders(tmp_path):
 
 
 def test_index_counts_and_sizes_are_shown(tmp_path):
-    from gymhall.release import write_index
+    from syncnote.release import write_index
 
     text = write_index(tmp_path / "I.md", [("a.zip", "과목가", 7, 2048)],
                        tag="t").read_text("utf-8")
@@ -659,8 +659,8 @@ class _RepoSpy:
 
 
 def test_the_same_file_goes_to_every_repo(tmp_path):
-    from gymhall.release import upload_many
-    from gymhall.state import Store
+    from syncnote.release import upload_many
+    from syncnote.state import Store
 
     root = tmp_path / "r"
     root.mkdir()
@@ -676,8 +676,8 @@ def test_the_same_file_goes_to_every_repo(tmp_path):
 
 
 def test_the_same_file_is_still_skipped_within_one_repo(tmp_path):
-    from gymhall.release import upload_many
-    from gymhall.state import Store
+    from syncnote.release import upload_many
+    from syncnote.state import Store
 
     root = tmp_path / "r"
     root.mkdir()
@@ -692,7 +692,7 @@ def test_the_same_file_is_still_skipped_within_one_repo(tmp_path):
 
 
 def test_the_upload_record_remembers_which_repo(tmp_path):
-    from gymhall.state import Store
+    from syncnote.state import Store
 
     store = Store.open(tmp_path / "s.json")
     store.mark_uploaded("d1", tag="t", asset_name="a.zip", repo="org/ds")
@@ -744,7 +744,7 @@ def _up(script):
 
 
 def test_access_check_distinguishes_missing_repo_from_no_permission():
-    from gymhall.release import ReleaseError
+    from syncnote.release import ReleaseError
 
     missing = _up(lambda c: _Resp(404))
     with pytest.raises(ReleaseError, match="레포가 없거나"):
@@ -765,7 +765,7 @@ def test_access_check_distinguishes_missing_repo_from_no_permission():
 
 
 def test_ensure_repo_does_not_create_by_default():
-    from gymhall.release import ReleaseError
+    from syncnote.release import ReleaseError
 
     up = _up(lambda c: _Resp(404))
     with pytest.raises(ReleaseError, match="레포가 없거나"):
@@ -817,7 +817,7 @@ def test_a_personal_account_uses_user_repos():
 
 
 def test_name_collision_is_explained_not_a_raw_422():
-    from gymhall.release import ReleaseError
+    from syncnote.release import ReleaseError
 
     def script(call):
         if call[0] == "GET" and call[1].endswith("/users/org"):
@@ -832,7 +832,7 @@ def test_name_collision_is_explained_not_a_raw_422():
 
 
 def test_no_permission_to_create_is_explained():
-    from gymhall.release import ReleaseError
+    from syncnote.release import ReleaseError
 
     def script(call):
         if call[0] == "GET" and call[1].endswith("/users/org"):
@@ -885,7 +885,7 @@ def test_a_concurrent_creation_by_another_pc_is_not_an_error():
 
 
 def test_a_422_we_cannot_recover_from_is_still_an_error():
-    from gymhall.release import ReleaseError
+    from syncnote.release import ReleaseError
 
     def script(call):
         if call[0] == "GET" and call[1].endswith("/users/org"):
@@ -952,7 +952,7 @@ def test_find_asset_missing_release_or_name_is_none():
 
 
 def test_download_asset_returns_raw_bytes_with_octet_stream_accept():
-    payload = b'{"kind":"gymhall-home-chain"}\x00\xff'
+    payload = b'{"kind":"syncnote-home-chain"}\x00\xff'
     up, session = make_uploader([lambda n: _BytesResponse(200, payload)])
     got = up.download_asset({"id": 42, "name": "m.json"})
     assert got == payload
@@ -991,7 +991,7 @@ def test_download_asset_without_id_is_an_error():
 
 def test_a_disk_full_split_leaves_no_parts_behind(tmp_path, monkeypatch):
     """3차 검토: 쪼개다 실패하면 이미 쓴 조각이 남아 꽉 찬 디스크를 더 채웠습니다."""
-    from gymhall import release as rel
+    from syncnote import release as rel
 
     src = tmp_path / "big.zip"
     src.write_bytes(b"x" * 3000)

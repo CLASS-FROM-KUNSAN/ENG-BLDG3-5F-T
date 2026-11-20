@@ -159,7 +159,7 @@ VLC 에서 `오디오 > 오디오 트랙` 을 열면 트랙 2개가 보여야 �
 인터넷이 되는 곳에서 한 번 돌려 두세요.
 
 ```bat
-.venv\Scripts\python -m gymhall transcribe warmup
+.venv\Scripts\python -m syncnote transcribe warmup
 ```
 
 ---
@@ -185,7 +185,7 @@ powershell -ExecutionPolicy Bypass -File scripts\register_tasks.ps1
 ... -Remove
 ```
 
-등록 후 작업 스케줄러에서 `GYM-W-HALL-2F` 폴더를 열어 각 작업을
+등록 후 작업 스케줄러에서 `Sync Note` 폴더를 열어 각 작업을
 마우스 오른쪽 클릭 → **실행** 으로 한 번씩 확인하세요.
 
 ---
@@ -203,7 +203,7 @@ scripts\set_password.bat
 여러 PC 에서 같은 설정을 쓰려면 별도 위치에 두고 환경변수로 가리키세요.
 
 ```bat
-set GYMHALL_CONFIG=D:\OneDrive\설정\gymhall.toml
+set SYNCNOTE_CONFIG=D:\OneDrive\설정\syncnote.toml
 ```
 
 > 설정 파일만 클라우드에 두는 건 괜찮습니다.

@@ -11,7 +11,7 @@ JS 가 숨은 <form> 을 POST 하는 방식입니다.
 
 menuId 는 사이트 전역 메뉴 정의라서 과목이 달라도 동일합니다.
 학교가 LMS 를 개편하면 이 값이 바뀝니다. 그때는
-  python -m gymhall eclass probe --menus
+  python -m syncnote eclass probe --menus
 로 다시 뽑아 config.toml 의 [eclass.menu_ids] 에 덮어쓰면 됩니다.
 """
 

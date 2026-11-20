@@ -1,13 +1,13 @@
 ﻿<#
 .SYNOPSIS
-    작업 스케줄러에 GYM-W-HALL-2F 작업을 등록합니다.
+    작업 스케줄러에 Sync Note 작업을 등록합니다.
 
 .DESCRIPTION
     관리자 권한 PowerShell 에서 실행하세요.
 
       powershell -ExecutionPolicy Bypass -File scripts\register_tasks.ps1
 
-    등록되는 작업 (작업 스케줄러의 GYM-W-HALL-2F 폴더 아래):
+    등록되는 작업 (작업 스케줄러의 Sync Note 폴더 아래):
       EclassSync      - 지정한 간격마다 Eclass 자료 수집
       RecordSchedule  - 로그온 시 시작해 시간표대로 녹화
       RecordWatch     - 로그온 시 시작해 지정 프로그램 감지
@@ -55,7 +55,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Folder  = "\GYM-W-HALL-2F"
+$Folder  = "\Sync Note"
 $Repo    = Split-Path -Parent $PSScriptRoot
 $Scripts = Join-Path $Repo "scripts"
 $Vbs     = Join-Path $Scripts "hidden.vbs"

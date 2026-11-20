@@ -15,11 +15,11 @@ from pathlib import Path
 
 import pytest
 
-from gymhall.backup import prune
-from gymhall.backup.chain import Entry, Link, build_manifest, canonical_bytes, digest
-from gymhall.backup.homestate import HomeState
-from gymhall.backup.prune import run_prune, safe_rel
-from gymhall.paths import Layout
+from syncnote.backup import prune
+from syncnote.backup.chain import Entry, Link, build_manifest, canonical_bytes, digest
+from syncnote.backup.homestate import HomeState
+from syncnote.backup.prune import run_prune, safe_rel
+from syncnote.paths import Layout
 
 MACHINE = "lab-401"
 KST = timezone(timedelta(hours=9))
@@ -597,11 +597,11 @@ def test_protecting_the_exact_file_keeps_it(env):
 
 def test_data_dir_inside_home_is_always_protected(tmp_path):
     home = tmp_path / "home"
-    layout = Layout(home / "gymhall-data")
+    layout = Layout(home / "syncnote-data")
     up = FakeUploader()
     chain = Chain(up, home)
-    f = put(home, "gymhall-data/logs/gymhall.log", b"log")
-    chain.publish(["gymhall-data/logs/gymhall.log"])
+    f = put(home, "syncnote-data/logs/syncnote.log", b"log")
+    chain.publish(["syncnote-data/logs/syncnote.log"])
     with HomeState.open(tmp_path / "s.sqlite") as state:
         chain.anchor(state)
         res = run_prune(home=home, uploader=up, state=state, layout=layout, machine=MACHINE,
@@ -1334,7 +1334,7 @@ def test_old_split_chains_are_named_and_skip_the_parts_json_download(env, caplog
     f = put(home, "big.bin", b"x" * 10)
     chain.publish(["big.bin"], parts=2, part_hashes=False)
     chain.anchor(state)
-    with caplog.at_level("WARNING", logger="gymhall"):
+    with caplog.at_level("WARNING", logger="syncnote"):
         res = go(env)
     assert res.deleted == 0 and f.exists()
     assert any("옛 분할 묶음" in m for m in caplog.messages), caplog.messages

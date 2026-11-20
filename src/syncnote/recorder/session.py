@@ -146,7 +146,7 @@ class RecordingSession:
                              "장치 문제로 보고 세션을 중단합니다(업로드 안 함).")
         if self.silence_stop_sec and quiet >= self.silence_stop_sec:
             return ("stop", f"모든 트랙이 {quiet / 60:.0f}분째 무음입니다. "
-                            "녹화를 멈춥니다. python -m gymhall devices 로 "
+                            "녹화를 멈춥니다. python -m syncnote devices 로 "
                             "장치를 확인하세요.")
         return None
 

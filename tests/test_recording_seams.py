@@ -24,8 +24,8 @@ from pathlib import Path
 
 import pytest
 
-from gymhall import cli
-from gymhall.paths import Layout
+from syncnote import cli
+from syncnote.paths import Layout
 
 
 class Cfg:
@@ -74,19 +74,19 @@ class _FakeVideo:
 
 
 def _result():
-    from gymhall.recorder.session import SessionResult
+    from syncnote.recorder.session import SessionResult
 
     return SessionResult("수업", datetime.now())
 
 
 def _session(tmp_path, monkeypatch, *, video_not_before):
-    from gymhall.recorder import session as S
+    from syncnote.recorder import session as S
 
     _FakeVideo.instances = []
     monkeypatch.setattr(S, "VideoRecorder", _FakeVideo)
     # 오디오와 합치기는 이 테스트의 관심사가 아닙니다.
     monkeypatch.setattr(S, "mux", lambda *a, **kw: None)
-    from gymhall.recorder import ffmpeg_util
+    from syncnote.recorder import ffmpeg_util
     monkeypatch.setattr(ffmpeg_util, "duration_of", lambda p: 1.0)
     return S.RecordingSession(
         Cfg({"recording.audio.enabled": False,
@@ -132,7 +132,7 @@ def test_without_a_deadline_the_loop_does_not_stall(tmp_path, monkeypatch):
 @pytest.fixture
 def captured_session(monkeypatch, tmp_path):
     """RecordingSession 에 실제로 들어간 인자를 잡아 둡니다."""
-    from gymhall.recorder import session as S
+    from syncnote.recorder import session as S
 
     seen = {}
 
@@ -182,7 +182,7 @@ def test_schedule_delays_video_to_the_real_class_time(monkeypatch, tmp_path):
     """
     from datetime import datetime, timedelta
 
-    from gymhall.recorder import schedule as sched
+    from syncnote.recorder import schedule as sched
 
     pre = 2.0
     real_start = datetime.now() + timedelta(minutes=5)
@@ -254,15 +254,15 @@ class _NoopCrawler:
         pass
 
     def run(self, *a, **kw):
-        from gymhall.eclass.crawler import Stats
+        from syncnote.eclass.crawler import Stats
 
         return Stats()
 
 
 @pytest.fixture
 def sync_args(monkeypatch, tmp_path):
-    from gymhall.eclass import browser as br_mod
-    from gymhall.eclass import crawler as cr_mod
+    from syncnote.eclass import browser as br_mod
+    from syncnote.eclass import crawler as cr_mod
 
     monkeypatch.setattr(br_mod, "EclassBrowser", _NoopBrowser)
     monkeypatch.setattr(cr_mod, "Crawler", _NoopCrawler)

@@ -99,7 +99,7 @@ def test_hidden_vbs_returns_the_child_exit_code():
 # ---------------------------------------------------------------------------
 def test_manual_upload_passes_a_root_so_same_names_survive():
     src = (Path(__file__).resolve().parents[1]
-           / "src/gymhall/cli.py").read_text(encoding="utf-8")
+           / "src/syncnote/cli.py").read_text(encoding="utf-8")
     body = src[src.index("def cmd_upload"):src.index("def cmd_config_check")]
     assert "root=" in body, (
         "root 가 없으면 에셋 이름이 파일 이름만으로 정해져 "

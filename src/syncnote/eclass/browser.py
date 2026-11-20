@@ -198,7 +198,7 @@ class EclassBrowser:
                     "그 세션을 로그아웃하거나 잠시 뒤 다시 시도하세요.")
         if any(h in joined for h in WRONG_CREDENTIAL_HINTS):
             return ("아이디 또는 비밀번호가 맞지 않습니다. "
-                    "python -m gymhall secrets set eclass 로 다시 저장하세요.")
+                    "python -m syncnote secrets set eclass 로 다시 저장하세요.")
         return ""
 
     def __exit__(self, *exc_info) -> None:
@@ -276,14 +276,14 @@ class EclassBrowser:
         if password is None:
             password = secrets.get("eclass")
         if not password:
-            raise LoginError("비밀번호가 없습니다. python -m gymhall secrets set eclass")
+            raise LoginError("비밀번호가 없습니다. python -m syncnote secrets set eclass")
 
         id_input, id_sel = self._first_visible(ID_SELECTORS)
         pw_input, pw_sel = self._first_visible(PW_SELECTORS)
         if id_input is None or pw_input is None:
             raise LoginError(
                 "로그인 입력란을 찾지 못했습니다. 학교가 페이지를 바꿨을 수 있습니다.\n"
-                "  python -m gymhall eclass probe --no-headless\n"
+                "  python -m syncnote eclass probe --no-headless\n"
                 "로 실제 화면을 확인한 뒤 browser.py 의 선택자를 고치세요."
             )
 

@@ -24,8 +24,8 @@ sync_playwright = pytest.importorskip(
     "playwright.sync_api", reason="playwright 미설치"
 ).sync_playwright
 
-from gymhall.eclass import crawler as C  # noqa: E402
-from gymhall.eclass import filedown as F  # noqa: E402
+from syncnote.eclass import crawler as C  # noqa: E402
+from syncnote.eclass import filedown as F  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
 # 테스트 서버가 /fileDown 에 무엇으로 답할지. 테스트가 바꿉니다.
@@ -204,9 +204,9 @@ class _Shim:
 
 
 def _crawler(browser, server, tmp_path, fixture):
-    from gymhall.eclass.urls import Site
-    from gymhall.paths import Layout
-    from gymhall.state import Store
+    from syncnote.eclass.urls import Site
+    from syncnote.paths import Layout
+    from syncnote.state import Store
 
     pg = browser.new_page()
     pg.goto(f"{server}/{fixture}")
@@ -629,7 +629,7 @@ def test_weeks_without_any_item_are_not_a_warning(lesson, monkeypatch, caplog):
     weeks = [{"title": f"{i}. {i}주차", "rows": []} for i in range(1, 17)]
     monkeypatch.setattr(lesson, "read_lesson_weeks", lambda: weeks)
     monkeypatch.setattr(lesson, "_download_attachments", lambda _d: C.Attachments())
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         lesson.crawl_lecture_list(C.Course("x", "영어2_23", "이교수"))
     assert _warnings(caplog) == [], _warnings(caplog)
     assert any("강의 항목이 하나도" in r.getMessage() for r in caplog.records)
@@ -641,7 +641,7 @@ def test_a_second_run_does_not_cry_zero_handouts(lesson, caplog):
     course = C.Course("2026211605005", "기초웹프로그래밍_05", "이교수")
     lesson.crawl_lecture_list(course)
     caplog.clear()
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         lesson.crawl_lecture_list(course)
     assert _warnings(caplog) == [], _warnings(caplog)
     assert any("이미 받아 뒀습니다" in r.getMessage() for r in caplog.records), \
@@ -654,7 +654,7 @@ def test_the_second_run_log_does_not_lead_with_zero(lesson, caplog):
     course = C.Course("2026211605005", "기초웹프로그래밍_05", "이교수")
     lesson.crawl_lecture_list(course)
     caplog.clear()
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         lesson.crawl_lecture_list(course)
     line = next(r.getMessage() for r in caplog.records if "강의목록" in r.getMessage())
     assert "교안 0개" not in line, f"0 이 앞에 왔습니다: {line}"
@@ -665,7 +665,7 @@ def test_items_without_any_handout_still_warn_with_what_was_on_screen(
         lesson, monkeypatch, caplog):
     """항목은 있는데 첨부를 못 찾으면 경고 — 선택자 고장과 같은 모양입니다."""
     monkeypatch.setattr(lesson, "_download_attachments", lambda _d: C.Attachments())
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         lesson.crawl_lecture_list(C.Course("2026211605005", "과목가", "이교수"))
     w = _warnings(caplog)
     assert any("강의 항목 15개" in m and "교안을 하나도" in m for m in w), w
@@ -681,7 +681,7 @@ def test_a_broken_attachment_selector_still_warns(lesson, monkeypatch, caplog):
     알려 줍니다. 이 테스트가 그 안전망입니다.
     """
     monkeypatch.setattr(lesson, "_attachment_locators", lambda: None)
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         lesson.crawl_lecture_list(C.Course("2026211605005", "과목가", "이교수"))
     w = _warnings(caplog)
     assert any("교안을 하나도" in m for m in w), (
@@ -705,7 +705,7 @@ def test_items_without_any_button_are_not_a_warning(lesson, caplog):
         '<a href="/Main.do?cmd=viewHome">홈</a>'
         '<input type="image" onclick="searchSubmit();">'
     )
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         lesson.crawl_lecture_list(C.Course("CORS_x", "법정교육", "교수"))
     assert _warnings(caplog) == [], _warnings(caplog)
     assert any("누를 버튼이 하나도" in r.getMessage() for r in caplog.records)
@@ -714,7 +714,7 @@ def test_items_without_any_button_are_not_a_warning(lesson, caplog):
 def test_the_warning_shows_the_buttons_inside_the_rows(lesson, monkeypatch, caplog):
     """화면 전체 덤프는 상단 메뉴로 다 차서 강의 줄이 안 나왔습니다(2026-11-13)."""
     monkeypatch.setattr(lesson, "_attachment_locators", lambda: None)
-    with caplog.at_level("INFO", logger="gymhall"):
+    with caplog.at_level("INFO", logger="syncnote"):
         lesson.crawl_lecture_list(C.Course("2026211605005", "과목가", "이교수"))
     w = _warnings(caplog)
     assert any("강의 줄 안의 버튼 14개" in m and "fileDown(" in m for m in w), w
@@ -723,7 +723,7 @@ def test_the_warning_shows_the_buttons_inside_the_rows(lesson, monkeypatch, capl
 def test_handouts_found_means_no_diagnostic_noise(lesson, caplog):
     """받았으면 덤프를 찍지 않습니다. 매 과목 쏟아지면 안 봅니다."""
     SERVER_MODE["mode"] = "pdf"
-    with caplog.at_level("WARNING", logger="gymhall"):
+    with caplog.at_level("WARNING", logger="syncnote"):
         lesson.crawl_lecture_list(
             C.Course("2026211605005", "기초웹프로그래밍_05", "이교수"))
     assert "이 화면에 있는 것들" not in caplog.text
@@ -755,9 +755,9 @@ def test_already_downloaded_files_are_counted(lesson, tmp_path):
 
 
 def test_a_page_without_attachments_reports_zero_candidates(browser, server, tmp_path):
-    from gymhall.eclass.urls import Site
-    from gymhall.paths import Layout
-    from gymhall.state import Store
+    from syncnote.eclass.urls import Site
+    from syncnote.paths import Layout
+    from syncnote.state import Store
 
     pg = browser.new_page()
     pg.goto(f"{server}/{EMPTY}")

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from gymhall import release as R
+from syncnote import release as R
 
 
 class _Up:
@@ -86,9 +86,9 @@ def test_upload_many_still_works_without_a_tally(tmp_path):
 @pytest.fixture
 def harness(tmp_path, monkeypatch):
     """_upload_eclass 를 돌리되 네트워크는 전부 가짜로."""
-    from gymhall import cli
-    from gymhall.paths import Layout
-    from gymhall.state import Store
+    from syncnote import cli
+    from syncnote.paths import Layout
+    from syncnote.state import Store
 
     layout = Layout(tmp_path)
     root = layout.eclass / "2026-2" / "과목가"
@@ -170,9 +170,9 @@ def test_a_successful_run_says_nothing_to_actions(harness, capsys):
 
 def test_nothing_to_upload_is_not_a_failure(tmp_path, monkeypatch):
     """폴더가 아예 없는 것은 실패가 아닙니다."""
-    from gymhall import cli
-    from gymhall.paths import Layout
-    from gymhall.state import Store
+    from syncnote import cli
+    from syncnote.paths import Layout
+    from syncnote.state import Store
 
     class Cfg:
         machine_label = ""
@@ -189,7 +189,7 @@ def test_nothing_to_upload_is_not_a_failure(tmp_path, monkeypatch):
 
 
 def test_actions_error_is_quiet_outside_actions(monkeypatch, capsys):
-    from gymhall import cli
+    from syncnote import cli
 
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     cli._actions_error("제목", "내용")
@@ -211,7 +211,7 @@ def test_actions_error_is_quiet_outside_actions(monkeypatch, capsys):
 #
 # 그래서 '자연 발생' 대신 tally 를 직접 채워 **판정**을 검사합니다.
 def test_a_name_collision_alone_makes_the_run_fail(harness, capsys, monkeypatch):
-    from gymhall import release as real_release
+    from syncnote import release as real_release
 
     run, _ = harness
 
@@ -229,7 +229,7 @@ def test_a_name_collision_alone_makes_the_run_fail(harness, capsys, monkeypatch)
 
 def test_collisions_are_not_confused_with_duplicates(harness, capsys, monkeypatch):
     """'이미 올라가 있어서 건너뜀' 은 실패가 아닙니다."""
-    from gymhall import release as real_release
+    from syncnote import release as real_release
 
     run, _ = harness
 
@@ -249,8 +249,8 @@ def test_collisions_are_not_confused_with_duplicates(harness, capsys, monkeypatc
 # "완료 0건" 을 찍고 종료 코드 0 이었습니다.
 @pytest.fixture
 def upload_cmd(tmp_path, monkeypatch):
-    from gymhall import cli
-    from gymhall.paths import Layout
+    from syncnote import cli
+    from syncnote.paths import Layout
 
     src = tmp_path / "자료"
     src.mkdir()
@@ -312,9 +312,9 @@ def test_eclass_release_is_named_by_date(tmp_path, monkeypatch):
     """
     from datetime import date
 
-    from gymhall import cli
-    from gymhall.paths import Layout
-    from gymhall.state import Store
+    from syncnote import cli
+    from syncnote.paths import Layout
+    from syncnote.state import Store
 
     layout = Layout(tmp_path)
     root = layout.eclass / "2026-2" / "과목가"

@@ -24,8 +24,8 @@ sync_playwright = pytest.importorskip(
     "playwright.sync_api", reason="playwright 미설치"
 ).sync_playwright
 
-from gymhall.eclass import browser as B  # noqa: E402
-from gymhall.eclass.urls import parse_course_option  # noqa: E402
+from syncnote.eclass import browser as B  # noqa: E402
+from syncnote.eclass.urls import parse_course_option  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CHROMIUM_CANDIDATES = [
@@ -179,7 +179,7 @@ def test_course_options_are_scraped(browser, server):
 
 def test_board_rows_are_scraped(browser, server):
     """crawler.read_board_rows() 와 같은 JS 를 실제 DOM 에 돌립니다."""
-    from gymhall.eclass.crawler import BOARD_ROW
+    from syncnote.eclass.crawler import BOARD_ROW
 
     pg = browser.new_page()
     try:
@@ -234,10 +234,10 @@ def _crawler(page):
     import tempfile
     from pathlib import Path as _P
 
-    from gymhall.eclass.crawler import Crawler
-    from gymhall.eclass.urls import Site
-    from gymhall.paths import Layout
-    from gymhall.state import Store
+    from syncnote.eclass.crawler import Crawler
+    from syncnote.eclass.urls import Site
+    from syncnote.paths import Layout
+    from syncnote.state import Store
 
     tmp = _P(tempfile.mkdtemp())
     layout = Layout(tmp)
@@ -385,8 +385,8 @@ def test_confirm_is_accepted_so_page_proceeds(browser, server):
 )
 def test_diagnose_maps_message_to_cause(message, expect):
     """오류 메시지가 '로그인 실패' 한 줄이면 사용자가 뭘 해야 할지 모릅니다."""
-    from gymhall.eclass.browser import EclassBrowser
-    from gymhall.eclass.urls import Site
+    from syncnote.eclass.browser import EclassBrowser
+    from syncnote.eclass.urls import Site
 
     br = EclassBrowser.__new__(EclassBrowser)  # __init__ 없이 메서드만 씁니다
     br.site = Site()
@@ -399,7 +399,7 @@ def test_diagnose_maps_message_to_cause(message, expect):
 
 def test_lock_warning_takes_priority():
     """잠김은 중복/오타보다 먼저 알려야 합니다. 더 재시도하면 악화됩니다."""
-    from gymhall.eclass.browser import EclassBrowser
+    from syncnote.eclass.browser import EclassBrowser
 
     br = EclassBrowser.__new__(EclassBrowser)
     result = br.diagnose(["비밀번호 5회 오류로 계정이 잠겼습니다"])

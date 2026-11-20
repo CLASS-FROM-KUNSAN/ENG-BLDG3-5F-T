@@ -13,8 +13,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from gymhall import cli
-from gymhall.recorder import terminal as t
+from syncnote import cli
+from syncnote.recorder import terminal as t
 
 OUT = Path("out.wav")
 
@@ -207,7 +207,7 @@ def test_cli_parses_audio_record_options():
 
 
 def test_cli_plan_merges_config_and_flags():
-    from gymhall import config as cfgmod
+    from syncnote import config as cfgmod
 
     cfg = cfgmod.Config(data=cfgmod._deep_merge(cfgmod.DEFAULTS, {}))
     args = cli.build_parser().parse_args(["audio", "record", "-t", "30", "-f", "flac"])

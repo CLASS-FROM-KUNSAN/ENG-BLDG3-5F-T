@@ -1,4 +1,4 @@
-# GYM-W-HALL-2F
+# Sync Note
 
 국립군산대학교 **eClass 자료 자동 수집** + **화면/음성 녹화 및 전사**,
 그리고 그 결과물을 **GitHub 릴리스에 자동 업로드**하는 도구 모음입니다.
@@ -120,7 +120,7 @@ scripts\record_now.bat -l 자료구조 -m 90 REM 이름과 길이 지정
 | 수동 | `record_now.bat` | **가장 확실합니다.** 들고 다니는 노트북에 적합 |
 | 시간표 | `record_schedule.bat` | 고정된 시간표, 늘 같은 자리 |
 | 프로그램 감지 | `record_watch.bat` | Zoom/Webex 온라인 강의 |
-| 터미널 | `.venv\Scripts\python -m gymhall record start` | 직접 호출 |
+| 터미널 | `.venv\Scripts\python -m syncnote record start` | 직접 호출 |
 
 #### 소리만 — 터미널 녹음기 (FFmpeg · SoX · arecord)
 
@@ -128,10 +128,10 @@ scripts\record_now.bat -l 자료구조 -m 90 REM 이름과 길이 지정
 돌고, cron · 작업 스케줄러에 그대로 걸 수 있습니다.
 
 ```sh
-python -m gymhall audio record -t 60 -f mp3   # FFmpeg: 정확히 60초
-python -m gymhall audio record --vad --loop   # SoX: 소리가 날 때만, 계속
-python -m gymhall audio record -b arecord     # Linux: 설치 없는 ALSA 기본 도구
-python -m gymhall audio tools                 # 무엇이 깔려 있고 무엇이 실행될지
+python -m syncnote audio record -t 60 -f mp3   # FFmpeg: 정확히 60초
+python -m syncnote audio record --vad --loop   # SoX: 소리가 날 때만, 계속
+python -m syncnote audio record -b arecord     # Linux: 설치 없는 ALSA 기본 도구
+python -m syncnote audio tools                 # 무엇이 깔려 있고 무엇이 실행될지
 ```
 
 | 도구 | 지원 OS | 핵심 자동화 기능 | 쓸 만한 때 |
@@ -153,8 +153,8 @@ PC 소리(또는 마이크)를 실시간으로 내보내고 **같은 tailnet 의
 올라가고, 끝나면 이슈에 길이·청취 수를 남기고 닫습니다.
 
 ```bat
-scripts\stream_now.bat                     REM 또는 python -m gymhall stream start
-python -m gymhall stream link              REM Tailscale 상태와 링크 미리 보기
+scripts\stream_now.bat                     REM 또는 python -m syncnote stream start
+python -m syncnote stream link              REM Tailscale 상태와 링크 미리 보기
 ```
 
 - 오디오 서버: 내장 HTTP 서버(설치 없음) 또는 **Icecast**(오픈소스 스트리밍 서버)
@@ -210,7 +210,7 @@ REM   예상 1시간 12분 (이 기기 실측 4회 기준, small/cpu)
 처음 한 번은 인터넷이 되는 곳에서 모델을 받아 두세요.
 
 ```bat
-.venv\Scripts\python -m gymhall transcribe warmup
+.venv\Scripts\python -m syncnote transcribe warmup
 ```
 
 ### 4. GitHub 릴리스 업로드
@@ -227,24 +227,24 @@ REM   예상 1시간 12분 (이 기기 실측 4회 기준, small/cpu)
 ## 전체 명령
 
 ```
-python -m gymhall doctor                 환경 점검
-python -m gymhall devices                오디오 장치 목록
-python -m gymhall config check           설정 검증
-python -m gymhall secrets set eclass     비밀번호 저장
-python -m gymhall eclass probe           페이지 구조 탐색(디버그)
-python -m gymhall eclass sync            자료 수집 + 업로드
-python -m gymhall record start           수동 녹화
-python -m gymhall record schedule        시간표 대기
-python -m gymhall record watch           프로그램 감지 대기
-python -m gymhall audio record           소리만 녹음 (FFmpeg / SoX / arecord)
-python -m gymhall audio tools            터미널 녹음 도구 점검
-python -m gymhall stream start           실시간 송출 (Tailscale, 링크 -> 이슈)
-python -m gymhall stream schedule        시간표대로 수업마다 송출
-python -m gymhall stream link            송출 링크·Tailscale 점검
-python -m gymhall stream cleanup         남은 tailscale serve 끄기
-python -m gymhall transcribe queue       대기열 전사
-python -m gymhall transcribe warmup      모델 미리 받기
-python -m gymhall upload <경로>          임의 파일 업로드
+python -m syncnote doctor                 환경 점검
+python -m syncnote devices                오디오 장치 목록
+python -m syncnote config check           설정 검증
+python -m syncnote secrets set eclass     비밀번호 저장
+python -m syncnote eclass probe           페이지 구조 탐색(디버그)
+python -m syncnote eclass sync            자료 수집 + 업로드
+python -m syncnote record start           수동 녹화
+python -m syncnote record schedule        시간표 대기
+python -m syncnote record watch           프로그램 감지 대기
+python -m syncnote audio record           소리만 녹음 (FFmpeg / SoX / arecord)
+python -m syncnote audio tools            터미널 녹음 도구 점검
+python -m syncnote stream start           실시간 송출 (Tailscale, 링크 -> 이슈)
+python -m syncnote stream schedule        시간표대로 수업마다 송출
+python -m syncnote stream link            송출 링크·Tailscale 점검
+python -m syncnote stream cleanup         남은 tailscale serve 끄기
+python -m syncnote transcribe queue       대기열 전사
+python -m syncnote transcribe warmup      모델 미리 받기
+python -m syncnote upload <경로>          임의 파일 업로드
 ```
 
 모든 명령에 `--dry-run`(업로드 흉내), `--no-upload`, `--log-level DEBUG`
@@ -258,7 +258,7 @@ python -m gymhall upload <경로>          임의 파일 업로드
 config.toml              ← 조정은 전부 여기서. git 에 올라가지 않습니다.
 requirements.txt
 scripts\                 ← .bat / .vbs / PowerShell
-src\gymhall\
+src\syncnote\
   config.py              설정 로드와 검증
   release.py             릴리스 업로드 + 2GiB 분할
   state.py               중복 방지 기록
@@ -300,7 +300,7 @@ docs\
   STREAMING.md           실시간 송출 (Tailscale + GitHub 이슈)
 ```
 
-산출물은 저장소가 아니라 `%LOCALAPPDATA%\gym-w-hall-2f\` 에 쌓입니다
+산출물은 저장소가 아니라 `%LOCALAPPDATA%\sync-note\` 에 쌓입니다
 (`general.data_dir` 로 바꿀 수 있습니다).
 
 ---
@@ -313,7 +313,7 @@ docs\
 - **세그먼트 사이에 1초 안팎의 공백**이 생깁니다. 강의에는 문제가 없지만
   연속 측정에는 맞지 않습니다.
 - **학교가 LMS 를 개편하면 수집이 멈춥니다.** `eclass_probe.bat` 으로
-  새 구조를 떠서 `src/gymhall/eclass/urls.py` 를 고쳐야 합니다.
+  새 구조를 떠서 `src/syncnote/eclass/urls.py` 를 고쳐야 합니다.
 - **작업 스케줄러 기반 자동 녹화는 놓칠 수 있습니다.** 노트북이 꺼져
   있거나 절전이면 그 수업은 그냥 사라집니다. 중요한 수업은 직접 시작하세요.
   (자료 수집은 GitHub Actions 로 이 문제를 피할 수 있지만, 녹화는
@@ -354,6 +354,6 @@ CI 는 **Python 3.10 / 3.11 / 3.12 / 3.13 에서 전부** 돌립니다.
 ## 문제가 생기면
 
 1. `scripts\doctor.bat` — 대부분 여기서 원인이 나옵니다.
-2. 로그 파일 — `doctor.bat` 이 알려 주는 데이터 폴더의 `logs\gymhall.log`.
+2. 로그 파일 — `doctor.bat` 이 알려 주는 데이터 폴더의 `logs\syncnote.log`.
    작업 스케줄러로 돌리면 창이 안 뜨므로 **로그가 유일한 단서**입니다.
 3. [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)

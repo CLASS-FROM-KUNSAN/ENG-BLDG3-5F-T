@@ -10,7 +10,7 @@ from datetime import datetime
 
 import pytest
 
-from gymhall import courses as C
+from syncnote import courses as C
 
 
 class Cfg:
@@ -187,7 +187,7 @@ REPOS = [{"id": "1", "name": "자료구조", "repo": "ds-2026-2"}]
 
 
 def _uploader(cfg, course=None):
-    from gymhall.cli import _uploader as f
+    from syncnote.cli import _uploader as f
 
     return f(cfg, dry_run=True, course=course)
 

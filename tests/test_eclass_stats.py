@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from gymhall.eclass.crawler import Stats
+from syncnote.eclass.crawler import Stats
 
 
 def _real_run() -> Stats:

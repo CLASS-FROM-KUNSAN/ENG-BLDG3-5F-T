@@ -25,8 +25,8 @@ from pathlib import Path
 
 import pytest
 
-from gymhall import cli
-from gymhall.paths import Layout
+from syncnote import cli
+from syncnote.paths import Layout
 
 
 class Cfg:
@@ -68,7 +68,7 @@ def queue_cmd(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cli, "_load", lambda _a: (
         Cfg({"github.enabled": False}), Layout(tmp_path)))
-    import gymhall.transcribe.batch as batch
+    import syncnote.transcribe.batch as batch
 
     monkeypatch.setattr(batch, "run_queue", _fake_run_queue)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
@@ -114,7 +114,7 @@ def test_a_vanished_file_is_also_reported(queue_cmd):
 # ---------------------------------------------------------------------
 def test_run_queue_separates_an_empty_queue_from_total_failure(tmp_path, monkeypatch):
     """돌려주는 리스트만 보면 둘이 똑같이 빈 리스트입니다."""
-    import gymhall.transcribe.batch as batch
+    import syncnote.transcribe.batch as batch
 
     layout = Layout(tmp_path)
     layout.state.mkdir(parents=True, exist_ok=True)
@@ -136,7 +136,7 @@ def test_run_queue_separates_an_empty_queue_from_total_failure(tmp_path, monkeyp
 
 
 def test_run_queue_reports_nothing_attempted_for_an_empty_queue(tmp_path):
-    import gymhall.transcribe.batch as batch
+    import syncnote.transcribe.batch as batch
 
     layout = Layout(tmp_path)
     layout.state.mkdir(parents=True, exist_ok=True)
@@ -154,7 +154,7 @@ def test_record_start_fails_when_another_recording_holds_the_lock(
     monkeypatch.setattr(cli, "_load", lambda _a: (Cfg(), Layout(tmp_path)))
     monkeypatch.setattr(cli, "_resolve_course", lambda *a, **kw: None)
     monkeypatch.setattr(cli, "_run_recording", lambda *a, **kw: None)
-    with caplog.at_level("ERROR", logger="gymhall"):
+    with caplog.at_level("ERROR", logger="syncnote"):
         assert cli.cmd_record_start(_Args()) == 1
     assert "하나도 하지 못했습니다" in caplog.text
 
@@ -229,7 +229,7 @@ def test_the_guard_catches_a_tally_less_call(tmp_path):
 
 def test_run_queue_counts_a_vanished_file(tmp_path, monkeypatch):
     """대기열에 있는데 파일이 지워진 경우. 가짜 tally 로는 안 잡힙니다."""
-    import gymhall.transcribe.batch as batch
+    import syncnote.transcribe.batch as batch
 
     layout = Layout(tmp_path)
     layout.state.mkdir(parents=True, exist_ok=True)
@@ -251,8 +251,8 @@ def test_run_queue_counts_a_vanished_file(tmp_path, monkeypatch):
 @pytest.fixture
 def queue_with_upload(tmp_path, monkeypatch):
     """전사는 성공했는데 그 결과를 못 올리는 경우."""
-    import gymhall.transcribe.batch as batch
-    from gymhall import release as R
+    import syncnote.transcribe.batch as batch
+    from syncnote import release as R
 
     out = tmp_path / "t.txt"
     out.write_text("x", encoding="utf-8")
@@ -316,8 +316,8 @@ def test_watched_covers_every_function_that_takes_a_tally():
     """
     import ast
 
-    from gymhall import release
-    from gymhall.transcribe import batch
+    from syncnote import release
+    from syncnote.transcribe import batch
 
     takes_tally = set()
     for module in (release, batch):
@@ -341,8 +341,8 @@ def test_watched_covers_every_function_that_takes_a_tally():
 
 def test_watched_has_no_stale_names():
     """지워진 함수가 WATCHED 에 남아 있으면 검사가 느슨해집니다."""
-    from gymhall import release
-    from gymhall.transcribe import batch
+    from syncnote import release
+    from syncnote.transcribe import batch
 
     known = {n for m in (release, batch) for n in dir(m)}
     stale = WATCHED - known
@@ -356,7 +356,7 @@ def test_every_run_recording_caller_checks_the_result():
     """잠금 충돌 때 None 이 오는데, 버리면 조용히 유실됩니다."""
     import ast
 
-    from gymhall import cli as cli_mod
+    from syncnote import cli as cli_mod
 
     src = Path(cli_mod.__file__).read_text(encoding="utf-8")
     tree = ast.parse(src)
@@ -386,7 +386,7 @@ def test_schedule_logs_an_error_when_a_class_is_lost(tmp_path, monkeypatch, capl
     """상시 실행이라 종료 코드가 아니라 로그가 신호입니다."""
     from datetime import datetime, timedelta
 
-    from gymhall.recorder import schedule as sched
+    from syncnote.recorder import schedule as sched
 
     class _Slot:
         name = "자료구조"
@@ -407,7 +407,7 @@ def test_schedule_logs_an_error_when_a_class_is_lost(tmp_path, monkeypatch, capl
     class _A(_Args):
         once = True
 
-    with caplog.at_level("ERROR", logger="gymhall"):
+    with caplog.at_level("ERROR", logger="syncnote"):
         rc = cli.cmd_record_schedule(_A())
     assert rc == 1, "--once 인데 녹화를 못 하고도 0 을 돌려줬습니다"
     assert "자료구조" in caplog.text and "녹화되지 않았습니다" in caplog.text
@@ -415,7 +415,7 @@ def test_schedule_logs_an_error_when_a_class_is_lost(tmp_path, monkeypatch, capl
 
 def test_watch_once_reports_a_failed_capture(tmp_path, monkeypatch):
     """감지는 했는데 녹화를 못 했습니다. KeyboardInterrupt 로 숨으면 안 됩니다."""
-    from gymhall.recorder import watcher as w
+    from syncnote.recorder import watcher as w
 
     class _FakeWatcher:
         def __init__(self, **kw):
@@ -439,7 +439,7 @@ def test_watch_once_reports_a_failed_capture(tmp_path, monkeypatch):
 
 
 def test_watch_returns_zero_when_recording_works(tmp_path, monkeypatch):
-    from gymhall.recorder import watcher as w
+    from syncnote.recorder import watcher as w
 
     class _FakeWatcher:
         def __init__(self, **kw):
@@ -468,7 +468,7 @@ def test_watch_once_failure_is_not_the_same_as_a_user_interrupt(tmp_path, monkey
     예전에는 --once 가 KeyboardInterrupt 를 던져 바깥의 except 가
     사용자의 진짜 Ctrl+C 와 섞었습니다.
     """
-    from gymhall.recorder import watcher as w
+    from syncnote.recorder import watcher as w
 
     class _FakeWatcher:
         def __init__(self, **kw):
@@ -493,7 +493,7 @@ def test_watch_once_failure_is_not_the_same_as_a_user_interrupt(tmp_path, monkey
 
 def test_a_real_ctrl_c_during_watch_is_130(tmp_path, monkeypatch):
     """사용자 중단은 main 이 130 으로 내보냅니다. 1 로 바꾸면 안 됩니다."""
-    from gymhall.recorder import watcher as w
+    from syncnote.recorder import watcher as w
 
     class _InterruptedWatcher:
         def __init__(self, **kw):

@@ -38,7 +38,7 @@ git push origin v0.3.0
 
 태그가 올라가면 `release` 워크플로가:
 1. `release-drafter` 로 누적 초안을 **그 태그의 정식 릴리스로 발행**,
-2. `git archive` 로 만든 `gymhall-v0.3.0.zip` 과 `.sha256` 을 그 릴리스에 첨부.
+2. `git archive` 로 만든 `syncnote-v0.3.0.zip` 과 `.sha256` 을 그 릴리스에 첨부.
 
 ## 확인
 - Actions 탭에서 `release-drafter`(머지마다)·`release`(태그마다)가 초록인지.

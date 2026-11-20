@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from gymhall.backup import chain as C
+from syncnote.backup import chain as C
 
 
 def _entry(path="Documents/a.txt"):

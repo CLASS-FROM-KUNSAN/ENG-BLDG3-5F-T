@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from gymhall.transcribe import formats as F
+from syncnote.transcribe import formats as F
 
 SEGMENTS = [
     F.Segment(0.0, 3.5, "안녕하세요"),

@@ -10,8 +10,8 @@ import subprocess
 
 import pytest
 
-from gymhall.recorder.ffmpeg_util import duration_of
-from gymhall.recorder.mux import MuxInput, mux
+from syncnote.recorder.ffmpeg_util import duration_of
+from syncnote.recorder.mux import MuxInput, mux
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ffmpeg") is None, reason="ffmpeg 가 없습니다"

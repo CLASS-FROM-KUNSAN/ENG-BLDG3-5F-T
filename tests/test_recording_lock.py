@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from gymhall.recorder import lock as L
+from syncnote.recorder import lock as L
 
 
 def test_a_second_recording_is_refused(tmp_path):
@@ -93,7 +93,7 @@ def test_a_corrupt_lock_file_is_replaced(tmp_path):
 # 이제 신호로 겹치기를 보장합니다. A 가 잠금을 잡았다고 알린 뒤에야
 # B 가 시도하고, B 가 끝날 때까지 A 는 놓지 않습니다.
 def _holder(path_str, held, release, out):
-    from gymhall.recorder import lock as LL
+    from syncnote.recorder import lock as LL
 
     try:
         with LL.hold(path_str, "먼저"):
@@ -107,7 +107,7 @@ def _holder(path_str, held, release, out):
 
 
 def _challenger(path_str, held, release, out):
-    from gymhall.recorder import lock as LL
+    from syncnote.recorder import lock as LL
 
     held.wait(20)                      # 상대가 확실히 들고 있을 때 시도
     try:

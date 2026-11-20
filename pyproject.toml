@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gym-w-hall-2f"
+name = "sync-note"
 version = "0.1.0"
 description = "국립군산대학교 eClass 자료 수집 + 화면/음성 녹화 + 전사 + GitHub 릴리스 업로드"
 readme = "README.md"
@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 license = { file = "LICENSE" }
 
 [project.scripts]
-gymhall = "gymhall.cli:main"
+syncnote = "syncnote.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

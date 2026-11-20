@@ -7,6 +7,6 @@ REM =====================================================================
 call "%~dp0_common.bat"
 echo 녹화를 시작합니다. 중단하려면 이 창에서 Ctrl+C 를 누르세요.
 echo.
-"%PY%" -m gymhall record start %*
+"%PY%" -m syncnote record start %*
 echo.
 pause

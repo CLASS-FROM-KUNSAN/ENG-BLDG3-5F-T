@@ -22,7 +22,7 @@ GitHub Secrets 는 암호화돼 저장되고 로그에도 가려져 나옵니다
 저장소 관리자도 값을 다시 볼 수 없습니다. 하지만:
 
 - **워크플로 파일을 수정할 수 있는 사람은 실행 중에 값을 꺼내 쓸 수 있습니다.**
-  (`run: echo $GYMHALL_ECLASS_PASSWORD | base64` 같은 식으로)
+  (`run: echo $SYNCNOTE_ECLASS_PASSWORD | base64` 같은 식으로)
 - 따라서 **협업자가 있는 저장소에서는 쓰지 마세요.**
 - **public 저장소에서는 절대 쓰지 마세요.** Fork PR 에는 시크릿이
   전달되지 않지만, 설정 실수 한 번이면 노출됩니다.
@@ -128,7 +128,7 @@ GitHub 서버 (하루 3회)
   │    (학번은 Secrets 에서, 녹화·전사는 끔)
   ├─ 이전 상태 파일 복원 (actions/cache)
   │    없으면 전부 '새 자료' 로 보고 다시 받습니다
-  ├─ python -m gymhall eclass sync
+  ├─ python -m syncnote eclass sync
   │    로그인 → 과목 순회 → 새 자료만 저장 → 릴리스 업로드
   └─ 실패하면 로그를 Artifact 로 남김 (7일 보관)
 ```

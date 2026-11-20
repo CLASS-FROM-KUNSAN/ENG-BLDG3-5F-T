@@ -8,7 +8,7 @@ from __future__ import annotations
 import threading
 import time
 
-from gymhall.recorder.watcher import Watcher
+from syncnote.recorder.watcher import Watcher
 
 
 def make(alive_fn, **kw):
@@ -129,7 +129,7 @@ def test_keyboard_interrupt_propagates():
 
 def test_window_title_matching():
     w = Watcher(processes=[], window_titles=["회의 중"], interval_sec=0.05)
-    import gymhall.recorder.watcher as mod
+    import syncnote.recorder.watcher as mod
 
     original = mod._window_titles
     try:

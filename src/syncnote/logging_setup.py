@@ -23,13 +23,13 @@ class _KSTFormatter(logging.Formatter):
 def setup(
     log_dir: Path,
     level: str = "INFO",
-    name: str = "gymhall",
+    name: str = "syncnote",
     retention_days: int = 30,
     console: bool = True,
 ) -> logging.Logger:
     """로거를 초기화합니다. 여러 번 불러도 한 번만 설정됩니다."""
     global _CONFIGURED
-    root = logging.getLogger("gymhall")
+    root = logging.getLogger("syncnote")
     if _CONFIGURED:
         return root
 
@@ -72,4 +72,4 @@ def setup(
 
 
 def get(name: str) -> logging.Logger:
-    return logging.getLogger(f"gymhall.{name}")
+    return logging.getLogger(f"syncnote.{name}")

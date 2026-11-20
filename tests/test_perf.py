@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from gymhall.transcribe.perf import (
+from syncnote.transcribe.perf import (
     EMA_ALPHA,
     GPU_SPEEDUP_GUESS,
     SEED_RTF_CPU,

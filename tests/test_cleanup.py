@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from gymhall.transcribe.cleanup import (
+from syncnote.transcribe.cleanup import (
     DEFAULT_NO_SPEECH_THRESHOLD,
     Cleaner,
     from_config,
@@ -361,7 +361,7 @@ def test_placeholder_rule_can_be_disabled():
 
 
 def test_is_placeholder_direct():
-    from gymhall.transcribe.cleanup import is_placeholder
+    from syncnote.transcribe.cleanup import is_placeholder
 
     assert is_placeholder("[Music]") is True
     assert is_placeholder("♪") is True
@@ -447,6 +447,6 @@ def test_excessive_removal_warns(caplog):
         cleaner.should_drop(f"정상 문장 {i}", 0.1, -0.3)
     for i in range(10):
         cleaner.should_drop(f"[음악 {i}]", 0.1, -0.3)
-    with caplog.at_level(logging.WARNING, logger="gymhall.transcribe.cleanup"):
+    with caplog.at_level(logging.WARNING, logger="syncnote.transcribe.cleanup"):
         cleaner.report("테스트")
     assert any("과하게" in r.message for r in caplog.records), caplog.records

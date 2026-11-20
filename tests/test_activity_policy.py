@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from gymhall.activity.policy import FF_PASSWORD, FF_RICHTEXT, FieldEvent, Policy, redact
+from syncnote.activity.policy import FF_PASSWORD, FF_RICHTEXT, FieldEvent, Policy, redact
 
 
 def web_policy(**kw) -> Policy:

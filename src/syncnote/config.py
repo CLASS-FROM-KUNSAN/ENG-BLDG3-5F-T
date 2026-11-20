@@ -182,7 +182,7 @@ DEFAULTS: dict[str, Any] = {
         },
         "timetable": [],
         # 터미널 녹음기(FFmpeg / SoX / arecord). 소리만 받습니다.
-        # `python -m gymhall audio record` 와 cron·작업 스케줄러용입니다.
+        # `python -m syncnote audio record` 와 cron·작업 스케줄러용입니다.
         "terminal": {
             "backend": "auto",
             "source": "mic",
@@ -199,7 +199,7 @@ DEFAULTS: dict[str, Any] = {
             "vad_stop_sec": 3.0,
         },
     },
-    # 실시간 오디오 송출 (Tailscale 망 안에서만). `python -m gymhall stream start`
+    # 실시간 오디오 송출 (Tailscale 망 안에서만). `python -m syncnote stream start`
     # 각 항목의 뜻은 config.example.toml 과 docs/STREAMING.md 에 있습니다.
     "stream": {
         "server": "builtin",
@@ -447,8 +447,8 @@ class Config:
             return Path(os.path.expandvars(raw)).expanduser().resolve()
         base = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_DATA_HOME")
         if base:
-            return Path(base).expanduser().resolve() / "gym-w-hall-2f"
-        return Path.home() / ".gym-w-hall-2f"
+            return Path(base).expanduser().resolve() / "sync-note"
+        return Path.home() / ".sync-note"
 
     @property
     def machine_label(self) -> str:
@@ -462,10 +462,10 @@ class Config:
 
 def default_config_path() -> Path:
     """config.toml 을 찾는 순서."""
-    env = os.environ.get("GYMHALL_CONFIG")
+    env = os.environ.get("SYNCNOTE_CONFIG")
     if env:
         return Path(env).expanduser().resolve()
-    # 레포 루트 (src/gymhall/config.py -> ../../..)
+    # 레포 루트 (src/syncnote/config.py -> ../../..)
     return (Path(__file__).resolve().parents[2] / "config.toml").resolve()
 
 

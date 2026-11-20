@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 
-from gymhall.activity import native_host, pipeline
-from gymhall.activity.policy import FF_PASSWORD, Policy
+from syncnote.activity import native_host, pipeline
+from syncnote.activity.policy import FF_PASSWORD, Policy
 
 
 class FakeStore:

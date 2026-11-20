@@ -107,7 +107,7 @@ def popen(args: list[str], *, stdin_pipe: bool = True,
     )
     # 파일 핸들을 프로세스에 묶어 둡니다. 여기서 닫으면 ffmpeg 가
     # 끝나기 전에 파일이 사라집니다.
-    proc._gymhall_stderr = err if stderr_log is not None else None  # type: ignore[attr-defined]
+    proc._syncnote_stderr = err if stderr_log is not None else None  # type: ignore[attr-defined]
     return proc
 
 

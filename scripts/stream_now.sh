@@ -16,7 +16,7 @@ export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 export PYTHONDONTWRITEBYTECODE=1
-[ -f "$REPO/config.toml" ] && export GYMHALL_CONFIG="$REPO/config.toml"
+[ -f "$REPO/config.toml" ] && export SYNCNOTE_CONFIG="$REPO/config.toml"
 
 if [ -x "$REPO/.venv/bin/python" ]; then
     PY="$REPO/.venv/bin/python"
@@ -24,4 +24,4 @@ else
     PY=$(command -v python3 || command -v python)
 fi
 
-exec "$PY" -m gymhall stream start "$@"
+exec "$PY" -m syncnote stream start "$@"

@@ -8,7 +8,7 @@
 REM 설정이 올바른지 검사
 scripts\doctor.bat
 REM 또는
-.venv\Scripts\python -m gymhall config check
+.venv\Scripts\python -m syncnote config check
 ```
 
 잘못된 값은 **한꺼번에 모아서** 알려 줍니다. 하나 고치고 다시 돌리는
@@ -22,7 +22,7 @@ REM 또는
 clone 하지 말고 **환경변수로 설정 파일을 바꿔치기** 하세요.
 
 ```bat
-set GYMHALL_CONFIG=D:\설정\노트북.toml
+set SYNCNOTE_CONFIG=D:\설정\노트북.toml
 scripts\record_now.bat
 ```
 
@@ -201,7 +201,7 @@ enabled = false
 실제로 올리지 않고 무엇이 올라갈지 확인합니다.
 
 ```bat
-.venv\Scripts\python -m gymhall eclass sync --dry-run
+.venv\Scripts\python -m syncnote eclass sync --dry-run
 ```
 
 ---
@@ -217,11 +217,11 @@ enabled = true          # 기본 false — 켜면 올라간 파일을 로컬에�
 min_age_hours = 24
 ```
 
-- `python -m gymhall backup home` 이 `%USERPROFILE%` 를 `home-2026-11-13` 릴리스에 올립니다.
+- `python -m syncnote backup home` 이 `%USERPROFILE%` 를 `home-2026-11-13` 릴리스에 올립니다.
   홈 바로 아래 `AppData` 와 `.` 폴더, 정션, OneDrive 클라우드 전용 파일, `exclude_names` 는 빠집니다.
 - 올릴 때마다 매니페스트(어느 디렉터리의 어느 파일이 어느 묶음에 있는지)를 같은 릴리스에 올리고,
   앞 매니페스트의 sha256 으로 사슬을 잇습니다. 매니페스트 하나에는 최대 5만 개까지 들어갑니다.
-- `python -m gymhall backup prune` 은 GitHub 의 사슬을 내려받아 확인한 뒤, 지금 파일의 해시가
+- `python -m syncnote backup prune` 은 GitHub 의 사슬을 내려받아 확인한 뒤, 지금 파일의 해시가
   사슬의 값과 같은 것만 지웁니다. 디렉터리는 남깁니다. 먼저 `--dry-run` 으로 목록을 보세요.
 - 상태는 `state/home_backup.sqlite` 에 있습니다(파일 수십만 개라 JSON 이 아닙니다).
 - 업로드/삭제 목록: `logs/home-chain.log`, `logs/home-prune.log`.

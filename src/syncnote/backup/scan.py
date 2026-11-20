@@ -107,7 +107,7 @@ def iter_home(home: Path, *, exclude_names: Iterable[str] | None = None,
     순서는 결정적입니다: 디렉터리마다 이름순으로 그 안의 파일을 먼저,
     그다음 하위 디렉터리를 이름순으로(깊이 우선).
 
-    skip_dirs 는 통째로 뺄 디렉터리(예: gymhall 데이터 폴더). 절대 경로로 비교합니다.
+    skip_dirs 는 통째로 뺄 디렉터리(예: syncnote 데이터 폴더). 절대 경로로 비교합니다.
     """
     home = Path(home)
     patterns = list(DEFAULT_EXCLUDE_NAMES if exclude_names is None else exclude_names)
@@ -156,7 +156,7 @@ def iter_home(home: Path, *, exclude_names: Iterable[str] | None = None,
                     excluded(path, "민감한 이름")
                     continue
                 if skips and _under(path, skips):
-                    excluded(path, "gymhall 데이터 폴더")
+                    excluded(path, "syncnote 데이터 폴더")
                     continue
                 subdirs.append(path)
                 continue

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from gymhall import cli
+from syncnote import cli
 
 
 def test_parser_builds():

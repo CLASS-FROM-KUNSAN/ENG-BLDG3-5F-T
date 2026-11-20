@@ -200,7 +200,7 @@ class ReleaseUploader:
         if self._token is None:
             self._token = secrets.get("github") or ""
         if not self._token:
-            raise ReleaseError("GitHub 토큰이 없습니다. python -m gymhall secrets set github")
+            raise ReleaseError("GitHub 토큰이 없습니다. python -m syncnote secrets set github")
         return self._token
 
     @property
@@ -216,7 +216,7 @@ class ReleaseUploader:
                     "Authorization": f"Bearer {self.token}",
                     "Accept": "application/vnd.github+json",
                     "X-GitHub-Api-Version": "2022-11-28",
-                    "User-Agent": "gym-w-hall-2f",
+                    "User-Agent": "sync-note",
                 }
             )
             self._session = s

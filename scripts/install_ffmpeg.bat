@@ -4,7 +4,7 @@ REM  ffmpeg 를 tools\ffmpeg 에 내려받습니다.
 REM =====================================================================
 call "%~dp0_common.bat"
 set "URL=https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-set "ZIP=%TEMP%\ffmpeg-gymhall.zip"
+set "ZIP=%TEMP%\ffmpeg-syncnote.zip"
 set "DEST=%REPO%\tools"
 
 echo ffmpeg 를 내려받습니다... (약 80MB)

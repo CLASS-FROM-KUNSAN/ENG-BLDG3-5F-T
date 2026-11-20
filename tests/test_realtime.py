@@ -16,8 +16,8 @@ np = pytest.importorskip("numpy")
 
 # numpy 가 있을 때만 의미가 있는 임포트입니다.
 
-from gymhall.transcribe.engine import EngineSpec  # noqa: E402
-from gymhall.transcribe.realtime import RealtimeTranscriber, maybe_start  # noqa: E402
+from syncnote.transcribe.engine import EngineSpec  # noqa: E402
+from syncnote.transcribe.realtime import RealtimeTranscriber, maybe_start  # noqa: E402
 
 
 class FakeSeg:

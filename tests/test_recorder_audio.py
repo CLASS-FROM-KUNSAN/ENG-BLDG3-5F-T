@@ -14,7 +14,7 @@ np = pytest.importorskip("numpy")
 
 # numpy 가 있을 때만 의미가 있는 임포트입니다.
 
-from gymhall.recorder.audio import AudioRecorder, AudioTrack  # noqa: E402
+from syncnote.recorder.audio import AudioRecorder, AudioTrack  # noqa: E402
 
 
 class FakeRecorder:
@@ -100,8 +100,8 @@ def test_thread_subclasses_do_not_shadow_thread_internals(tmp_path):
     join() 이 TypeError 로 터집니다(3.12 이하). 실행 중인 파이썬 버전과
     무관하게 잡아내도록 이름 목록을 고정해 두고 비교합니다.
     """
-    from gymhall.transcribe.engine import EngineSpec
-    from gymhall.transcribe.realtime import RealtimeTranscriber
+    from syncnote.transcribe.engine import EngineSpec
+    from syncnote.transcribe.realtime import RealtimeTranscriber
 
     instances = [
         AudioTrack("system", FakeSource(), tmp_path / "a.wav"),
@@ -181,7 +181,7 @@ def test_broken_device_is_reported_not_raised(tmp_path):
 
 def test_recorder_continues_when_one_device_fails(tmp_path, monkeypatch):
     """마이크가 없어도 시스템 소리는 녹음돼야 합니다."""
-    from gymhall.recorder import audio as audio_mod
+    from syncnote.recorder import audio as audio_mod
 
     monkeypatch.setattr(audio_mod.devices, "resolve_system_source",
                         lambda name="": FakeSource(0.5))
@@ -228,13 +228,13 @@ def test_full_tap_does_not_break_recording(tmp_path):
 # GPU 판정
 # ---------------------------------------------------------------------------
 def test_cpu_request_is_honoured():
-    from gymhall.transcribe.engine import pick_device
+    from syncnote.transcribe.engine import pick_device
 
     assert pick_device("cpu") == ("cpu", "int8")
 
 
 def test_auto_falls_back_to_cpu_without_cuda(monkeypatch):
-    from gymhall.transcribe import engine
+    from syncnote.transcribe import engine
 
     monkeypatch.setattr(engine, "probe_cuda", lambda: (False, None, "CUDA 없음"))
     assert engine.pick_device("auto") == ("cpu", "int8")
@@ -243,7 +243,7 @@ def test_auto_falls_back_to_cpu_without_cuda(monkeypatch):
 def test_small_vram_gpu_is_rejected(monkeypatch):
     """회귀 방지: 존재 여부만 보고 cuda 를 고르면 2GB 내장 GPU 에서
     large 모델 로딩 중 OOM 으로 죽습니다."""
-    from gymhall.transcribe import engine
+    from syncnote.transcribe import engine
 
     calls = {"count": 1, "vram": 2.0}
 
@@ -284,7 +284,7 @@ def test_small_vram_gpu_is_rejected(monkeypatch):
 def test_compute_type_is_asked_not_hardcoded(monkeypatch):
     """회귀 방지: float16 을 하드코딩하면 지원하지 않는 카드에서
     모델 로딩이 실패합니다. ctranslate2 에 직접 물어봅니다."""
-    from gymhall.transcribe import engine
+    from syncnote.transcribe import engine
 
     class FakeCT2:
         @staticmethod
@@ -296,7 +296,7 @@ def test_compute_type_is_asked_not_hardcoded(monkeypatch):
 
 
 def test_compute_type_prefers_float16_when_available(monkeypatch):
-    from gymhall.transcribe import engine
+    from syncnote.transcribe import engine
 
     class FakeCT2:
         @staticmethod
@@ -308,7 +308,7 @@ def test_compute_type_prefers_float16_when_available(monkeypatch):
 
 
 def test_compute_type_survives_probe_failure(monkeypatch):
-    from gymhall.transcribe import engine
+    from syncnote.transcribe import engine
 
     class Broken:
         @staticmethod
@@ -330,28 +330,28 @@ class _Src:
 
 
 def test_the_opened_device_name_is_recorded():
-    from gymhall.recorder.audio import _source_name
+    from syncnote.recorder.audio import _source_name
 
     assert _source_name(_Src("스피커 (Realtek)"), "") == "스피커 (Realtek)"
 
 
 def test_a_mismatch_between_config_and_reality_shows_both():
     """'Focusrite' 라고 적었는데 다른 게 열렸으면 둘 다 보여야 합니다."""
-    from gymhall.recorder.audio import _source_name
+    from syncnote.recorder.audio import _source_name
 
     got = _source_name(_Src("마이크 배열 (Audio Share)"), "Focusrite")
     assert "마이크 배열 (Audio Share)" in got and "Focusrite" in got
 
 
 def test_a_matching_config_is_not_repeated():
-    from gymhall.recorder.audio import _source_name
+    from syncnote.recorder.audio import _source_name
 
     got = _source_name(_Src("마이크 배열 (Audio Share)"), "Audio Share")
     assert got == "마이크 배열 (Audio Share)"
 
 
 def test_a_nameless_source_falls_back_to_the_config():
-    from gymhall.recorder.audio import _source_name
+    from syncnote.recorder.audio import _source_name
 
     assert _source_name(object(), "Focusrite") == "Focusrite"
     assert _source_name(object(), "") == "(기본 장치)"
@@ -363,13 +363,13 @@ def test_a_silent_track_names_the_device_it_used(tmp_path, caplog):
     진짜로 돌립니다. 로그 문구를 테스트가 다시 쓰면, 프로덕션에서
     그 줄을 지워도 초록입니다.
     """
-    from gymhall.recorder.audio import AudioTrack
+    from syncnote.recorder.audio import AudioTrack
 
     track = AudioTrack(
         "mic", FakeSource(level=0.0), tmp_path / "m.wav",
         device_label="마이크 배열 (Audio Share)",
     )
-    with caplog.at_level("WARNING", logger="gymhall"):
+    with caplog.at_level("WARNING", logger="syncnote"):
         track.start()
         time.sleep(0.5)
         track.stop()
@@ -381,11 +381,11 @@ def test_a_silent_track_names_the_device_it_used(tmp_path, caplog):
 
 
 def test_a_track_with_sound_does_not_nag(tmp_path, caplog):
-    from gymhall.recorder.audio import AudioTrack
+    from syncnote.recorder.audio import AudioTrack
 
     track = AudioTrack("system", FakeSource(level=0.5), tmp_path / "s.wav",
                        device_label="스피커 (Realtek)")
-    with caplog.at_level("WARNING", logger="gymhall"):
+    with caplog.at_level("WARNING", logger="syncnote"):
         track.start()
         time.sleep(0.5)
         track.stop()
@@ -399,7 +399,7 @@ def test_the_device_label_reaches_the_track(tmp_path, monkeypatch):
 
     중간에서 멈춰도 아무도 안 터집니다 — silence_peak 때와 같은 자리입니다.
     """
-    from gymhall.recorder import audio as audio_mod
+    from syncnote.recorder import audio as audio_mod
 
     made = []
 
@@ -428,11 +428,11 @@ def test_the_device_label_reaches_the_track(tmp_path, monkeypatch):
 #   - mic:    진짜 마이크는 조용한 방에서도 ADC 열잡음으로 ±1 LSB 는
 #             흔들립니다. 정확히 0 이면 신호 경로가 없는 것입니다.
 def test_a_mic_at_exactly_zero_is_called_out_as_a_dead_path(tmp_path, caplog):
-    from gymhall.recorder.audio import AudioTrack
+    from syncnote.recorder.audio import AudioTrack
 
     track = AudioTrack("mic", FakeSource(level=0.0), tmp_path / "m.wav",
                        device_label="마이크 배열 (Audio Share)")
-    with caplog.at_level("WARNING", logger="gymhall"):
+    with caplog.at_level("WARNING", logger="syncnote"):
         track.start()
         time.sleep(0.5)
         track.stop()
@@ -445,11 +445,11 @@ def test_a_mic_at_exactly_zero_is_called_out_as_a_dead_path(tmp_path, caplog):
 
 def test_a_silent_system_track_is_not_called_a_dead_path(tmp_path, caplog):
     """루프백은 재생 중인 게 없으면 정확히 0 입니다. 정상입니다."""
-    from gymhall.recorder.audio import AudioTrack
+    from syncnote.recorder.audio import AudioTrack
 
     track = AudioTrack("system", FakeSource(level=0.0), tmp_path / "s.wav",
                        device_label="스피커 (Realtek)")
-    with caplog.at_level("WARNING", logger="gymhall"):
+    with caplog.at_level("WARNING", logger="syncnote"):
         track.start()
         time.sleep(0.5)
         track.stop()
@@ -461,11 +461,11 @@ def test_a_silent_system_track_is_not_called_a_dead_path(tmp_path, caplog):
 
 def test_a_very_quiet_mic_is_not_called_a_dead_path(tmp_path, caplog):
     """잡음이라도 들어오면 장치는 살아 있는 것입니다. 무음 경고까지만."""
-    from gymhall.recorder.audio import AudioTrack
+    from syncnote.recorder.audio import AudioTrack
 
     track = AudioTrack("mic", FakeSource(level=1e-7), tmp_path / "m.wav",
                        device_label="인텔 마이크")
-    with caplog.at_level("WARNING", logger="gymhall"):
+    with caplog.at_level("WARNING", logger="syncnote"):
         track.start()
         time.sleep(0.5)
         track.stop()

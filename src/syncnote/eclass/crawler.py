@@ -381,7 +381,7 @@ class Crawler:
         if not courses:
             self.stats.errors.append(
                 "과목 목록이 비어 있습니다. 로그인은 됐지만 select 선택자가 바뀌었을 수 있습니다. "
-                "`python -m gymhall eclass probe` 를 돌려 보세요."
+                "`python -m syncnote eclass probe` 를 돌려 보세요."
             )
         return courses
 

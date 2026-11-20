@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from gymhall.activity import gate
-from gymhall.activity.gate import GateError
+from syncnote.activity import gate
+from syncnote.activity.gate import GateError
 
 ALL_PASS = {
     "tpm_version": ("require_tpm2", lambda: (True, "spec=2.0")),

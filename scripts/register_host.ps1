@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    gymhall 활동 기록 네이티브 메시징 호스트를 등록합니다(확장 -> 로컬 Python).
+    syncnote 활동 기록 네이티브 메시징 호스트를 등록합니다(확장 -> 로컬 Python).
 
 .DESCRIPTION
     관리자 권한이 필요 없습니다(HKCU). 확장을 chrome://extensions 에서 압축해제
@@ -9,10 +9,10 @@
       powershell -ExecutionPolicy Bypass -File scripts\register_host.ps1 -ExtensionId <ID>
 
     하는 일:
-      1) 호스트 매니페스트(com.gymhall.activity.json)를 extension\host\ 에 생성.
-         path  = scripts\activity_host.bat (python -m gymhall.activity.native_host)
+      1) 호스트 매니페스트(com.syncnote.activity.json)를 extension\host\ 에 생성.
+         path  = scripts\activity_host.bat (python -m syncnote.activity.native_host)
          allowed_origins = [ chrome-extension://<ID>/ ]
-      2) HKCU\...\NativeMessagingHosts\com.gymhall.activity = 그 매니페스트 경로.
+      2) HKCU\...\NativeMessagingHosts\com.syncnote.activity = 그 매니페스트 경로.
 
 .PARAMETER Remove
     등록을 지웁니다.
@@ -24,7 +24,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$HostName = "com.gymhall.activity"
+$HostName = "com.syncnote.activity"
 $Repo = Resolve-Path (Join-Path $PSScriptRoot "..")
 $Launcher = Join-Path $Repo "scripts\activity_host.bat"
 $HostDir = Join-Path $Repo "extension\host"
@@ -60,7 +60,7 @@ if (-not (Test-Path $Launcher)) { throw "런처가 없습니다: $Launcher" }
 New-Item -ItemType Directory -Force $HostDir | Out-Null
 $manifestObj = [ordered]@{
     name            = $HostName
-    description     = "gymhall activity native messaging host"
+    description     = "syncnote activity native messaging host"
     path            = $Launcher
     type            = "stdio"
     allowed_origins = @("chrome-extension://$ExtensionId/")

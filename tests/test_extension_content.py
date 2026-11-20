@@ -1,6 +1,6 @@
 """웹 뷰어 콘텐츠 스크립트의 자격증명 제외 로직 — 실제 브라우저 DOM 에서 검증.
 
-확장을 패키징/로드하지 않고, content.js 의 순수 로직(window.__gymhallScan)을
+확장을 패키징/로드하지 않고, content.js 의 순수 로직(window.__syncnoteScan)을
 Playwright 로 띄운 Chromium 페이지에 주입해 '담김/제외'를 실측합니다. 이게 보안
 핵심(비밀번호가 안 담기는가)이라, jsdom 이 아니라 진짜 브라우저로 확인합니다.
 """
@@ -58,7 +58,7 @@ def scanned():
         page = br.new_page()
         page.set_content(HTML)
         page.add_script_tag(path=str(CONTENT))
-        result = page.evaluate("window.__gymhallScan()")
+        result = page.evaluate("window.__syncnoteScan()")
         br.close()
         return result
 
@@ -141,8 +141,8 @@ def scanned_adobe():
         page = br.new_page()
         page.set_content(HTML_ADOBE)
         page.add_script_tag(path=str(CONTENT))
-        page.evaluate("(h) => { window.__gymhallProfileHost = h; }", "acrobat.adobe.com")
-        result = page.evaluate("window.__gymhallScan()")
+        page.evaluate("(h) => { window.__syncnoteProfileHost = h; }", "acrobat.adobe.com")
+        result = page.evaluate("window.__syncnoteScan()")
         br.close()
         return result
 

@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gymhall.paths import Layout
-from gymhall.recorder.audio import TrackResult
-from gymhall.recorder.session import RecordingSession, SessionResult
+from syncnote.paths import Layout
+from syncnote.recorder.audio import TrackResult
+from syncnote.recorder.session import RecordingSession, SessionResult
 
 
 class FakeConfig:
@@ -41,7 +41,7 @@ def test_fallback_switches_to_next_live_mic(tmp_path, monkeypatch):
     def mock_select(**kw):
         return MockMic("보조-USB마이크", dead=False), []
 
-    monkeypatch.setattr("gymhall.recorder.devices.select_working_mic", mock_select)
+    monkeypatch.setattr("syncnote.recorder.devices.select_working_mic", mock_select)
 
     # 롤백/전환 트리거
     new_mic = session._invalidate_and_fallback_mic()
@@ -73,7 +73,7 @@ def test_explicit_mic_device_is_never_swapped_silently(tmp_path):
 
 def test_dead_device_automatically_skipped_without_exclusion(tmp_path, monkeypatch):
     """신호가 0인 장치는 굳이 배제 목록을 쓰지 않아도 select_working_mic 에서 자동으로 다음 장치로 넘어갑니다."""
-    from gymhall.recorder import devices
+    from syncnote.recorder import devices
 
     class FakeProbeRec:
         def __init__(self, level):

@@ -11,8 +11,8 @@ import os
 import time
 from pathlib import Path
 
-from gymhall.activity import sidecar
-from gymhall.activity.policy import FF_PASSWORD, Policy
+from syncnote.activity import sidecar
+from syncnote.activity.policy import FF_PASSWORD, Policy
 
 
 class FakeStore:

@@ -106,7 +106,7 @@ def _ffmpeg_input(plan: Plan, plat: str) -> list[str]:
         if plan.source == "system":
             raise TerminalAudioError(
                 "Windows 에서 ffmpeg 는 스피커 소리(루프백)를 직접 받지 못합니다.\n"
-                "  시스템 소리는  python -m gymhall record start  를 쓰세요(WASAPI 루프백, 설치 불필요)."
+                "  시스템 소리는  python -m syncnote record start  를 쓰세요(WASAPI 루프백, 설치 불필요)."
             )
         if not plan.device:
             raise TerminalAudioError(
@@ -154,7 +154,7 @@ def _sox_input(plan: Plan, plat: str) -> list[str]:
     if plat == "windows" and plan.source == "system":
         raise TerminalAudioError(
             "Windows 에서 SoX 는 스피커 소리(루프백)를 받지 못합니다.\n"
-            "  시스템 소리는  python -m gymhall record start  를 쓰세요."
+            "  시스템 소리는  python -m syncnote record start  를 쓰세요."
         )
     if plat == "macos" and plan.source == "system" and not plan.device:
         raise TerminalAudioError(

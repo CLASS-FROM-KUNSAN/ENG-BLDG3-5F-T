@@ -11,6 +11,6 @@ REM
 REM  이 창에서 Ctrl+C 를 누르면 멈추고, tailscale serve 를 끄고, 이슈를 닫습니다.
 REM =====================================================================
 call "%~dp0_common.bat"
-"%PY%" -m gymhall stream start %*
+"%PY%" -m syncnote stream start %*
 echo.
 pause

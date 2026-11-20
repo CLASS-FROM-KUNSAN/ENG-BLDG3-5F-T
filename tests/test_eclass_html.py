@@ -16,9 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from gymhall.eclass import browser as B
-from gymhall.eclass import crawler as C
-from gymhall.eclass.urls import parse_course_option
+from syncnote.eclass import browser as B
+from syncnote.eclass import crawler as C
+from syncnote.eclass.urls import parse_course_option
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

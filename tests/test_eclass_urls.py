@@ -12,7 +12,7 @@ from urllib.parse import parse_qsl, urlparse
 
 import pytest
 
-from gymhall.eclass import urls as U
+from syncnote.eclass import urls as U
 
 COURSE = "2026211043701"
 SITE = U.Site("https://eclass.kunsan.ac.kr")
