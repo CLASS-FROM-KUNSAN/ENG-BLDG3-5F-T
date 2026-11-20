@@ -64,3 +64,33 @@ def test_devices_json_shape(capsys):
     assert [g["kind"] for g in d["groups"]] == ["loopback", "microphone", "speaker"]
     assert d["groups"][0]["config_key"] == "recording.audio.system_device"
     assert "monitors" in d
+
+
+# -- setupcheck ---------------------------------------------------------------
+def test_setupcheck_missing_reasons():
+    from syncnote import setupcheck
+
+    full = {"in_venv": True, "reqs_bad": [], "ffmpeg": "f.exe", "chromium": True}
+    assert setupcheck.missing(full) == []
+    gaps = setupcheck.missing({"in_venv": False, "reqs_bad": ["psutil"], "ffmpeg": None,
+                               "chromium": False})
+    assert gaps == ["가상환경(.venv) 없음", "패키지: psutil", "ffmpeg 없음",
+                    "Playwright Chromium 없음"]
+
+
+def test_setupcheck_finds_chromium_where_playwright_puts_it(tmp_path, monkeypatch):
+    from syncnote import setupcheck
+
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path))
+    assert not setupcheck.chromium_installed()
+    (tmp_path / "chromium-1187").mkdir()
+    assert setupcheck.chromium_installed()
+
+
+def test_setupcheck_report_shape(tmp_path):
+    from syncnote import setupcheck
+
+    req = tmp_path / "r.txt"
+    req.write_text("pytest>=1\nzz-not-installed-pkg\n", encoding="utf-8")
+    rep = setupcheck.report(req)
+    assert rep["reqs_bad"] == ["zz-not-installed-pkg"] and isinstance(rep["in_venv"], bool)

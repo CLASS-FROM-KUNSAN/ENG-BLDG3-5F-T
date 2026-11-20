@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import setupcheck
 from . import eclass_fetch
 
 REPO_ROOT = eclass_fetch.REPO_ROOT
@@ -97,6 +98,8 @@ class SetupFlow(QDialog):
         self.pw_proc: subprocess.Popen | None = None
         self._queue: list[str] = []
         self._pw_rounds = 0
+        self.install_state: dict | None = None
+        self.setup_rc = 0
 
         lay = QVBoxLayout(self)
         self.headline = QLabel("저장한 설정으로 설치와 점검을 이어서 진행합니다.")
@@ -138,9 +141,19 @@ class SetupFlow(QDialog):
         self._poll.timeout.connect(self._check_password_window)
 
     # -- 실행할 명령(테스트에서 바꿔 끼움) ---------------------------------
+    def venv_path(self) -> Path:
+        return REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+
+    def venv_exists(self) -> bool:
+        return self.venv_path().exists()
+
     def venv_python(self) -> str:
-        v = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
-        return str(v) if v.exists() else sys.executable
+        return str(self.venv_path()) if self.venv_exists() else sys.executable
+
+    def state_command(self) -> list[str]:
+        """설치가 이미 됐는지(setupcheck) — .venv 의 파이썬으로 봐야 그 환경을 봄."""
+        return [str(self.venv_path()), "-m", "syncnote.setupcheck",
+                str(REPO_ROOT / "requirements.txt")]
 
     def setup_command(self) -> list[str] | None:
         if os.name != "nt":
@@ -250,8 +263,29 @@ class SetupFlow(QDialog):
         self._say(f"── {dict(STEPS)[key]} " + "─" * 20)
         getattr(self, f"_step_{key}")()
 
-    # 1. 설치
+    # 1. 설치 — 먼저 '이미 됐나' 를 보고, 필요할 때만 setup.bat, 끝나면 실제 상태로 판정
     def _step_install(self) -> None:
+        if not self.venv_exists():
+            self._say("가상환경(.venv)이 없습니다. setup.bat 으로 설치합니다.")
+            self._run_setup()
+            return
+
+        def pre(_rc: int, out: str) -> None:
+            st = last_json(out)
+            if isinstance(st, dict):
+                self.install_state = st
+                gaps = setupcheck.missing(st)
+                if not gaps:
+                    self._mark("install", "ok", "이미 설치됨 — setup.bat 생략")
+                    self._next()
+                    return
+                self._say("설치가 덜 됐습니다: " + " · ".join(gaps))
+            else:
+                self._say("설치 상태를 읽지 못했습니다. setup.bat 으로 설치합니다.")
+            self._run_setup()
+        self._run(self.state_command(), pre)
+
+    def _run_setup(self) -> None:
         cmd = self.setup_command()
         if cmd is None:
             self._mark("install", "skip", "Windows 가 아니라 setup.bat 을 건너뜀")
@@ -259,12 +293,38 @@ class SetupFlow(QDialog):
             return
 
         def done(rc: int, _out: str) -> None:
-            if rc == 0:
-                self._mark("install", "ok", "설치 완료")
-            else:
-                self._mark("install", "fail", f"setup.bat 실패(종료 코드 {rc}) — 출력 보기")
-            self._next()
+            self.setup_rc = rc
+            self._verify_install()
         self._run(cmd, done)
+
+    def _verify_install(self) -> None:
+        """setup.bat 뒤: 종료 코드가 아니라 실제 설치 상태로 판정합니다.
+        (setup.bat 은 Playwright 가 실패해도 0 으로 끝나고, 반대로 끝의 pause·
+        echo 가 실패해도 0 이 아닐 수 있습니다.)"""
+        rc = getattr(self, "setup_rc", 0)
+        if not self.venv_exists():
+            self._mark("install", "fail", f"가상환경(.venv)이 만들어지지 않음 (setup.bat 종료 코드 {rc})")
+            self._next()
+            return
+
+        def post(_rc: int, out: str) -> None:
+            st = last_json(out)
+            if not isinstance(st, dict):
+                self._mark("install", "fail", "설치 뒤 상태를 읽지 못함 — 출력 보기")
+                self._next()
+                return
+            self.install_state = st
+            gaps = setupcheck.missing(st)
+            code = f" (setup.bat 종료 코드 {rc})" if rc else ""
+            if not gaps:
+                self._mark("install", "ok", "설치 완료" + code)
+            elif gaps == ["패키지: " + ", ".join(st.get("reqs_bad", []))]:
+                # 패키지만 남음 → 바로 다음 '라이브러리 확인' 단계가 채우도록 만든 흐름.
+                self._mark("install", "ok", "설치됨 — 남은 패키지는 다음 단계에서 채움" + code)
+            else:
+                self._mark("install", "warn", "덜 됨: " + " · ".join(gaps) + code)
+            self._next()
+        self._run(self.state_command(), post)
 
     # 2. 라이브러리
     def _step_verify(self, retried: bool = False) -> None:

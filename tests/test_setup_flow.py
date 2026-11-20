@@ -52,10 +52,20 @@ def fakes(tmp_path, monkeypatch):
     m = tmp_path / "m"
     m.mkdir()
     cmds = {
-        "setup": _py(tmp_path, "setup", """
+        "setup": _py(tmp_path, "setup", f"""
+            open(r"{m / 'venv'}", "w").write("ok")          # .venv 가 생긴 것처럼
+            open(r"{m / 'setup_ran'}", "a").write("x")
             print("[1/5] 가상환경 만드는 중...")
             print("[2/5] 파이썬 패키지 설치 중...")
             print(" 설치 완료. 이제 다음 순서로 진행하세요.")
+        """),
+        "state": _py(tmp_path, "state", f"""
+            import json, os
+            e = lambda n: os.path.exists(os.path.join(r"{m}", n))
+            print(json.dumps({{"python": "x", "in_venv": e("venv"),
+                              "reqs_bad": [] if e("installed") else ["psutil"],
+                              "ffmpeg": None if e("no_ffmpeg") else "ffmpeg.exe",
+                              "chromium": True}}))
         """),
         "reqcheck": _py(tmp_path, "reqcheck", f"""
             import json, os
@@ -93,6 +103,8 @@ def fakes(tmp_path, monkeypatch):
     }
     F = SF.SetupFlow
     monkeypatch.setattr(F, "setup_command", lambda self: cmds["setup"])
+    monkeypatch.setattr(F, "state_command", lambda self: cmds["state"])
+    monkeypatch.setattr(F, "venv_exists", lambda self: (m / "venv").exists())
     monkeypatch.setattr(F, "reqcheck_command", lambda self: cmds["reqcheck"])
     monkeypatch.setattr(F, "pip_install_command", lambda self, lines: cmds["pip"] + lines)
     monkeypatch.setattr(F, "status_command", lambda self: cmds["status"])
@@ -142,7 +154,7 @@ def test_flow_keeps_going_when_a_step_fails(app, tmp_path, fakes, monkeypatch):
                         lambda self: [sys.executable, "-c", "print('깨진 출력')"])
     dlg = SF.SetupFlow(None, tmp_path / "config.toml")
     _run(app, dlg)
-    assert dlg.state["install"] == "fail" and "3" in dlg.notes["install"]
+    assert dlg.state["install"] == "fail" and ".venv" in dlg.notes["install"]
     assert dlg.state["check"] == "fail" and dlg.close_btn.text() == "닫기"
     dlg.close()
 
@@ -268,3 +280,47 @@ def test_file_menu_can_rerun_setup(app, tmp_path, win_factory):
     acts = {a.text(): a for m in w.menuBar().actions() for a in m.menu().actions()}
     acts["설치 · 점검 다시 실행…"].trigger()
     assert calls["flow"] == 1
+
+
+# -- 1. 확인 단계 + 결과 검증 ------------------------------------------------
+def test_already_installed_skips_setup_bat(app, tmp_path, fakes):
+    (fakes / "venv").write_text("ok", encoding="utf-8")
+    (fakes / "installed").write_text("ok", encoding="utf-8")
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert dlg.state["install"] == "ok" and "생략" in dlg.notes["install"]
+    assert not (fakes / "setup_ran").exists()
+    assert dlg.state["verify"] == "ok"
+    dlg.close()
+
+
+def test_partially_installed_runs_setup_and_reports_what_is_still_missing(app, tmp_path, fakes):
+    (fakes / "venv").write_text("ok", encoding="utf-8")
+    (fakes / "installed").write_text("ok", encoding="utf-8")
+    (fakes / "no_ffmpeg").write_text("ok", encoding="utf-8")       # setup 이 못 고침
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert (fakes / "setup_ran").exists()
+    assert dlg.state["install"] == "warn" and "ffmpeg" in dlg.notes["install"]
+    dlg.close()
+
+
+def test_nonzero_exit_but_actually_installed_counts_as_ok(app, tmp_path, fakes, monkeypatch):
+    m = fakes
+    monkeypatch.setattr(SF.SetupFlow, "setup_command", lambda self: [
+        sys.executable, "-c",
+        f"open(r'{m / 'venv'}','w').write('x'); open(r'{m / 'installed'}','w').write('x');"
+        "import sys; sys.exit(1)"])
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert dlg.state["install"] == "ok" and "종료 코드 1" in dlg.notes["install"]
+    dlg.close()
+
+
+def test_zero_exit_without_venv_counts_as_failure(app, tmp_path, fakes, monkeypatch):
+    monkeypatch.setattr(SF.SetupFlow, "setup_command",
+                        lambda self: [sys.executable, "-c", "print('설치 완료')"])
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert dlg.state["install"] == "fail" and "만들어지지 않음" in dlg.notes["install"]
+    dlg.close()
