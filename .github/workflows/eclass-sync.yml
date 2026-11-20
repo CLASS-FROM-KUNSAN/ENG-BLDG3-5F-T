@@ -30,6 +30,10 @@ on:
         description: '업로드 없이 수집만 (true/false)'
         required: false
         default: 'false'
+      courses:
+        description: '수집할 과목 (콤마 구분, 띄어쓰기·음절 순서 무관. 비우면 저장소 변수 ECLASS_COURSES → config 순)'
+        required: false
+        default: ''
 
 permissions:
   contents: write           # 릴리스에 올리기 위해 필요합니다
@@ -174,7 +178,14 @@ jobs:
           SYNCNOTE_ECLASS_PASSWORD: ${{ secrets.ECLASS_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHONPATH: src
+          # 수동 실행 입력 > 저장소 변수(Settings > Variables, 예약 실행용) > config.
+          # 셸에 직접 끼워 넣지 않고 환경변수로만 넘깁니다(입력값 주입 방지).
+          # 어느 셀렉터든 못 찾으면 전 과목을 수집합니다.
+          SYNCNOTE_ECLASS_COURSES: ${{ github.event.inputs.courses || vars.ECLASS_COURSES }}
         run: |
+          if [ -n "$SYNCNOTE_ECLASS_COURSES" ]; then
+            echo "과목 셀렉터: $SYNCNOTE_ECLASS_COURSES"
+          fi
           ARGS=""
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then ARGS="--no-upload"; fi
           python -m syncnote --log-level INFO eclass sync $ARGS

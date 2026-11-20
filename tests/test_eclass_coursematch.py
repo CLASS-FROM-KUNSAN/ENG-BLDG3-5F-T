@@ -88,3 +88,16 @@ def test_filter_partial_miss_also_takes_all_so_nothing_is_lost():
 def test_filter_fallback_still_honours_exclude():
     ids, _ = _filter(["양자역학"], exclude=["영어"])
     assert ids == ["C001", "C003", "C004"]
+
+
+def test_workflow_passes_courses_only_through_env():
+    """입력값을 run 스크립트에 ${{ }} 로 끼우면 셸 주입이 됩니다."""
+    from pathlib import Path
+
+    wf = (Path(__file__).resolve().parents[1] / ".github/workflows/eclass-sync.yml"
+          ).read_text(encoding="utf-8")
+    assert "SYNCNOTE_ECLASS_COURSES: ${{ github.event.inputs.courses" in wf
+    run_lines = [ln for ln in wf.splitlines()
+                 if "inputs.courses" in ln and "SYNCNOTE_ECLASS_COURSES:" not in ln
+                 and "description" not in ln]
+    assert run_lines == [], run_lines
