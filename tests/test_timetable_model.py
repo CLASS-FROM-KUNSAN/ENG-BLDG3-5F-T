@@ -239,3 +239,28 @@ def test_schedule_parse_skips_broken_rows_instead_of_crashing_later():
     slots = sched.parse(rows)
     assert [s.name for s in slots] == ["정상"]
     assert sched.next_occurrence(slots, now=datetime(2026, 11, 20)) is not None
+
+
+# -- 다른 곳에서 바뀐 파일 -------------------------------------------------
+def test_disk_change_kinds(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text(CONFIG, encoding="utf-8")
+    M.save(p, _tt())
+    base = M.DiskState.read(p)
+    assert M.disk_change(p, base) == "same"
+    p.write_text(p.read_text(encoding="utf-8").replace('log_level = "INFO"', 'log_level = "DEBUG"'),
+                 encoding="utf-8")
+    assert M.disk_change(p, base) == "other"
+    tt = _tt()
+    tt.courses[0].end = "11:00"
+    M.save(p, tt)
+    assert M.disk_change(p, base) == "timetable"
+    p.write_text("[[broken", encoding="utf-8")
+    assert M.disk_change(p, base) == "broken"
+
+
+def test_same_timetable_written_by_hand_is_not_a_change(tmp_path):
+    """편집기 블록이든 손으로 쓴 표든, 뜻이 같으면 같은 시간표로 봅니다."""
+    a = M.canonical(_tt().to_rows(), _tt().holiday_rows())
+    rows = list(reversed(_tt().to_rows()))
+    assert M.canonical(rows, _tt().holiday_rows()) == a

@@ -266,3 +266,102 @@ def test_holiday_tab_has_summary_button_top_right(app, win):
     assert pos.x() > tab.width() * 0.6 and pos.y() < win.htable.mapTo(tab, win.htable.rect().topLeft()).y()
     btn.click()
     assert win.summary is not None and win.summary.isVisible()
+
+
+# -- 다른 곳에서 바뀐 파일 -------------------------------------------------
+def _edit_file(path, old, new):
+    text = path.read_text(encoding="utf-8")
+    assert old in text
+    path.write_text(text.replace(old, new), encoding="utf-8")
+
+
+def _choose(monkeypatch, pick):
+    """저장 충돌 창에서 pick(텍스트 또는 'cancel') 을 고른 것으로."""
+    seen = {}
+
+    def fake_exec(self):
+        seen["text"] = self.text()
+    def fake_clicked(self):
+        if pick == "cancel":
+            return self.button(QMessageBox.StandardButton.Cancel)
+        return next(b for b in self.buttons() if b.text() == pick)
+    monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+    monkeypatch.setattr(QMessageBox, "clickedButton", fake_clicked)
+    return seen
+
+
+def _dirty(win):
+    new = win.tt.copy()
+    new.courses[0].name = "내가 바꾼 이름"
+    win._apply(new, "t")
+
+
+def test_other_settings_changed_elsewhere_save_keeps_them_without_asking(app, win, monkeypatch):
+    _dirty(win)
+    win.path.write_text(win.path.read_text(encoding="utf-8").replace(
+        M.BEGIN, '[stream]\nport = 9999\n\n' + M.BEGIN), encoding="utf-8")
+    assert win.check_disk() == "other" and win.banner.isHidden()
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: pytest.fail("묻지 않아야 함"))
+    assert win.save(show_summary=False)
+    text = win.path.read_text(encoding="utf-8")
+    assert "port = 9999" in text and "내가 바꾼 이름" in text
+
+
+def test_timetable_changed_elsewhere_while_editing_shows_banner_and_asks(app, win, monkeypatch):
+    _dirty(win)
+    _edit_file(win.path, 'end   = "10:00"', 'end   = "10:30"')     # 다른 곳에서 시간 변경
+    assert win.check_disk() == "timetable"
+    assert win.banner.isVisible() and "덮어씁니다" in win.banner_label.text()
+
+    seen = _choose(monkeypatch, "cancel")
+    assert not win.save(show_summary=False)
+    assert "바뀌었습니다" in seen["text"]
+    assert 'end   = "10:30"' in win.path.read_text(encoding="utf-8")   # 안 덮어씀
+    assert not win.undo.isClean()
+
+    _choose(monkeypatch, "내 것으로 덮어쓰기")
+    assert win.save(show_summary=False)
+    assert "내가 바꾼 이름" in win.path.read_text(encoding="utf-8")
+    assert win.banner.isHidden() and win.check_disk() == "same"
+
+
+def test_reload_choice_takes_the_disk_version(app, win, monkeypatch):
+    _dirty(win)
+    _edit_file(win.path, 'end   = "10:00"', 'end   = "10:30"')
+    _choose(monkeypatch, "디스크 내용 다시 읽기")
+    assert not win.save(show_summary=False)
+    assert win.tt.courses[0].name == "자료구조" and win.tt.courses[0].end == "10:30"
+    assert win.undo.isClean() and win.undo.count() == 0
+
+
+def test_clean_editor_follows_outside_changes_silently(app, win):
+    _edit_file(win.path, 'end   = "10:00"', 'end   = "10:30"')
+    assert win.check_disk() == "timetable"
+    assert win.tt.courses[0].end == "10:30" and win.banner.isHidden()
+
+
+def test_own_save_is_not_seen_as_an_outside_change(app, win):
+    _dirty(win)
+    assert win.save(show_summary=False)
+    assert win.check_disk() == "same" and win.banner.isHidden()
+
+
+def test_broken_file_refuses_to_save(app, win, monkeypatch):
+    _dirty(win)
+    win.path.write_text("[[깨짐", encoding="utf-8")
+    assert win.check_disk() == "broken" and win.banner.isVisible()
+    _choose(monkeypatch, "cancel")
+    monkeypatch.setattr(QMessageBox, "clickedButton", lambda self: None)
+    assert not win.save(show_summary=False)
+    assert win.path.read_text(encoding="utf-8") == "[[깨짐"
+
+
+def test_file_watcher_notices_a_real_outside_write(app, win):
+    import time
+
+    _edit_file(win.path, 'end   = "10:00"', 'end   = "10:40"')
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and win.tt.courses[0].end != "10:40":
+        app.processEvents()
+        time.sleep(0.05)
+    assert win.tt.courses[0].end == "10:40"
