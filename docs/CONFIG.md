@@ -144,6 +144,24 @@ REM 또는: python -m syncnote timetable edit [-c config.toml]
   - 받은 목록은 `<data_dir>/state/eclass_courses.json` 에 남습니다(과목코드·과목명·학기만,
     교수 이름은 남기지 않음). `eclass sync`·`eclass probe` 둘 다 이 파일을 갱신합니다.  - 과목코드가 있으면 녹화 파일이 어느 과목인지 이름이 조금 달라도 정확히 판정됩니다.
 
+**저장(Ctrl+S)하면** 다음 순서로 이어집니다.
+
+1. 설정 확인
+   - config.toml 이 **없으면**: `새 config.toml 만들기` 창 → `만들기` 를 눌러야 다음으로.
+   - config.toml 이 **있으면**: config.example.toml 과 비교해 빠진 설정을 찾습니다. 있으면
+     경고와 함께 설정 창이 열리고(빠진 항목이 맨 위), 저장하면 고친 값(안 고치면 예시 값)으로
+     채워 넣습니다. 없으면 바로 다음으로.
+2. 시간표 저장
+3. **설치 · 점검 창**
+   1. `scripts\setup.bat` 실행(가상환경·라이브러리·브라우저·ffmpeg). 출력은 창 안에, 끝나면 다음으로.
+   2. `requirements.txt` 와 실제 설치(.venv)를 맞춰 보고, 빠졌거나 버전이 안 맞는 줄만 설치.
+   3. eClass 비밀번호가 OS 자격증명 저장소에 없으면 `scripts\set_password.bat 1` 을 새 콘솔로.
+   4. `scripts\doctor.bat --json` · `scripts\devices.bat --json` 결과를 그림으로. 맨 위에는
+      setup.bat 이 끝에 안내하던 '다음 순서'(설정 → 비밀번호 → 점검 → 오디오 장치)를
+      했는지/안 했는지 체크 목록으로 보여 줍니다. `닫기` 로 끝.
+
+창을 닫으며 저장할 때는 설치·점검을 건너뜁니다. 다시 돌리려면 **파일 → 설치 · 점검 다시 실행…**.
+
 **파일 → 설정 편집…(Ctrl+,)** 으로 언제든 설정을 고칠 수 있습니다. config.toml 이
 있으면 지금 값을 보여 주고, 저장하면 바꾼 줄만 고칩니다(주석·시간표 그대로, 원본은
 `.bak`). config.toml 에 없는 항목을 바꾸면 그 섹션 끝에 넣고, 섹션이 없으면 새로
