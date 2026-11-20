@@ -436,3 +436,34 @@ def test_dialogs_are_kept_inside_too(app, win):
     gui.ScreenKeeper.attach(s).check()
     assert s.screen().availableGeometry().contains(s.frameGeometry())
     assert gui.ScreenKeeper.attach(s) is gui.ScreenKeeper.attach(s)   # 창마다 하나
+
+
+# -- 긴 글자: 자리 있으면 창을 넓혀 한 줄, 모자랄 때만 줄바꿈 ------------
+def _lines(label):
+    return round(label.height() / label.fontMetrics().lineSpacing())
+
+
+def test_preferred_width_fits_the_hint_on_one_line(app, win):
+    want = win._preferred_size()
+    assert want.width() >= gui.natural_width(win.hint)
+    # 화면이 넉넉하면(가상 큰 화면) 그 폭으로 열리고, 그 폭에서 문구는 한 줄.
+    from PySide6.QtCore import QRect
+    big = QRect(0, 0, 2560, 1400)
+    assert gui.start_rect(want, big).width() == want.width()
+    win.keeper.timer.stop()
+    win.resize(want.width(), 700)
+    app.processEvents()
+    win.keeper.timer.stop()
+    assert _lines(win.hint) == 1
+
+
+def test_hint_wraps_only_when_the_area_is_too_narrow(app, win):
+    avail = win.screen().availableGeometry()            # 테스트 화면은 800 폭
+    assert win._preferred_size().width() > avail.width()
+    assert win.frameGeometry().width() <= avail.width()  # 영역 안으로 줄었고
+    assert _lines(win.hint) >= 2                         # 그래서 이때만 접힘
+
+
+def test_long_text_does_not_force_a_wide_minimum(app, win):
+    """줄바꿈을 끄면 최소 폭이 950px 로 묶여 작은 화면을 넘었습니다."""
+    assert win.minimumSizeHint().width() < 700
