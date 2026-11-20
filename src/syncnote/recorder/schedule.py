@@ -67,16 +67,20 @@ def parse(entries: Iterable[dict]) -> list[Slot]:
     slots: list[Slot] = []
     for entry in entries or []:
         try:
-            slots.append(
-                Slot(
-                    name=str(entry.get("name", "수업")),
-                    day=str(entry["day"]).lower(),
-                    start=str(entry["start"]),
-                    end=str(entry["end"]),
-                    language=_as_language(entry.get("language")),
-                )
+            slot = Slot(
+                name=str(entry.get("name", "수업")),
+                day=str(entry["day"]).lower(),
+                start=str(entry["start"]),
+                end=str(entry["end"]),
+                language=_as_language(entry.get("language")),
             )
-        except (KeyError, ValueError) as exc:
+            # 여기서 걸러야 합니다. 그냥 두면 요일·시각이 깨진 행이 나중에
+            # 일정 계산 중 KeyError/ValueError 로 대기 루프 전체를 죽입니다.
+            if slot.day not in DAY_INDEX:
+                raise ValueError(f"알 수 없는 요일 {slot.day!r}")
+            slot.occurrence(date(2000, 1, 3))
+            slots.append(slot)
+        except (KeyError, ValueError, AttributeError) as exc:
             log.error("시간표 항목을 건너뜁니다 (%s): %s", exc, entry)
     return slots
 

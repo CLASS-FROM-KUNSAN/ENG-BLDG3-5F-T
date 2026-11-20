@@ -22,7 +22,7 @@ import json
 import re
 import sys
 from dataclasses import asdict, dataclass, field, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 if sys.version_info >= (3, 11):
@@ -479,6 +479,101 @@ def parse_holiday_text(text: str, year: int) -> list[Holiday]:
         if d not in seen:
             seen.add(d)
             out.append(Holiday(d, name))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 공휴일 편집
+# ---------------------------------------------------------------------------
+def edit_holiday(tt: Timetable, old_day: date, new: Holiday) -> Timetable:
+    """old_day 공휴일을 new 로 바꾼 사본. 날짜를 다른 공휴일과 겹치게 바꾸면 거부."""
+    if not any(h.day == old_day for h in tt.holidays):
+        raise TimetableError(f"{old_day} 공휴일이 없습니다")
+    if new.day != old_day and any(h.day == new.day for h in tt.holidays):
+        raise TimetableError(f"{new.day} 는 이미 공휴일로 등록돼 있습니다")
+    out = tt.copy()
+    out.holidays = [Holiday(new.day, new.name.strip()) if h.day == old_day else h
+                    for h in out.holidays]
+    return out
+
+
+def remove_holidays(tt: Timetable, days) -> Timetable:
+    drop = set(days)
+    out = tt.copy()
+    out.holidays = [h for h in out.holidays if h.day not in drop]
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 다가오는 일정 — 저장 결과 확인용
+# ---------------------------------------------------------------------------
+@dataclass
+class Upcoming:
+    start: datetime
+    end: datetime
+    name: str
+    skipped_for: str | None = None     # 공휴일로 건너뛰면 그 공휴일 이름("" 이면 이름 없음)
+
+    @property
+    def skipped(self) -> bool:
+        return self.skipped_for is not None
+
+
+def saved_rows(path: str | Path) -> tuple[list, list]:
+    """config.toml 을 다시 읽은 그대로의 (timetable 행, holidays 행).
+
+    편집기 메모리가 아니라 **파일**을 읽어, 녹화기가 실제로 볼 내용을 보여 줍니다.
+    """
+    p = Path(path)
+    if not p.exists():
+        return [], []
+    data = tomllib.loads(p.read_text(encoding="utf-8-sig"))
+    rec = data.get("recording", {})
+    if not isinstance(rec, dict):
+        return [], []
+    return list(rec.get("timetable", []) or []), list(rec.get("holidays", []) or [])
+
+
+def upcoming(rows, holiday_rows, *, now: datetime | None = None, count: int = 5,
+             horizon_days: int = 120) -> list[Upcoming]:
+    """앞으로 녹화될 수업 count 개와, 그 사이 공휴일로 건너뛰는 회차.
+
+    녹화기(recorder.schedule)와 같은 parse 를 써서 '편집기는 이렇게 보이는데
+    녹화기는 다르게 읽는' 일이 없게 합니다. 진행 중인 수업도 포함합니다.
+    """
+    from ..recorder import schedule as sched
+
+    now = now or datetime.now()
+    slots = sched.parse(rows)
+    names: dict[date, str] = {}
+    for h in holiday_rows or []:
+        raw = h.get("date") if isinstance(h, dict) else h
+        try:
+            d = _as_date(raw)
+        except (TypeError, ValueError):
+            continue
+        names[d] = str(h.get("name", "")) if isinstance(h, dict) else ""
+
+    out: list[Upcoming] = []
+    taken = 0
+    for offset in range(horizon_days):
+        day = (now + timedelta(days=offset)).date()
+        todays = sorted((s for s in slots if s.weekday == day.weekday()),
+                        key=lambda s: (s.start, s.name))
+        for s in todays:
+            start, end = s.occurrence(day)
+            if end <= now:
+                continue
+            if day in names:
+                out.append(Upcoming(start, end, s.name, names[day]))
+            else:
+                out.append(Upcoming(start, end, s.name))
+                taken += 1
+        if taken >= count:
+            break
+    # 마지막으로 센 수업 뒤의 '건너뜀' 은 잘라냅니다(목록 꼬리가 길어지지 않게).
+    while out and out[-1].skipped:
+        out.pop()
     return out
 
 
