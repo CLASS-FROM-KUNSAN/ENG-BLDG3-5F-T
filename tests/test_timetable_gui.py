@@ -553,3 +553,144 @@ def test_editor_suggestion_one_line_when_room_wraps_when_narrow(app):
     assert lab.heightForWidth(lab.width()) > one_line      # 좁으면 접히고
     assert lab.minimumHeight() >= lab.heightForWidth(lab.width())   # 높이가 따라 늚
     ed.dlg.close()
+
+
+# -- config.toml 이 없을 때: 예시 파일로 설정 만들기 -----------------------
+from pathlib import Path as _Path  # noqa: E402
+
+EXAMPLE_PATH = _Path(__file__).resolve().parents[1] / "config.example.toml"
+
+
+def _wizard(tmp_path):
+    from syncnote.timetable.config_wizard import NewConfigDialog
+    return NewConfigDialog(None, EXAMPLE_PATH, tmp_path / "config.toml")
+
+
+def test_wizard_lists_every_example_setting_and_starts_with_what_needs_checking(app, tmp_path):
+    from syncnote import settings_schema as S
+
+    d = _wizard(tmp_path)
+    want = sum(len(s.fields) for s in S.parse(EXAMPLE_PATH.read_text(encoding="utf-8")))
+    assert len(d.fields) == want
+    assert d.tree.currentItem() is d.tree.topLevelItem(0)          # 먼저 확인할 항목
+    first = [f.dotted for f in d._first_fields()]
+    assert set(first) == {f.dotted for p in d.problem_list for f in S.fields_in(p, d.fields)}
+    assert set(d.rows) == set(first)
+    d.close()
+
+
+def test_wizard_editing_fixes_problems_and_writes_only_changes(app, tmp_path):
+    d = _wizard(tmp_path)
+    d.tree.setCurrentItem(d.tree.topLevelItem(0))
+    row = d.rows.get("eclass.username")
+    if row is not None:                         # 예시가 학번을 비워 둔 경우
+        row.editor.setText("20261234")
+        d.revalidate()
+        assert not any("eclass.username" in p for p in d.problem_list)
+    # 다른 분류의 숫자·체크·목록도
+    d.search.setText("retry_count")
+    d.rows["github.retry_count"].editor.setValue(9)
+    d.search.setText("message_boxes")
+    d.rows["eclass.message_boxes"].editor.setPlainText("RECEIVE\nSEND")
+    d.revalidate()
+    text = d.result_text()
+    data = tomllib_loads(text)
+    assert data["github"]["retry_count"] == 9
+    assert data["eclass"]["message_boxes"] == ["RECEIVE", "SEND"]
+    assert "# 로그 수준" in text                                     # 예시 주석 유지
+    d.search.clear()
+    d.only_changed.setChecked(True)
+    assert "github.retry_count" in d.rows and "general.log_level" not in d.rows
+    d.rows["github.retry_count"].reset()                               # 기본값으로
+    d.revalidate()
+    assert "github.retry_count" not in d.changes()
+    d.close()
+
+
+def tomllib_loads(text):
+    import sys
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:
+        import tomli as tomllib
+    return tomllib.loads(text)
+
+
+def test_wizard_bad_list_value_is_flagged_not_written(app, tmp_path):
+    d = _wizard(tmp_path)
+    d.search.setText("recording.video.monitors")
+    rows = [r for k, r in d.rows.items() if k == "recording.video.monitors"]
+    assert rows and rows[0].field.kind == "list"
+    rows[0].editor.setPlainText("하나\n2")             # 모니터 번호 목록에 글자
+    d.revalidate()
+    assert d.changes()["recording.video.monitors"] == ["하나", 2]    # 2 는 숫자로 읽음
+    assert any("recording.video.monitors" in p for p in d.problem_list)   # 실제 검증이 잡음
+    assert d.rows["recording.video.monitors"].note.isVisibleTo(d)
+    d.close()
+
+
+def _new_window(tmp_path, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.StandardButton.Discard)
+    w = gui.TimetableWindow(tmp_path / "config.toml")
+    new = w.tt.copy()
+    new.courses.append(M.Course("자료구조", ["mon"], "09:00", "10:00"))
+    w._apply(new, "t")
+    return w
+
+
+def test_saving_without_config_asks_settings_first_then_writes_full_config(app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from syncnote import config as config_module
+    from syncnote.timetable.config_wizard import NewConfigDialog
+
+    def fill_and_accept(self):
+        self.values["eclass.username"] = "20261234"
+        self.values["general.data_dir"] = str(tmp_path / "data")
+        return QDialog.DialogCode.Accepted
+    monkeypatch.setattr(NewConfigDialog, "exec", fill_and_accept)
+    w = _new_window(tmp_path, monkeypatch)
+    try:
+        assert w.save(show_summary=False)
+        text = w.path.read_text(encoding="utf-8")
+        assert text.startswith(EXAMPLE_PATH.read_text(encoding="utf-8")[:40])   # 예시 본문 그대로
+        assert 'username = "20261234"' in text and M.BEGIN in text            # 설정 + 시간표
+        cfg = config_module.load(w.path)                                       # 실제 검증 통과
+        assert cfg.get("eclass.username") == "20261234"
+        assert [r["name"] for r in cfg.get("recording.timetable")] == ["자료구조"]
+    finally:
+        w.undo.setClean()
+        w.close()
+
+
+def test_cancelling_settings_does_not_create_the_file(app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from syncnote.timetable.config_wizard import NewConfigDialog
+
+    monkeypatch.setattr(NewConfigDialog, "exec", lambda self: QDialog.DialogCode.Rejected)
+    w = _new_window(tmp_path, monkeypatch)
+    try:
+        assert not w.save(show_summary=False)
+        assert not w.path.exists() and not w.undo.isClean()
+    finally:
+        w.undo.setClean()
+        w.close()
+
+
+def test_no_example_anywhere_falls_back_to_timetable_only_after_asking(app, tmp_path, monkeypatch):
+    w = _new_window(tmp_path, monkeypatch)
+    monkeypatch.setattr(gui.TimetableWindow, "_example_path", lambda self: None)
+    asked = {}
+
+    def yes(*a, **k):
+        asked["text"] = a[2]
+        return QMessageBox.StandardButton.Yes
+    monkeypatch.setattr(QMessageBox, "question", yes)
+    try:
+        assert w.save(show_summary=False)
+        assert "config.example.toml" in asked["text"] and M.load(w.path).courses
+    finally:
+        w.undo.setClean()
+        w.close()

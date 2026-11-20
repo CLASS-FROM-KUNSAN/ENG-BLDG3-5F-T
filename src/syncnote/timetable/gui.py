@@ -1752,6 +1752,8 @@ class TimetableWindow(QMainWindow):
             self.reload_from_disk()
 
     def save(self, show_summary: bool = True) -> bool:
+        if not self.path.exists() and not self._create_config():
+            return False
         if not self._conflict_ok():
             return False
         try:
@@ -1772,6 +1774,44 @@ class TimetableWindow(QMainWindow):
             self.show_summary()
         return True
 
+    # -- config.toml 이 없을 때 ------------------------------------------
+    def _example_path(self) -> Path | None:
+        """config.example.toml: 대상 파일 옆 → 레포 루트 순서로 찾음."""
+        from .. import config as config_module
+
+        repo_root = Path(config_module.__file__).resolve().parents[2]
+        for cand in (self.path.with_name("config.example.toml"),
+                     repo_root / "config.example.toml"):
+            if cand.is_file():
+                return cand
+        return None
+
+    def _create_config(self) -> bool:
+        """config.toml 이 없으면 예시 파일로 설정을 고르게 한 뒤 만듭니다.
+        True 면 계속 저장(시간표 블록을 그 뒤에 붙임)."""
+        example = self._example_path()
+        if example is None:
+            ans = QMessageBox.question(
+                self, "설정 파일 없음",
+                f"{self.path.name} 도, 바탕으로 쓸 config.example.toml 도 찾지 못했습니다.\n"
+                "시간표만 담긴 설정 파일을 만들까요? (다른 설정은 기본값으로 동작)")
+            return ans == QMessageBox.StandardButton.Yes
+        from .config_wizard import NewConfigDialog
+
+        try:
+            dlg = NewConfigDialog(self, example, self.path)
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            QMessageBox.critical(self, "예시 파일을 읽을 수 없습니다", f"{example}\n{exc}")
+            return False
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            self.statusBar().showMessage("설정 파일을 만들지 않아 저장하지 않았습니다.", 6000)
+            return False
+        text = dlg.result_text()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(text, encoding="utf-8")
+        self.statusBar().showMessage(
+            f"{example.name} 을 바탕으로 {self.path.name} 을 만들었습니다.", 6000)
+        return True
     def show_summary(self) -> SaveSummary:
         """저장 결과 창. 모달이 아니라 편집을 막지 않고, 하나만 띄웁니다."""
         if self.summary is None:
