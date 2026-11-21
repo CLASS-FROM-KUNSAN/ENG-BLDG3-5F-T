@@ -48,7 +48,9 @@ scripts\record_now.bat -m 1 --no-upload
 scripts\install_ffmpeg.bat
 ```
 
-winget(`Gyan.FFmpeg`)으로 설치하고, 안 되면 zip 을 받습니다. 직접 하려면
+winget(`Gyan.FFmpeg`)으로 설치하고, 안 되면 릴리스 목록에서 새 버전부터 받아
+해시·기능 확인에 실패하면 이전 릴리스로 롤백합니다. 끝에 '시도한 순서와 실패 이유'
+가 나오니 그것을 보세요. 직접 하려면
 PowerShell 에서 `winget install Gyan.FFmpeg`, 또는 받아서 환경변수 `FFMPEG` 에
 `ffmpeg.exe` 전체 경로를 넣으세요.
 

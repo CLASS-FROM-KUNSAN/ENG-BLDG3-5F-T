@@ -1,0 +1,323 @@
+"""ffmpeg 를 실제 릴리스 목록에서 받아 tools\\ffmpeg 에 둡니다 — 실패하면 이전 버전으로 롤백.
+
+    python -m syncnote.ffmpeg_fetch [--dest tools] [--max 6] [--force] [--dry-run]
+
+install_ffmpeg.bat 이 winget 이 없거나 실패했을 때 부릅니다. 고정 URL 하나만 믿지
+않고, winget 의 Gyan.FFmpeg 가 실제로 받아 오는 GitHub 저장소(GyanD/codexffmpeg)의
+릴리스 목록을 읽어 새 것부터 차례로 시도합니다.
+
+  후보 순서   정식 버전(9.1, 9.0 …) 새 것부터 → 날짜별 git 빌드 새 것부터
+              → (목록을 못 읽으면) gyan.dev 의 release-essentials
+  후보마다    1) 내려받기 — 끊기면 2·4·8 초 쉬고 다시(일시적 오류만)
+              2) SHA-256 — 릴리스가 알려 준 digest 와 다르면 버림
+              3) 압축 풀기 — 레포 밖으로 나가는 경로는 거부
+              4) 기능 확인 — 녹화에 꼭 필요한 gdigrab·libx264·aac 가 있어야 함
+              하나라도 실패하면 그 후보를 지우고 **한 단계 이전 릴리스로 롤백**
+  바꿔 끼우기 tools\\ffmpeg 를 tools\\ffmpeg.old 로 옮긴 뒤 새 것을 넣고, 도중에
+              실패하면 옛것을 되돌려 놓습니다(쓰던 ffmpeg 를 잃지 않게).
+  디스크 부족 다른 후보도 같으니 바로 멈춥니다.
+
+표준 라이브러리만 씁니다(설치 단계라 requests 가 아직 없을 수 있음). 프록시는
+urllib 가 HTTPS_PROXY 환경변수를 그대로 따릅니다.
+"""
+
+from __future__ import annotations
+
+import argparse
+import errno
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+import zipfile
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+RELEASES_API = "https://api.github.com/repos/GyanD/codexffmpeg/releases?per_page=30"
+GYAN_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+USER_AGENT = "syncnote-setup"
+ASSET_SUFFIX = "-essentials_build.zip"      # 녹화에 필요한 것은 다 있고 full 의 절반 크기
+BACKOFF = (2, 4, 8)
+NEEDED = {"gdigrab": "-devices", "libx264": "-encoders", "aac": "-encoders"}
+
+
+class Fatal(Exception):
+    """다른 후보로 넘어가도 소용없는 실패(디스크 부족 등)."""
+
+
+class CandidateFailed(Exception):
+    """이 후보만 못 씀 — 이전 릴리스로 롤백."""
+
+
+@dataclass
+class Candidate:
+    name: str
+    url: str
+    version: str
+    sha256: str = ""          # 비어 있으면 확인할 해시가 없음
+    size: int = 0
+    stable: bool = False
+    published: str = ""
+
+
+@dataclass
+class Result:
+    ok: bool
+    ffmpeg: str = ""
+    used: Candidate | None = None
+    tried: list[tuple[str, str]] = field(default_factory=list)   # (버전, 실패 이유)
+
+
+# ---------------------------------------------------------------------------
+# 후보 목록
+# ---------------------------------------------------------------------------
+def _version_key(tag: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in tag.split("."))
+
+
+def candidates(releases: list[dict]) -> list[Candidate]:
+    """GitHub 릴리스 JSON -> 시도할 순서대로(순수 함수)."""
+    out: list[Candidate] = []
+    for rel in releases or []:
+        if rel.get("draft"):
+            continue
+        tag = str(rel.get("tag_name", ""))
+        for a in rel.get("assets") or []:
+            name = str(a.get("name", ""))
+            if not name.endswith(ASSET_SUFFIX):
+                continue
+            digest = str(a.get("digest") or "")
+            out.append(Candidate(
+                name=name, url=str(a.get("browser_download_url", "")), version=tag,
+                sha256=digest.split(":", 1)[1].lower() if digest.startswith("sha256:") else "",
+                size=int(a.get("size") or 0),
+                stable=bool(re.fullmatch(r"\d+(\.\d+)+", tag)) and not rel.get("prerelease"),
+                published=str(rel.get("published_at", ""))))
+    stable = sorted((c for c in out if c.stable), key=lambda c: _version_key(c.version), reverse=True)
+    nightly = sorted((c for c in out if not c.stable), key=lambda c: c.published, reverse=True)
+    return [c for c in stable + nightly if c.url]
+
+
+def _open(url: str, timeout: float = 30):
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT,
+                                               "Accept": "application/vnd.github+json"})
+    return urllib.request.urlopen(req, timeout=timeout)  # noqa: S310 — https 고정 주소
+
+
+def fetch_releases(opener: Callable = _open) -> list[dict]:
+    with opener(RELEASES_API) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def gyan_candidate(opener: Callable = _open) -> Candidate:
+    """목록을 못 읽었을 때의 마지막 후보. 해시는 gyan.dev 가 옆에 둔 .sha256 으로."""
+    sha = ""
+    try:
+        with opener(GYAN_URL + ".sha256", timeout=15) as r:
+            sha = r.read().decode("ascii", "replace").split()[0].strip().lower()
+    except Exception:  # noqa: BLE001 — 없으면 기능 확인만으로 판단
+        sha = ""
+    return Candidate(name="ffmpeg-release-essentials.zip", url=GYAN_URL, version="gyan.dev",
+                     sha256=sha if re.fullmatch(r"[0-9a-f]{64}", sha) else "", stable=True)
+
+
+# ---------------------------------------------------------------------------
+# 한 후보 처리
+# ---------------------------------------------------------------------------
+def _transient(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (408, 429) or exc.code >= 500
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+
+def _raise_if_disk_full(exc: OSError) -> None:
+    if exc.errno == errno.ENOSPC or getattr(exc, "winerror", None) == 112:
+        raise Fatal("디스크 공간이 부족합니다. 공간을 비운 뒤 다시 실행하세요.") from exc
+
+
+def download(c: Candidate, dest: Path, *, opener: Callable = _open,
+             sleep: Callable[[float], None] = time.sleep, say: Callable[[str], None] = print) -> Path:
+    """dest 로 받고 SHA-256 을 확인합니다. 일시적 오류만 2·4·8 초 뒤 다시."""
+    part = dest.with_suffix(dest.suffix + ".part")
+    for attempt in range(len(BACKOFF) + 1):
+        h = hashlib.sha256()
+        try:
+            with opener(c.url, timeout=60) as r, part.open("wb") as f:
+                total = int(r.headers.get("Content-Length") or c.size or 0)
+                got, shown = 0, -1
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    h.update(chunk)
+                    got += len(chunk)
+                    pct = got * 100 // total if total else -1
+                    if pct >= 0 and pct // 20 != shown:
+                        shown = pct // 20
+                        say(f"      {pct:3d}%  {got / 1e6:,.0f} / {total / 1e6:,.0f} MB")
+            break
+        except OSError as exc:
+            if not isinstance(exc, urllib.error.URLError):
+                _raise_if_disk_full(exc)
+            part.unlink(missing_ok=True)
+            if attempt < len(BACKOFF) and _transient(exc):
+                say(f"      내려받기 끊김({exc}) — {BACKOFF[attempt]}초 뒤 다시")
+                sleep(BACKOFF[attempt])
+                continue
+            raise CandidateFailed(f"내려받기 실패: {exc}") from exc
+    if c.sha256 and h.hexdigest() != c.sha256:
+        part.unlink(missing_ok=True)
+        raise CandidateFailed("SHA-256 이 릴리스에 적힌 값과 다름")
+    part.replace(dest)
+    return dest
+
+
+def extract(zip_path: Path, into: Path) -> Path:
+    """압축을 풀고 ffmpeg 폴더(그 안에 bin\\ffmpeg.exe)를 돌려줍니다."""
+    into.mkdir(parents=True, exist_ok=True)
+    base = into.resolve()
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            for m in z.namelist():
+                target = (base / m).resolve()
+                if base != target and base not in target.parents:
+                    raise CandidateFailed(f"압축 안 경로가 바깥을 가리킴: {m}")
+            z.extractall(base)
+    except zipfile.BadZipFile as exc:
+        raise CandidateFailed("zip 이 깨짐") from exc
+    except OSError as exc:
+        _raise_if_disk_full(exc)
+        raise CandidateFailed(f"압축 풀기 실패: {exc}") from exc
+    hits = sorted(base.glob("*/bin/ffmpeg.exe")) or sorted(base.glob("bin/ffmpeg.exe"))
+    if not hits:
+        raise CandidateFailed("압축 안에 bin\\ffmpeg.exe 가 없음")
+    return hits[0].parent.parent
+
+
+def missing_features(ffmpeg: Path, *, run: Callable = subprocess.run) -> list[str]:
+    """녹화에 필요한데 이 ffmpeg 빌드에 없는 것. 실행조차 안 되면 ['실행 안 됨']."""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    seen: dict[str, str] = {}
+    for opt in sorted(set(NEEDED.values())):
+        try:
+            p = run([str(ffmpeg), "-hide_banner", opt], capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=30, creationflags=flags)
+        except (OSError, subprocess.SubprocessError):
+            return ["실행 안 됨"]
+        seen[opt] = (p.stdout or "") + (p.stderr or "")
+    return [name for name, opt in NEEDED.items()
+            if not re.search(rf"(^|\s){re.escape(name)}(\s|$)", seen[opt], re.M)]
+
+
+def swap_in(new_dir: Path, dest: Path) -> Path:
+    """dest\\ffmpeg 를 new_dir 로 바꿉니다. 도중에 실패하면 옛것을 되돌립니다."""
+    final, old = dest / "ffmpeg", dest / "ffmpeg.old"
+    if old.exists():
+        shutil.rmtree(old, ignore_errors=True)
+    had_old = final.exists()
+    if had_old:
+        try:
+            final.replace(old)
+        except OSError as exc:              # 녹화 중이라 ffmpeg.exe 가 잠김 등 — 후보 탓 아님
+            _raise_if_disk_full(exc)
+            raise Fatal(f"쓰던 tools\\ffmpeg 를 옮기지 못했습니다({exc}). "
+                        "녹화·송출을 끈 뒤 다시 실행하세요.") from exc
+    try:
+        shutil.move(str(new_dir), str(final))
+    except OSError as exc:
+        if final.exists():
+            shutil.rmtree(final, ignore_errors=True)
+        if had_old:
+            old.replace(final)                      # 롤백: 쓰던 것을 그대로
+        _raise_if_disk_full(exc)
+        raise CandidateFailed(f"tools\\ffmpeg 로 옮기지 못함: {exc}") from exc
+    if had_old:
+        shutil.rmtree(old, ignore_errors=True)
+    return final / "bin" / "ffmpeg.exe"
+
+
+# ---------------------------------------------------------------------------
+# 전체
+# ---------------------------------------------------------------------------
+def install(dest: Path, *, max_tries: int = 6, force: bool = False,
+            opener: Callable = _open, run: Callable = subprocess.run,
+            sleep: Callable[[float], None] = time.sleep,
+            say: Callable[[str], None] = print) -> Result:
+    dest = Path(dest)
+    current = dest / "ffmpeg" / "bin" / "ffmpeg.exe"
+    if current.exists() and not force and not missing_features(current, run=run):
+        say(f"이미 쓸 수 있는 ffmpeg 가 있습니다: {current}")
+        return Result(True, str(current))
+
+    try:
+        cands = candidates(fetch_releases(opener))[:max_tries]
+        say(f"릴리스 목록에서 후보 {len(cands)}개: " + ", ".join(c.version for c in cands))
+    except Exception as exc:  # noqa: BLE001 — 목록을 못 읽어도 마지막 후보는 있음
+        say(f"[!] 릴리스 목록을 읽지 못했습니다({exc}). gyan.dev 로 시도합니다.")
+        cands = []
+    cands.append(gyan_candidate(opener))
+
+    result = Result(False)
+    dest.mkdir(parents=True, exist_ok=True)
+    for i, c in enumerate(cands):
+        if i:
+            say(f"  -> 이전 릴리스로 롤백: {c.version}")
+        size = f" ({c.size / 1e6:,.0f} MB)" if c.size else ""
+        say(f"[{i + 1}/{len(cands)}] {c.version}  {c.name}{size}")
+        work = Path(tempfile.mkdtemp(prefix="_ffmpeg_", dir=dest))
+        try:
+            z = download(c, work / c.name, opener=opener, sleep=sleep, say=say)
+            say("      해시 확인 " + ("통과" if c.sha256 else "생략(릴리스에 해시 없음)"))
+            folder = extract(z, work / "x")
+            lack = missing_features(folder / "bin" / "ffmpeg.exe", run=run)
+            if lack:
+                raise CandidateFailed("녹화에 필요한 기능 없음: " + ", ".join(lack))
+            exe = swap_in(folder, dest)
+            say(f"완료: {exe}  ({c.version})")
+            result.ok, result.ffmpeg, result.used = True, str(exe), c
+            return result
+        except CandidateFailed as exc:
+            say(f"      [X] {exc}")
+            result.tried.append((c.version, str(exc)))
+        except Fatal as exc:
+            say(f"[X] {exc}")
+            result.tried.append((c.version, str(exc)))
+            return result
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+    return result
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="python -m syncnote.ffmpeg_fetch",
+                                 description="릴리스 목록에서 ffmpeg 를 받아 tools\\ffmpeg 에 둡니다")
+    ap.add_argument("--dest", default=str(REPO_ROOT / "tools"))
+    ap.add_argument("--max", type=int, default=6, help="롤백해 볼 릴리스 수 (기본 6)")
+    ap.add_argument("--force", action="store_true", help="쓸 수 있는 ffmpeg 가 있어도 새로 받기")
+    ap.add_argument("--dry-run", action="store_true", help="받지 않고 시도할 순서만 출력")
+    a = ap.parse_args(argv)
+    if a.dry_run:
+        cands = candidates(fetch_releases())[:a.max] + [gyan_candidate()]
+        for i, c in enumerate(cands, 1):
+            print(f"{i}. {c.version:<28} {c.name}  sha256={c.sha256[:12] or '-'}")
+        return 0
+    r = install(Path(a.dest), max_tries=a.max, force=a.force)
+    if not r.ok and r.tried:
+        print("\n시도한 순서와 실패 이유:")
+        for v, why in r.tried:
+            print(f"  - {v}: {why}")
+    return 0 if r.ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
