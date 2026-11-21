@@ -65,11 +65,20 @@ Eclass 수집을 쓸 때만 필요합니다. 약 150MB.
 scripts\install_ffmpeg.bat
 ```
 
-`setup.bat` 도 ffmpeg 가 없으면 이 스크립트를 부릅니다. 순서는 이렇습니다.
+`setup.bat` 도 ffmpeg 가 없으면 이 스크립트를 부릅니다. 실제 일은
+`python -m syncnote.ffmpeg_fetch --auto` 가 실패 원인을 보며 차례로 합니다.
 
-1. **winget** 으로 설치: `winget install Gyan.FFmpeg` 와 같습니다. 동의 질문
+0. 이미 쓸 수 있는 ffmpeg 가 있으면 끝 — PATH, `FFMPEG`, `tools\ffmpeg`, winget 폴더, pip 순.
+   녹화에 필요한 기능(gdigrab·libx264·aac)이 있는지도 봅니다.
+1. **pip 의 `imageio-ffmpeg`** (requirements.txt 에 있음). wheel 안에 ffmpeg 가 들어 있어
+   관리자 권한·winget 없이 깔립니다. Windows 빌드는 gyan.dev essentials 9.0.2 로
+   필요한 기능을 확인했습니다. `ffprobe` 는 없지만 녹화에는 필요 없습니다.
+   (그 전에 **`tools` 폴더에 가져다 둔 `ffmpeg*.zip`** 이 있으면 그것부터 씁니다 — 오프라인·USB.)
+2. **winget** 으로 설치: `winget install Gyan.FFmpeg` 와 같습니다. 동의 질문
    (`Do you agree ...? [Y]`)은 옵션으로 전부 자동 승인하므로 멈추지 않습니다.
-2. winget 이 없거나 실패하면 **실제 릴리스 목록에서 받아 `tools\ffmpeg` 에 둡니다**
+   winget 이 **없거나 정책으로 막혀 있으면** 다시 해도 같으므로 `tools\.ffmpeg_install.json`
+   에 적어 두고 다음부터 건너뜁니다(`--retry-skipped` 로 다시 시도).
+3. winget 이 없거나 실패하면 **실제 릴리스 목록에서 받아 `tools\ffmpeg` 에 둡니다**
    (`python -m syncnote.ffmpeg_fetch`). winget 이 받아 오는 것과 같은 저장소
    [GyanD/codexffmpeg](https://github.com/GyanD/codexffmpeg/releases) 입니다.
    - 순서: 정식 버전 새 것부터(9.1 → 9.0.2 → …) → 날짜별 git 빌드 → gyan.dev
@@ -78,8 +87,36 @@ scripts\install_ffmpeg.bat
    - 끊기면 2·4·8초 쉬고 다시 받습니다. 디스크가 꽉 찼으면 바로 멈춥니다.
    - 이미 있던 `tools\ffmpeg` 는 새 것이 다 확인된 뒤에만 바꾸고, 바꾸다 실패하면
      되돌려 놓습니다.
-   - `python -m syncnote.ffmpeg_fetch --dry-run` 으로 시도할 순서만 볼 수 있습니다.
-3. 파이썬조차 없을 때만 PowerShell 로 gyan.dev zip 을 받습니다.
+   - 목록은 **세 출처를 함께** 읽어 합칩니다. 하나가 막혀도 나머지로 갑니다.
+
+     | 출처 | 주는 것 | 없거나 막히면 |
+     |---|---|---|
+     | GitHub API | 목록·파일·SHA-256 | 로그인 없이 시간당 60회 제한 |
+     | `gh` (로그인돼 있을 때) | 목록 + `view` 로 SHA-256, 받기 대체 | 건너뜀 (로그인을 시키지 않음) |
+     | `git ls-remote --tags` | 태그 이름만 (주소는 태그로 만듦) | 건너뜀 |
+
+     - API 와 gh 의 SHA-256 이 다르면 그 버전은 버립니다.
+     - git 으로만 찾은 버전은 해시가 없어 **기본으로 쓰지 않습니다.** 예외로 가장 새 정식 버전은
+       gyan.dev 가 공개한 해시(같은 빌드)를 빌려 검증합니다. API·gh 가 다 막혀도 됩니다.
+     - 해시 없는 버전까지 쓰려면 `--allow-unverified`. 받기 전에 파일이 실제로 있는지 먼저 봅니다.
+     - urllib 로 못 받으면 같은 버전을 `gh release download` 로 다시 받습니다(해시 확인 그대로).
+   - `python -m syncnote.ffmpeg_fetch --dry-run` 으로 출처별 결과와 시도할 순서만 볼 수 있습니다.
+4. 다운로드 폴더(`%USERPROFILE%\Downloads`)의 `ffmpeg*.zip`.
+5. 파이썬조차 없을 때만 winget → PowerShell 로 gyan.dev zip.
+
+전부 실패하면 **시도한 순서와 각각의 이유**, 그리고 원인에 맞는 **다음 할 일 하나**를
+출력합니다. 설치·점검 창에도 그 한 줄이 설치 단계 메모로 뜹니다.
+
+| 원인 | 다음 할 일 |
+|---|---|
+| 디스크 부족 | 공간 비우고 다시 |
+| 쓰던 ffmpeg 잠김 | 녹화·송출 끄고 다시 |
+| 인터넷에 안 닿음 | 학교·회사망이면 `HTTPS_PROXY` 설정 (설정돼 있으면 그 주소 확인) |
+| 해시가 계속 다름 | 다른 망에서, 또는 USB 로 zip 을 `tools` 에 |
+| 그 밖 | 다른 PC 에서 `*-essentials_build.zip` 을 받아 USB 로 `tools` 에 |
+
+가져온 zip 을 직접 지정할 수도 있습니다:
+`python -m syncnote.ffmpeg_fetch --from-zip D:\ffmpeg-9.1-essentials_build.zip [--sha256 …]`
 
 winget 은 PATH 를 바꾸지만 **이미 열린 창에는 반영되지 않습니다.** syncnote 는
 winget 이 둔 위치(`%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe`)를 직접 찾으므로

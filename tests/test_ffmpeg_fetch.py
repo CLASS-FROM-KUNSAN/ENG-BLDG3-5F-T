@@ -16,6 +16,15 @@ import pytest
 
 from syncnote import ffmpeg_fetch as F
 
+
+@pytest.fixture(autouse=True)
+def _no_real_gh_or_git(monkeypatch):
+    """진짜 gh·git 을 부르지 않습니다(네트워크·로그인 상태에 따라 결과가 달라지므로).
+    세 출처를 쓰는 시험은 which 와 run 을 직접 넘깁니다."""
+    from syncnote import release_sources as RS
+
+    monkeypatch.setattr(RS, "which", lambda _n: None)
+
 GOOD_DEVICES = " D  dshow\n D  gdigrab         GDI API Windows frame grabber\n"
 GOOD_ENCODERS = " V....D libx264  H.264\n A....D aac      AAC (Advanced Audio Coding)\n"
 
@@ -134,8 +143,9 @@ def test_extract_rejects_paths_that_escape(tmp_path):
 def test_missing_features_reads_ffmpeg_output(tmp_path):
     exe = tmp_path / "ffmpeg.exe"
     exe.write_bytes(b"nogdi")
-    assert F.missing_features(exe, run=runner({"nogdi": ["gdigrab", "libx264"]})) == [
-        "gdigrab", "libx264"]
+    got = F.missing_features(exe, run=runner({"nogdi": ["gdigrab", "libx264"]}))
+    # 화면 캡처(gdigrab)는 Windows 에서만 필요
+    assert got == (["gdigrab", "libx264"] if F.os.name == "nt" else ["libx264"])
     assert F.missing_features(tmp_path / "gone.exe") == ["실행 안 됨"]
 
 
@@ -157,11 +167,11 @@ def test_rolls_back_to_older_release_until_one_works(tmp_path):
                      ("9.0.2", _zip(marker=b"v902"), None),               # 기능 없음
                      ("9.0", _zip(marker=b"v90"), None))                  # 정상
     logs = []
-    r = F.install(tmp_path, opener=opener_for(routes), run=runner({"v902": ["gdigrab"]}),
+    r = F.install(tmp_path, opener=opener_for(routes), run=runner({"v902": ["libx264"]}),
                   sleep=lambda _s: None, say=logs.append)
     assert r.ok and r.used.version == "9.0"
     assert [v for v, _ in r.tried] == ["9.1", "9.0.2"]
-    assert "SHA-256" in r.tried[0][1] and "gdigrab" in r.tried[1][1]
+    assert "SHA-256" in r.tried[0][1] and "libx264" in r.tried[1][1]
     assert (tmp_path / "ffmpeg" / "bin" / "ffmpeg.exe").read_bytes() == b"v90"
     assert any("롤백: 9.0.2" in m for m in logs) and any("롤백: 9.0" in m for m in logs)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["ffmpeg"]      # 임시 폴더 정리
@@ -226,3 +236,190 @@ def test_disk_full_stops_instead_of_trying_older_releases(tmp_path, monkeypatch)
     monkeypatch.setattr(Path, "open", full)
     r = F.install(tmp_path, opener=opener_for(routes), run=runner(), say=lambda _m: None)
     assert not r.ok and len(r.tried) == 1 and "디스크" in r.tried[0][1]
+
+
+# -- pip(imageio-ffmpeg) 경로 --------------------------------------------------
+def _fake_imageio(monkeypatch, exe):
+    import sys
+    import types as _t
+
+    mod = _t.ModuleType("imageio_ffmpeg")
+    mod.get_ffmpeg_exe = lambda: str(exe)
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", mod)
+
+
+def test_pip_ffmpeg_used_only_when_it_has_needed_features(tmp_path, monkeypatch):
+    from syncnote.recorder import ffmpeg_util as U
+
+    exe = tmp_path / "ffmpeg-win-x86_64-v9.0.2.exe"
+    exe.write_bytes(b"x")
+    _fake_imageio(monkeypatch, exe)
+    U.reset_cache()
+    monkeypatch.setattr(F, "missing_features", lambda _p, **_k: [])
+    assert U.pip_ffmpeg() == str(exe)
+    monkeypatch.setattr(F, "missing_features", lambda _p, **_k: ["libx264"])
+    assert U.pip_ffmpeg() == str(exe)                                   # 프로세스당 한 번(캐시)
+    U.reset_cache()
+    assert U.pip_ffmpeg() is None                                        # 기능 없음 -> 안 씀
+    U.reset_cache()
+
+
+def test_pip_ffmpeg_absent_module_is_skipped(monkeypatch):
+    import sys
+
+    from syncnote.recorder import ffmpeg_util as U
+
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", None)            # import 실패
+    U.reset_cache()
+    assert U.pip_ffmpeg() is None
+    U.reset_cache()
+
+
+def test_pip_install_reports_failure_and_rechecks_after_success(monkeypatch):
+    from syncnote.recorder import ffmpeg_util as U
+
+    calls = []
+    fail = lambda cmd, **k: calls.append(cmd) or types.SimpleNamespace(returncode=1)  # noqa: E731
+    assert F.pip_install(run=fail, say=lambda _m: None) == ""
+    assert calls[0][1:4] == ["-m", "pip", "install"] and "imageio-ffmpeg>=0.5" in calls[0]
+    resets = []
+    monkeypatch.setattr(U, "reset_cache", lambda: resets.append(1))
+    monkeypatch.setattr(U, "pip_ffmpeg", lambda: "C:/site/ffmpeg.exe")
+    ok = lambda cmd, **k: types.SimpleNamespace(returncode=0)  # noqa: E731
+    assert F.pip_install(run=ok, say=lambda _m: None) == "C:/site/ffmpeg.exe" and resets
+
+
+def test_find_usable_rejects_a_found_ffmpeg_without_features(monkeypatch):
+    from syncnote.recorder import ffmpeg_util as U
+
+    monkeypatch.setattr(U, "find_ffmpeg", lambda: "C:/old/ffmpeg.exe")
+    monkeypatch.setattr(F, "missing_features", lambda _p, **_k: ["libx264"])
+    logs = []
+    assert F.find_usable(say=logs.append) == "" and "FFMPEG" in logs[0]
+    monkeypatch.setattr(F, "missing_features", lambda _p, **_k: [])
+    assert F.find_usable(say=logs.append) == "C:/old/ffmpeg.exe"
+
+
+# -- 원인별 자동 흐름 (--auto) -------------------------------------------------
+def _rel(ok=False, tried=(), kinds=(), list_failed=False, exe=""):
+    r = F.Result(ok, exe, used=F.Candidate("x", "u", "9.1") if ok else None)
+    r.tried, r.kinds, r.list_failed = list(tried), list(kinds), list_failed
+    return r
+
+
+def _auto(tmp_path, **kw):
+    base = {"find": lambda: "", "pip": lambda: "",
+            "winget": lambda: F.WingetOutcome(reason="실패"), "release": lambda: _rel(),
+            "from_zip": lambda _z: "", "say": lambda _m: None,
+            "state_path": tmp_path / "state.json"}
+    base.update(kw)
+    return F.auto(tmp_path / "tools", **base)
+
+
+def test_auto_stops_at_the_first_step_that_works(tmp_path):
+    order = []
+    r = _auto(tmp_path, find=lambda: order.append("find") or "",
+              pip=lambda: order.append("pip") or "C:/pip/ffmpeg.exe",
+              winget=lambda: order.append("winget") or F.WingetOutcome())
+    assert r.ok and r.ffmpeg == "C:/pip/ffmpeg.exe" and order == ["find", "pip"]
+
+
+def test_auto_prefers_a_zip_dropped_into_tools_before_the_network(tmp_path):
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "ffmpeg-9.1-essentials_build.zip").write_bytes(b"z")
+    (tmp_path / "tools" / "notes.zip").write_bytes(b"z")                # 이름에 ffmpeg 없음
+    seen = []
+    r = _auto(tmp_path, from_zip=lambda z: seen.append(z.name) or "C:/t/ffmpeg.exe",
+              pip=lambda: pytest.fail("네트워크 단계까지 가면 안 됨"))
+    assert r.ok and seen == ["ffmpeg-9.1-essentials_build.zip"]
+
+
+def test_permanent_winget_failure_is_remembered_and_skipped_next_time(tmp_path):
+    calls = []
+    perm = lambda: calls.append(1) or F.WingetOutcome(reason="winget 이 없음", permanent=True)  # noqa: E731
+    _auto(tmp_path, winget=perm)
+    r = _auto(tmp_path, winget=perm)
+    assert calls == [1]                                                  # 두 번째는 안 부름
+    assert [s.status for s in r.steps if s.name == "winget"] == ["skip"]
+    _auto(tmp_path, winget=perm, retry_skipped=True)
+    assert calls == [1, 1]
+
+
+def test_transient_winget_failure_is_not_remembered(tmp_path):
+    calls = []
+    flaky = lambda: calls.append(1) or F.WingetOutcome(reason="종료 코드 1")  # noqa: E731
+    _auto(tmp_path, winget=flaky)
+    _auto(tmp_path, winget=flaky)
+    assert calls == [1, 1]
+
+
+def test_downloads_folder_zip_is_the_last_resort(tmp_path):
+    dl = tmp_path / "Downloads"
+    dl.mkdir()
+    (dl / "ffmpeg-release-essentials.zip").write_bytes(b"z")
+    r = _auto(tmp_path, downloads=dl, from_zip=lambda z: "C:/dl/ffmpeg.exe",
+              release=lambda: _rel(tried=[("9.1", "내려받기 실패")], kinds=["net"]))
+    assert r.ok and r.steps[-1].name.startswith("다운로드 폴더 zip")
+
+
+def test_all_fail_lists_every_step_and_one_next_action(tmp_path, monkeypatch):
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("https_proxy", raising=False)
+    r = _auto(tmp_path, release=lambda: _rel(
+        tried=[("9.1", "내려받기 실패: x"), ("gyan.dev", "내려받기 실패: y")],
+        kinds=["net", "net"], list_failed=True))
+    names = [s.name for s in r.steps]
+    assert names == ["이미 있음", "pip (imageio-ffmpeg)", "winget", "릴리스 9.1", "릴리스 gyan.dev"]
+    assert "HTTPS_PROXY" in r.next_action
+    lines = []
+    F.print_summary(r, say=lines.append)
+    assert any(ln.startswith("다음 할 일:") for ln in lines)
+    assert any("3. winget — 실패" in ln for ln in lines)
+
+
+@pytest.mark.parametrize("kinds,reason,expect", [
+    (["fatal"], "디스크 공간이 부족합니다", "디스크"),
+    (["hash", "hash"], "SHA-256", "USB"),
+    (["feature"], "기능 없음", "USB"),
+    (["net"], "내려받기 실패", "HTTPS_PROXY"),
+])
+def test_next_action_follows_the_cause(kinds, reason, expect):
+    steps = [F.Step("릴리스", "fail", reason)]
+    assert expect in F.next_action(steps, kinds)
+
+
+def test_next_action_with_proxy_set_asks_to_check_it():
+    assert "proxy.school:8080" in F.next_action([F.Step("r", "fail", "x")], ["net"],
+                                               proxy="http://proxy.school:8080")
+
+
+def test_winget_missing_or_blocked_by_policy_is_permanent():
+    w = F.winget_install(which=lambda _n: None, say=lambda _m: None)
+    assert w.permanent and not w.ffmpeg
+    blocked = lambda *a, **k: types.SimpleNamespace(  # noqa: E731
+        returncode=1, stdout="This operation is disabled by Group Policy", stderr="")
+    w = F.winget_install(which=lambda _n: "winget.exe", run=blocked, find=lambda: "",
+                         say=lambda _m: None)
+    assert w.permanent and "정책" in w.reason
+    other = lambda *a, **k: types.SimpleNamespace(returncode=1, stdout="network", stderr="")  # noqa: E731
+    assert not F.winget_install(which=lambda _n: "w", run=other, find=lambda: "",
+                                say=lambda _m: None).permanent
+
+
+def test_winget_nonzero_exit_but_installed_counts_as_success():
+    already = lambda *a, **k: types.SimpleNamespace(  # noqa: E731
+        returncode=0x8A15002B, stdout="Found an existing package already installed.", stderr="")
+    w = F.winget_install(which=lambda _n: "w", run=already, find=lambda: "C:/wg/ffmpeg.exe",
+                         say=lambda _m: None)
+    assert w.ffmpeg == "C:/wg/ffmpeg.exe"
+
+
+def test_install_from_zip_checks_optional_hash_and_features(tmp_path):
+    data = _zip(marker=b"usb")
+    z = tmp_path / "ffmpeg-usb.zip"
+    z.write_bytes(data)
+    dest = tmp_path / "tools"
+    assert F.install_from_zip(z, dest, sha256="0" * 64, run=runner(), say=lambda _m: None) == ""
+    assert F.install_from_zip(z, dest, run=runner({"usb": ["aac"]}), say=lambda _m: None) == ""
+    exe = F.install_from_zip(z, dest, sha256=_sha(data), run=runner(), say=lambda _m: None)
+    assert exe and (dest / "ffmpeg" / "bin" / "ffmpeg.exe").read_bytes() == b"usb"
