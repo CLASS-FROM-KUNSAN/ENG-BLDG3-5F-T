@@ -1,13 +1,15 @@
 # 실시간 오디오 송출 — Tailscale + GitHub 이슈
 
-PC 에서 나는 소리(또는 마이크)를 실시간으로 내보내고, **같은 Tailscale
-망(tailnet)** 에 들어와 있는 기기만 듣게 합니다. 링크가 생길 때마다
-저장소 이슈로 올라가므로, 듣는 사람은 이슈 알림만 보고 들어오면 됩니다.
+PC 에서 나는 소리(또는 마이크)를 실시간으로 내보내고, **접속 토큰이 담긴
+링크를 받은 사람**만 듣게 합니다. 듣는 사람은 **Tailscale 앱이 없어도** 됩니다.
+Tailscale 은 송출하는 PC 에만 있으면 되고, `tailscale funnel` 이 그 PC 의
+오디오 서버를 HTTPS 링크로 엽니다. 링크가 생길 때마다 저장소 이슈로
+올라가므로, 듣는 사람은 이슈 알림만 보고 들어오면 됩니다.
 
 ```
-소리 ─▶ ffmpeg (mp3/aac) ─▶ 내장 오디오 서버 (127.0.0.1:8765)
+소리 ─▶ ffmpeg (mp3/aac) ─▶ 내장 오디오 서버 (127.0.0.1:8765, 토큰 검사)
                                │
-                       tailscale serve (HTTPS, tailnet 전용)
+                   tailscale funnel (HTTPS, 송출 PC 에서)
                                │
      https://<기기>.<tailnet>.ts.net/live?t=<토큰>  ──▶  GitHub 이슈
 ```
@@ -17,23 +19,22 @@ python -m syncnote stream link       # 먼저: Tailscale 상태와 만들어질 
 python -m syncnote stream start      # 송출 시작 (Ctrl+C 로 멈춤)
 python -m syncnote stream schedule   # 시간표대로 수업마다 송출
 python -m syncnote stream start --dry-run   # 이슈는 만들지 않고 내용만 출력
-python -m syncnote stream cleanup    # 강제 종료로 남은 tailscale serve 끄기
+python -m syncnote stream cleanup    # 강제 종료로 남은 tailscale serve/funnel 끄기
 ```
 
 Windows 는 `scripts\stream_now.bat`, macOS·Linux 는 `scripts/stream_now.sh`.
-
-> **먼저 읽으세요.** 강의 소리는 교수와 학교의 저작물입니다. 함께 듣는
-> 사람은 같은 tailnet 의 본인 기기나 허락받은 사람으로 한정하세요.
-> `funnel`(인터넷 공개)이나 public 저장소에 링크를 올리는 것은 공중송신이
-> 됩니다. 그래서 둘 다 기본으로 막혀 있고, 설정에 직접 적어야 풀립니다.
 
 ---
 
 ## 준비
 
-1. **Tailscale** 설치 후 로그인 (`tailscale up`). 듣는 기기도 같은 tailnet 에.
-2. 관리 콘솔(DNS 탭)에서 **MagicDNS** 와 **HTTPS Certificates** 켜기 —
-   `serve` 모드에 필요합니다.
+1. **Tailscale** — 송출 PC 에만 필요합니다. pip 패키지가 아니라서
+   `requirements.txt` 가 아니라 `scripts\setup.bat` 이 `winget` 으로 설치하고,
+   설치·점검 창(setupcheck)이 빠졌는지 확인합니다. 설치 후 한 번 로그인
+   (`tailscale up`). **듣는 사람은 설치할 것이 없습니다.**
+2. 관리 콘솔(DNS 탭)에서 **MagicDNS** 와 **HTTPS Certificates** 켜기.
+   처음 `tailscale funnel` 을 쓰면 Funnel 허용 링크가 한 번 나옵니다 —
+   열어서 허용하세요(tailnet 정책의 `funnel` 속성).
 3. **GitHub 토큰** (`python -m syncnote secrets set github`). 이슈 쓰기 권한이
    있어야 합니다(classic: `repo`, fine-grained: Issues read/write).
 4. `python -m syncnote stream link` 로 점검.
@@ -75,11 +76,14 @@ Windows 는 `scripts\stream_now.bat`, macOS·Linux 는 `scripts/stream_now.sh`.
 
 ## Tailscale 노출 방식 — `[stream.tailscale] mode`
 
-| mode | 링크 | 누가 닿나 | 비고 |
+| mode | 링크 | 듣는 사람에게 필요한 것 | 비고 |
 |---|---|---|---|
-| `serve` (기본) | `https://기기.tailnet.ts.net/live` | tailnet 만 | 서버는 127.0.0.1 에만 열림. HTTPS 인증서 자동 |
-| `direct` | `http://기기.tailnet.ts.net:8765/live` | tailnet 만 | 서버를 Tailscale IP 에 직접 엶. 평문 HTTP, 방화벽 허용이 필요할 수 있음. IP 가 바뀌면 서버도 새 IP 로 다시 엶 |
-| `funnel` | `https://기기.tailnet.ts.net/live` | **인터넷 전체** | `allow_funnel = true` 필요, `https_port` 는 443/8443/10000 |
+| `funnel` (기본) | `https://기기.tailnet.ts.net/live?t=토큰` | **링크만** (Tailscale 앱 없어도 됨) | 서버는 127.0.0.1 에만 열림. 토큰 필수(`require_token = true`, `server = "builtin"`), `https_port` 는 443/8443/10000 |
+| `serve` | `https://기기.tailnet.ts.net/live?t=토큰` | 같은 tailnet + Tailscale 앱 | 서버는 127.0.0.1 에만 열림. HTTPS 인증서 자동 |
+| `direct` | `http://기기.tailnet.ts.net:8765/live?t=토큰` | 같은 tailnet + Tailscale 앱 | 서버를 Tailscale IP 에 직접 엶. 평문 HTTP, 방화벽 허용이 필요할 수 있음. IP 가 바뀌면 서버도 새 IP 로 다시 엶 |
+
+`funnel` 에서는 링크의 토큰이 유일한 열쇠라서, 토큰을 끄거나(`require_token = false`)
+토큰을 지원하지 않는 Icecast 와 함께 쓰면 시작하지 않습니다.
 
 **이미 쓰고 있는 serve/funnel 은 건드리지 않습니다.** `https_port` 에 다른
 serve 가 걸려 있으면 시작하지 않고 알려 줍니다(`override_existing = true`
@@ -113,7 +117,7 @@ serve 가 걸려 있으면 시작하지 않고 알려 줍니다(`override_existi
 
 ```
 {link} {player} {host} {tailnet} {mode} {label} {machine}
-{source} {codec} {bitrate} {started} {until} {reason} {token_note}
+{source} {codec} {bitrate} {started} {until} {reason} {access_note} {token_note}
 ```
 
 모르는 `{이름}` 은 그대로 남깁니다(오타 하나로 송출이 멈추지 않게).
@@ -203,21 +207,23 @@ python -m syncnote stream schedule --show   # 송출할 수업만 보기
 ## 접속 토큰
 
 `require_token = true`(기본)면 링크 끝에 `?t=<토큰>` 이 붙고, 토큰이 틀리면
-403 입니다. `token` 을 비우면 송출마다 새로 만듭니다(권장) — 지난 이슈의
+403 입니다. 기본 `funnel` 에서는 끌 수 없습니다. `token` 을 비우면 송출마다 새로 만듭니다(권장) — 지난 이슈의
 링크로는 다음 송출을 들을 수 없습니다. 고정하려면 12자 이상을 적으세요.
 
 ## 듣는 쪽
 
 - 브라우저: 이슈의 **재생 페이지** 링크
 - VLC: 미디어 > 네트워크 스트림 열기 > **듣기** 링크
-- 휴대폰: Tailscale 앱으로 tailnet 에 접속한 뒤 브라우저에서 링크
+- 휴대폰: 브라우저에서 링크 (기본 `funnel`). `serve`/`direct` 면 Tailscale 앱으로 tailnet 에 먼저 접속
 
 ## 안 될 때
 
 | 증상 | 원인 / 해결 |
 |---|---|
 | `HTTPS 443 포트를 이미 다른 것이 쓰고 있습니다` | 기존 serve/funnel. `https_port = 10000` 처럼 바꾸기 |
-| `serve/funnel 은 MagicDNS 이름이 필요합니다` | 관리 콘솔 DNS 탭에서 MagicDNS·HTTPS 켜기, 또는 `mode = "direct"` |
+| `serve/funnel 은 MagicDNS 이름이 필요합니다` | 관리 콘솔 DNS 탭에서 MagicDNS·HTTPS 켜기 |
+| `tailscale funnel 실패` · Funnel 이 허용되지 않음 | 출력에 나온 링크를 열어 이 기기에 Funnel 허용(tailnet 정책 `funnel` 속성) |
+| `tailscale 명령을 찾지 못했습니다` | `scripts\setup.bat` 다시 실행(winget 으로 설치) |
 | direct 모드인데 다른 기기에서 안 열림 | Windows 방화벽에서 Python 의 개인/공용 네트워크 허용 |
 | 링크는 열리는데 무음 | `source`/`device` 확인 (`python -m syncnote devices`) |
 | 강제 종료 뒤 serve 가 남음 | `python -m syncnote stream cleanup` |

@@ -7,12 +7,13 @@
            설치·설정이 가장 적지만 평문 HTTP 이고, Windows 방화벽이
            들어오는 연결을 막을 수 있습니다.
   serve  : 서버는 127.0.0.1 에만 열고 `tailscale serve` 가 tailnet 안에
-           HTTPS 로 내보냅니다.  https://<기기>.<tailnet>.ts.net/live   [권장]
-           인증서를 Tailscale 이 붙여 주고, 같은 tailnet 사람만 닿습니다.
-  funnel : `tailscale funnel` 로 **인터넷 전체**에 공개합니다.
-           강의 소리는 교수와 학교의 저작물입니다. 공개 송출은 사적
-           이용이 아니라 공중송신이 됩니다. allow_funnel = true 로
-           명시하지 않으면 거부합니다.
+           HTTPS 로 내보냅니다.  https://<기기>.<tailnet>.ts.net/live
+           같은 tailnet 사람(Tailscale 앱 필요)만 닿습니다.
+  funnel : 서버는 127.0.0.1 에만 열고 `tailscale funnel` 이 HTTPS 로 내보냅니다.   [기본]
+           https://<기기>.<tailnet>.ts.net/live?t=<토큰>
+           듣는 사람은 **Tailscale 앱이 없어도** 링크만 있으면 열립니다.
+           그래서 링크의 접속 토큰이 유일한 열쇠이고, 토큰 없는 funnel 은
+           거부합니다(require_token, server = "builtin").
 
 링크는 '기기 DNS 이름 또는 IP + 포트 + 경로 + (토큰)' 입니다. 기기 이름을
 바꾸거나, tailnet 을 옮기거나, IP 가 바뀌면 링크가 바뀝니다. live.py 가
@@ -71,8 +72,9 @@ def find_exe(configured: str = "") -> str:
         if p.exists():
             return str(p)
     raise TailscaleError(
-        "tailscale 명령을 찾지 못했습니다. https://tailscale.com/download 에서 설치하거나\n"
-        "  [stream.tailscale] exe 에 전체 경로를 적으세요."
+        "tailscale 명령을 찾지 못했습니다. scripts\\setup.bat 을 다시 실행하면 설치합니다\n"
+        "  (winget install Tailscale.Tailscale). 또는 https://tailscale.com/download 에서\n"
+        "  설치하거나 [stream.tailscale] exe 에 전체 경로를 적으세요."
     )
 
 

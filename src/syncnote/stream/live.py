@@ -69,10 +69,9 @@ class StreamSettings:
     post_roll_minutes: float = 0
     # tailscale
     ts_enabled: bool = True
-    ts_mode: str = "serve"
+    ts_mode: str = "funnel"
     ts_https_port: int = 443
     ts_use_magicdns: bool = True
-    ts_allow_funnel: bool = False
     ts_exe: str = ""
     ts_link_check_sec: float = 60
     ts_require_online: bool = True
@@ -112,7 +111,7 @@ def settings_from(cfg) -> StreamSettings:
     if "timetable_slots" in s:
         out.timetable_slots = [str(x) for x in s["timetable_slots"] or []]
     mapping = {"enabled": "ts_enabled", "mode": "ts_mode", "https_port": "ts_https_port",
-               "use_magicdns": "ts_use_magicdns", "allow_funnel": "ts_allow_funnel", "exe": "ts_exe",
+               "use_magicdns": "ts_use_magicdns", "exe": "ts_exe",
                "link_check_sec": "ts_link_check_sec", "require_online": "ts_require_online",
                "override_existing": "ts_override_existing", "teardown": "ts_teardown"}
     for key, attr in mapping.items():
@@ -134,12 +133,17 @@ def settings_from(cfg) -> StreamSettings:
 
 def check(s: StreamSettings) -> None:
     """설정만으로 알 수 있는 거부 사유. 아무것도 띄우기 전에 봅니다."""
-    if s.ts_enabled and s.ts_mode == "funnel" and not s.ts_allow_funnel:
-        raise StreamError(
-            "mode = \"funnel\" 은 인터넷 전체에 공개합니다. 강의 소리를 공개 송출하면\n"
-            "  공중송신(저작권 침해)이 될 수 있습니다. 정말 필요하면\n"
-            "  [stream.tailscale] allow_funnel = true 를 직접 적으세요."
-        )
+    if s.ts_enabled and s.ts_mode == "funnel":
+        # funnel 은 Tailscale 이 없는 사람도 닿는 주소라, 링크의 토큰이 유일한 열쇠입니다.
+        if s.server == "icecast":
+            raise StreamError(
+                "funnel 은 링크의 접속 토큰으로만 막습니다. Icecast 는 그 토큰을 지원하지 않아\n"
+                "  함께 쓸 수 없습니다. server = \"builtin\" 으로 쓰거나 mode = \"serve\" 로 바꾸세요."
+            )
+        if not s.require_token:
+            raise StreamError(
+                "funnel 은 링크의 접속 토큰으로만 막습니다. require_token = true 로 두세요."
+            )
     if s.on_max_duration not in ON_MAX_DURATION:
         raise StreamError(f"on_max_duration 은 {ON_MAX_DURATION} 중 하나여야 합니다.")
     if s.server == "icecast" and s.require_token:

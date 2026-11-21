@@ -1537,7 +1537,8 @@ def cmd_stream_link(args) -> int:
     print(f"  Tailscale  : {'[O]' if ok else '[X]'} {node.backend_state}  {exe}")
     print(f"  이 기기    : {node.dns_name or '(MagicDNS 없음)'}  {node.ipv4}")
     print(f"  tailnet    : {node.tailnet}")
-    print(f"  노출 방식  : {s.ts_mode}" + ("  (인터넷 공개!)" if s.ts_mode == "funnel" else ""))
+    print(f"  노출 방식  : {s.ts_mode}" + (
+        "  (Tailscale 앱 없이 토큰 링크로)" if s.ts_mode == "funnel" else "  (tailnet 전용)"))
     try:
         live.check(s)
         port = s.ic_port if s.server == "icecast" else s.port
@@ -1758,7 +1759,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--bitrate", type=int, help="kbps")
         p.add_argument("--port", type=int, help="내장 서버 포트")
         p.add_argument("--mode", choices=["direct", "serve", "funnel"],
-                       help="Tailscale 노출 방식 (funnel 은 allow_funnel 필요)")
+                       help="Tailscale 노출 방식 (기본 funnel: 앱 없는 사람도 토큰 링크로)")
         p.add_argument("--no-tailscale", action="store_true", help="127.0.0.1 에서만 (이슈 없음)")
         p.add_argument("--no-issue", action="store_true", help="이슈를 올리지 않음")
 

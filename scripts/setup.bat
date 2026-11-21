@@ -18,7 +18,7 @@ if errorlevel 1 (
     pause & exit /b 1
 )
 
-echo [1/5] 가상환경 만드는 중...
+echo [1/6] 가상환경 만드는 중...
 if not exist "%REPO%\.venv" (
     python -m venv "%REPO%\.venv"
     if errorlevel 1 (echo     실패 & pause & exit /b 1)
@@ -27,21 +27,21 @@ set "PY=%REPO%\.venv\Scripts\python.exe"
 echo       완료
 
 echo.
-echo [2/5] 파이썬 패키지 설치 중... (몇 분 걸립니다)
+echo [2/6] 파이썬 패키지 설치 중... (몇 분 걸립니다)
 "%PY%" -m pip install --upgrade pip --quiet
 "%PY%" -m pip install -r "%REPO%\requirements.txt"
 if errorlevel 1 (echo     실패 & pause & exit /b 1)
 echo       완료
 
 echo.
-echo [3/5] Playwright 브라우저 설치 중... (약 150MB)
+echo [3/6] Playwright 브라우저 설치 중... (약 150MB)
 "%PY%" -m playwright install chromium
 if errorlevel 1 (
     echo     [!] 실패했습니다. Eclass 수집을 쓰지 않는다면 무시해도 됩니다.
 )
 
 echo.
-echo [4/5] ffmpeg 확인 중...
+echo [4/6] ffmpeg 확인 중...
 where ffmpeg >nul 2>&1
 if errorlevel 1 (
     if not exist "%REPO%\tools\ffmpeg\bin\ffmpeg.exe" (
@@ -55,7 +55,29 @@ if errorlevel 1 (
 )
 
 echo.
-echo [5/5] 설정 파일 준비
+echo [5/6] Tailscale 확인 중... (실시간 송출 링크를 엽니다)
+set "TS_EXE="
+where tailscale >nul 2>&1 && set "TS_EXE=tailscale"
+if not defined TS_EXE if exist "%ProgramFiles%\Tailscale\tailscale.exe" set "TS_EXE=%ProgramFiles%\Tailscale\tailscale.exe"
+if defined TS_EXE (
+    echo       이미 설치돼 있습니다.
+) else (
+    where winget >nul 2>&1
+    if errorlevel 1 (
+        echo     [!] winget 이 없습니다. https://tailscale.com/download 에서 직접 설치하세요.
+    ) else (
+        echo       winget 으로 설치합니다. 관리자 확인 창이 뜨면 '예' 를 누르세요...
+        winget install --id Tailscale.Tailscale -e --silent --accept-package-agreements --accept-source-agreements
+        if errorlevel 1 (
+            echo     [!] 설치하지 못했습니다. https://tailscale.com/download 에서 직접 설치하세요.
+        ) else (
+            echo       완료
+        )
+    )
+)
+
+echo.
+echo [6/6] 설정 파일 준비
 if not exist "%REPO%\config.toml" (
     copy "%REPO%\config.example.toml" "%REPO%\config.toml" >nul
     echo       config.toml 을 만들었습니다.
@@ -81,5 +103,9 @@ echo       scripts\doctor.bat
 echo.
 echo  4) 오디오 장치 이름을 확인해 config.toml 에 적으세요.
 echo       scripts\devices.bat
+echo.
+echo  5) 실시간 송출을 쓰려면 Tailscale 에 한 번 로그인하세요.
+echo       tailscale up
+echo     듣는 사람은 Tailscale 이 없어도 링크(토큰 포함)만 있으면 됩니다.
 echo.
 pause

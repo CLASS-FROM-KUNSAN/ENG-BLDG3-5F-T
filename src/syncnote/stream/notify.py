@@ -8,8 +8,8 @@
   같은 링크가 이미 열린 이슈에 -> dedupe = true 면 다시 만들지 않음 (token 을 고정했을 때)
   송출 종료                  -> comment_on_stop 댓글, close_on_stop 닫기
 
-**링크에는 접속 토큰이 들어갑니다.** 이슈를 읽을 수 있는 사람은 tailnet 에
-들어와 있기만 하면 들을 수 있다는 뜻입니다. 그래서 기본으로 private
+**링크에는 접속 토큰이 들어갑니다.** 기본(funnel)에서는 이슈를 읽을 수 있는
+사람이면 Tailscale 없이도 들을 수 있다는 뜻입니다. 그래서 기본으로 private
 저장소에만 올리고(require_private_repo), include_token = false 면 토큰을
 빼고 올립니다(그러면 토큰은 따로 전해야 합니다).
 """
@@ -44,9 +44,7 @@ DEFAULT_BODY = """\
 | 끝 | {until} |
 | 생성 이유 | {reason} |
 
-- 같은 **Tailscale 망(tailnet)** 에 들어와 있는 기기에서만 열립니다.
-- 브라우저, VLC, 휴대폰 Tailscale 앱 + 브라우저로 들을 수 있습니다.
-{token_note}
+{access_note}{token_note}
 > 이 이슈는 `syncnote stream start` 가 자동으로 만들었습니다.
 """
 
@@ -99,9 +97,20 @@ def _shown(url: str, s: IssueSettings) -> str:
     return url if s.include_token else redact(url)
 
 
+def access_note(mode: str) -> str:
+    """듣는 사람이 무엇이 있어야 열리는지 — 노출 방식에 따라."""
+    if mode == "funnel":
+        return ("- **Tailscale 앱이 없어도** 링크만 있으면 브라우저·VLC·휴대폰에서 열립니다.\n"
+                "- 링크의 토큰이 열쇠입니다. 토큰이 틀리거나 없으면 열리지 않습니다.\n")
+    if mode in ("serve", "direct"):
+        return ("- 같은 **Tailscale 망(tailnet)** 에 들어와 있는 기기에서만 열립니다.\n"
+                "- 브라우저, VLC, 휴대폰 Tailscale 앱 + 브라우저로 들을 수 있습니다.\n")
+    return ""
+
+
 def render(template: str, info: LinkInfo, s: IssueSettings, reason: str) -> str:
     """{link} {player} {host} {tailnet} {mode} {label} {machine} {source} {codec}
-    {bitrate} {started} {reason} {token_note} 를 채웁니다(순수 함수).
+    {bitrate} {started} {reason} {access_note} {token_note} 를 채웁니다(순수 함수).
 
     모르는 {이름} 은 그대로 둡니다 — 사용자가 적은 템플릿의 오타 하나로
     송출 전체가 멈추면 안 됩니다.
@@ -113,6 +122,7 @@ def render(template: str, info: LinkInfo, s: IssueSettings, reason: str) -> str:
     else:
         token_note = ""
     values = {
+        "access_note": access_note(info.mode),
         "link": _shown(info.link, s), "player": _shown(info.player, s),
         "host": info.host, "tailnet": info.tailnet, "mode": info.mode, "label": info.label,
         "machine": info.machine, "source": info.source, "codec": info.codec,

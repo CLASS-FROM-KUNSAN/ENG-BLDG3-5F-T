@@ -4,12 +4,13 @@
 
 시간표 편집기의 설치·점검 창이 setup.bat 을 돌리기 **전**(이미 됐으면 건너뜀)과
 **후**(종료 코드가 아니라 실제 상태로 성공 판단)에 씁니다. setup.bat 이 하는 일과
-같은 네 가지를 봅니다.
+같은 다섯 가지를 봅니다.
 
   in_venv    이 파이썬이 가상환경인가(.venv)
   reqs_bad   requirements.txt 에서 빠졌거나 버전이 안 맞는 패키지 이름들
   ffmpeg     ffmpeg 경로(없으면 null)
   chromium   Playwright 용 Chromium 이 내려받아져 있나
+  tailscale  tailscale 실행 파일 경로(없으면 null) — 실시간 송출이 funnel 로 링크를 엶
 """
 
 from __future__ import annotations
@@ -45,12 +46,19 @@ def report(requirements: Path) -> dict:
         ffmpeg: str | None = find_ffmpeg()
     except Exception:  # noqa: BLE001 — 없음(FFmpegMissing) 포함
         ffmpeg = None
+    try:
+        from .stream.tailnet import find_exe
+
+        tailscale: str | None = find_exe()
+    except Exception:  # noqa: BLE001 — 없음(TailscaleError) 포함
+        tailscale = None
     return {
         "python": sys.executable,
         "in_venv": sys.prefix != getattr(sys, "base_prefix", sys.prefix),
         "reqs_bad": bad,
         "ffmpeg": ffmpeg,
         "chromium": chromium_installed(),
+        "tailscale": tailscale,
     }
 
 
@@ -65,6 +73,8 @@ def missing(rep: dict) -> list[str]:
         out.append("ffmpeg 없음")
     if not rep.get("chromium"):
         out.append("Playwright Chromium 없음")
+    if not rep.get("tailscale"):
+        out.append("Tailscale 없음")
     return out
 
 

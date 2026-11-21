@@ -66,7 +66,9 @@ def fakes(tmp_path, monkeypatch):
                               "reqs_bad": [] if e("installed") else ["psutil"],
                               "ffmpeg": None if e("no_ffmpeg") and not e("ffmpeg_fixed")
                                         else "ffmpeg.exe",
-                              "chromium": not e("no_chromium") or e("chromium_fixed")}}))
+                              "chromium": not e("no_chromium") or e("chromium_fixed"),
+                              "tailscale": None if e("no_tailscale") and not e("tailscale_fixed")
+                                           else "tailscale.exe"}}))
         """),
         "reqcheck": _py(tmp_path, "reqcheck", f"""
             import json, os
@@ -107,6 +109,10 @@ def fakes(tmp_path, monkeypatch):
             open(r"{m / 'ffmpeg_ran'}", "a").write("x")
             print("ffmpeg 내려받기 실패(가짜)")
         """),
+        "tailscale": _py(tmp_path, "tailscale", f"""
+            open(r"{m / 'tailscale_fixed'}", "w").write("x")
+            print("Successfully installed Tailscale (가짜 winget)")
+        """),
         "venv_create": _py(tmp_path, "venv_create", f"""
             open(r"{m / 'venv'}", "w").write("x")
         """),
@@ -127,6 +133,7 @@ def fakes(tmp_path, monkeypatch):
     monkeypatch.setattr(F, "playwright_command", lambda self: cmds["playwright"])
     monkeypatch.setattr(F, "ffmpeg_command", lambda self: cmds["ffmpeg"])
     monkeypatch.setattr(F, "venv_create_command", lambda self: cmds["venv_create"])
+    monkeypatch.setattr(F, "tailscale_command", lambda self: cmds["tailscale"])
     monkeypatch.setattr(F, "BACKOFF_BASE", 0.01)
     # 시도 이력은 임시 폴더에(실제 data_dir 에 쓰지 않게)
     monkeypatch.setattr(F, "history_path", lambda self: tmp_path / "setup_history.json")
@@ -323,6 +330,25 @@ def test_partially_installed_runs_setup_and_reports_what_is_still_missing(app, t
     assert (fakes / "ffmpeg_ran").exists()                          # ffmpeg 만 따로 다시 시도
     assert dlg.state["install"] == "warn" and "ffmpeg" in dlg.notes["install"]
     dlg.close()
+
+
+def test_missing_tailscale_is_installed_with_winget(app, tmp_path, fakes):
+    (fakes / "venv").write_text("ok", encoding="utf-8")
+    (fakes / "installed").write_text("ok", encoding="utf-8")
+    (fakes / "no_tailscale").write_text("ok", encoding="utf-8")    # setup.bat 이 못 깔았음
+    dlg = SF.SetupFlow(None, tmp_path / "config.toml")
+    _run(app, dlg)
+    assert (fakes / "setup_ran").exists() and (fakes / "tailscale_fixed").exists()
+    assert dlg.state["install"] == "ok"
+    dlg.close()
+
+
+def test_tailscale_command_is_winget_on_windows():
+    cmd = SF.SetupFlow.tailscale_command(None)
+    if os.name == "nt":
+        assert cmd[:4] == ["winget", "install", "--id", "Tailscale.Tailscale"]
+    else:
+        assert cmd is None
 
 
 def test_nonzero_exit_but_actually_installed_counts_as_ok(app, tmp_path, fakes, monkeypatch):

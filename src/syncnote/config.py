@@ -242,10 +242,9 @@ DEFAULTS: dict[str, Any] = {
         "post_roll_minutes": 0,
         "tailscale": {
             "enabled": True,
-            "mode": "serve",
+            "mode": "funnel",
             "https_port": 443,
             "use_magicdns": True,
-            "allow_funnel": False,
             "exe": "",
             "link_check_sec": 60,
             "require_online": True,
@@ -599,12 +598,14 @@ def _validate_stream(cfg: Config, errors: list[str]) -> None:
         value = cfg.get(f"stream.issue.{key}", [])
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
             errors.append(f"stream.issue.{key} 는 문자열 목록이어야 합니다")
-    if (cfg.get("stream.tailscale.mode") == "funnel"
-            and not cfg.get("stream.tailscale.allow_funnel")):
-        errors.append(
-            'stream.tailscale.mode = "funnel" 은 인터넷 전체에 공개합니다. '
-            "정말 필요하면 stream.tailscale.allow_funnel = true 를 함께 적으세요."
-        )
+    if (cfg.get("stream.tailscale.enabled") and cfg.get("stream.tailscale.mode") == "funnel"):
+        # funnel 은 Tailscale 이 없는 사람도 닿는 주소라 링크의 토큰이 유일한 열쇠입니다.
+        if not cfg.get("stream.require_token"):
+            errors.append('stream.tailscale.mode = "funnel" 은 접속 토큰이 필수입니다 '
+                          "(stream.require_token = true)")
+        if cfg.get("stream.server") == "icecast":
+            errors.append('stream.tailscale.mode = "funnel" 은 server = "builtin" 만 됩니다 '
+                          "(Icecast 는 링크의 접속 토큰을 지원하지 않음)")
     if (cfg.get("stream.tailscale.mode") == "funnel"
             and cfg.get("stream.tailscale.https_port") not in {443, 8443, 10000}):
         errors.append("funnel 의 https_port 는 443, 8443, 10000 중 하나여야 합니다 (Tailscale 제한)")
@@ -856,9 +857,6 @@ def warnings_for(cfg: Config) -> list[str]:
             "stream.issue.require_private_repo = false 이고 include_token = true 입니다. "
             "public 저장소면 송출 링크와 토큰이 그대로 공개됩니다."
         )
-    if cfg.get("stream.tailscale.mode") == "funnel":
-        notes.append("실시간 송출이 funnel(인터넷 공개)로 설정돼 있습니다. 강의 소리라면 공중송신이 될 수 있습니다.")
-
     if cfg.get("github.delete_local_after_upload"):
         notes.append("업로드 후 로컬 원본을 삭제하도록 설정돼 있습니다. 업로드 실패 시 복구할 수 없습니다.")
 

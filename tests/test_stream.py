@@ -238,6 +238,15 @@ def test_render_fills_known_keeps_unknown_and_hides_token():
     assert "tok" not in body.replace("token", "") and "따로" in body
 
 
+def test_issue_body_says_who_can_open_the_link_by_mode():
+    s = notify.IssueSettings()
+    funnel = notify.render(notify.DEFAULT_BODY, info(mode="funnel"), s, "처음")
+    assert "Tailscale 앱이 없어도" in funnel and "tailnet)** 에 들어와" not in funnel
+    serve = notify.render(notify.DEFAULT_BODY, info(mode="serve"), s, "처음")
+    assert "tailnet)** 에 들어와" in serve and "없어도" not in serve
+    assert "앱" not in notify.access_note("local")                   # tailscale 끔
+
+
 def test_first_link_opens_an_issue_with_labels_and_mentions():
     gh = FakeGitHub()
     s = notify.IssueSettings(mentions=["@me"], assignees=["me"])
@@ -315,13 +324,17 @@ def _cfg(override: dict) -> cfgmod.Config:
 def test_defaults_are_valid_and_map_into_settings():
     cfg = _cfg({"github": {"owner": "o", "repo": "r"}})
     s = live.settings_from(cfg)
-    assert (s.ts_mode, s.port, s.codec, s.issue.repo, s.issue.labels) == (
-        "serve", 8765, "mp3", "r", ["live-stream"])
+    # 기본은 funnel: 듣는 사람은 Tailscale 앱 없이 토큰 링크로 듣습니다.
+    assert (s.ts_mode, s.require_token, s.port, s.codec, s.issue.repo, s.issue.labels) == (
+        "funnel", True, 8765, "mp3", "r", ["live-stream"])
+    assert not [e for e in cfgmod.problems(cfg) if "stream" in e]  # 기본값이 그대로 통과
+    live.check(s)
 
 
 @pytest.mark.parametrize("override,needle", [
-    ({"tailscale": {"mode": "funnel"}}, "allow_funnel"),
-    ({"tailscale": {"mode": "funnel", "allow_funnel": True, "https_port": 9000}}, "8443"),
+    ({"require_token": False}, "토큰이 필수"),                      # 기본 funnel 은 토큰 필수
+    ({"server": "icecast"}, "builtin"),
+    ({"tailscale": {"mode": "funnel", "https_port": 9000}}, "8443"),
     ({"path": "live"}, "'/'"),
     ({"path": "/status"}, "/status"),
     ({"port": 70000}, "65535"),
@@ -334,10 +347,21 @@ def test_bad_stream_settings_are_rejected(override, needle):
         cfgmod.validate(_cfg({"stream": override}))
 
 
-def test_funnel_without_permission_is_refused_at_runtime_too():
-    s = live.StreamSettings(ts_mode="funnel")
-    with pytest.raises(live.StreamError, match="allow_funnel"):
-        live.check(s)
+def test_funnel_without_token_is_refused_at_runtime_too():
+    live.check(live.StreamSettings(ts_mode="funnel"))                  # 토큰 있음 → 됨
+    with pytest.raises(live.StreamError, match="require_token"):
+        live.check(live.StreamSettings(ts_mode="funnel", require_token=False))
+    with pytest.raises(live.StreamError, match="Icecast"):
+        live.check(live.StreamSettings(ts_mode="funnel", server="icecast"))
+
+
+def test_tailnet_only_modes_may_still_go_without_token():
+    for override in ({"tailscale": {"mode": "serve"}, "require_token": False},
+                     {"tailscale": {"mode": "direct"}, "server": "icecast"},
+                     {"tailscale": {"enabled": False}, "require_token": False}):
+        cfg = _cfg({"stream": override})
+        assert not [e for e in cfgmod.problems(cfg) if "stream" in e]
+        live.check(live.settings_from(cfg))
 
 
 def test_cli_flags_override_config():
