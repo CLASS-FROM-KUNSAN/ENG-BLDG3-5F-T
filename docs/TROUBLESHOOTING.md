@@ -48,7 +48,13 @@ scripts\record_now.bat -m 1 --no-upload
 scripts\install_ffmpeg.bat
 ```
 
-또는 직접 받아서 환경변수 `FFMPEG` 에 `ffmpeg.exe` 전체 경로를 넣으세요.
+winget(`Gyan.FFmpeg`)으로 설치하고, 안 되면 zip 을 받습니다. 직접 하려면
+PowerShell 에서 `winget install Gyan.FFmpeg`, 또는 받아서 환경변수 `FFMPEG` 에
+`ffmpeg.exe` 전체 경로를 넣으세요.
+
+`winget` 으로 깔았는데 `ffmpeg -version` 이 '인식되지 않습니다' 라면 그 창이 설치
+전에 열린 것입니다. 창을 새로 여세요. syncnote 자체는 창을 다시 열지 않아도 winget 이
+둔 위치를 찾습니다.
 
 ### 영상이 검은 화면입니다
 

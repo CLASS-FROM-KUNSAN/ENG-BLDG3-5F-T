@@ -163,3 +163,33 @@ def test_bat_uses_crlf_only(path: Path):
     raw = path.read_bytes()
     lone_lf = raw.replace(b"\r\n", b"").count(b"\n")
     assert lone_lf == 0, f"{path.name}: CRLF 가 아닌 줄 {lone_lf}개 — cmd 가 줄을 잘못 읽습니다"
+
+
+# ---------------------------------------------------------------------------
+# 7) 괄호 블록 안 echo 의 맨 ')' — 블록을 거기서 닫아 버려 cmd 가
+#    '... was unexpected at this time.' 으로 멈춥니다. install_ffmpeg.bat 의
+#    내려받기 실패 안내('1) ... 2) ...')가 이래서 한 번도 보이지 않았습니다(이슈 #59).
+#    들여쓴 echo 는 블록 안이라고 보고 ^) 로 쓰게 합니다.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("path", BATS, ids=lambda p: p.name)
+def test_no_unescaped_close_paren_in_block_echo(path: Path):
+    bad = [f"{n}: {ln.strip()}" for n, ln in enumerate(code_lines(read(path.name)).splitlines(), 1)
+           if re.match(r"\s+echo\b", ln, re.I) and re.search(r"(?<!\^)\)", ln)]
+    assert not bad, f"{path.name}: 블록 안 echo 의 ')' 는 ^) 로 —\n" + "\n".join(bad)
+
+
+# ---------------------------------------------------------------------------
+# 8) ffmpeg 는 winget 으로 먼저 설치하고, 동의 질문에서 멈추지 않아야 합니다(이슈 #59).
+# ---------------------------------------------------------------------------
+def test_install_ffmpeg_uses_winget_without_prompts_then_falls_back_to_zip():
+    text = code_lines(read("install_ffmpeg.bat"))
+    line = next(ln for ln in text.splitlines() if "winget install" in ln)
+    assert line.strip().lower().startswith("call ")        # .bat 별칭이어도 돌아오게
+    for opt in ("--id Gyan.FFmpeg", "-e", "--source winget", "--accept-source-agreements",
+                "--accept-package-agreements", "--disable-interactivity"):
+        assert opt in line, opt
+    # 결과는 PATH(이 창엔 반영 안 됨)가 아니라 winget 이 만든 파일로 확인
+    assert r"WinGet\Links\ffmpeg.exe" in text and "Gyan.FFmpeg*" in text
+    assert text.index("winget install") < text.index("Invoke-WebRequest")   # 안 되면 zip
+    # setup.bat 은 ffmpeg 가 없으면 이 스크립트를 부릅니다(그래서 winget 도 같이 탐)
+    assert "install_ffmpeg.bat" in read("setup.bat")
