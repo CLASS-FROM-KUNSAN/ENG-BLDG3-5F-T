@@ -369,3 +369,132 @@ def test_gh_view_only_for_top_candidates_missing_gh(monkeypatch):
 def test_gh_rate_limit_is_named():
     p = types.SimpleNamespace(returncode=1, stderr="HTTP 403: API rate limit exceeded")
     assert RS._gh_why(p) == "gh 한도 초과"
+
+
+# -- 저장된 목록 ------------------------------------------------------------------
+from datetime import datetime, timedelta  # noqa: E402
+
+NOW = datetime(2026, 11, 21, 21, 0)
+
+
+def _cached(tmp_path, entries, *, days_old=1):
+    book = _book(api=entries)
+    RS.cross_check(book)
+    path = tmp_path / "rel.json"
+    RS.save_cache(path, book, now=NOW - timedelta(days=days_old))
+    return path, RS.load_cache(path)
+
+
+def test_cache_round_trip_and_broken_file(tmp_path):
+    path, cache = _cached(tmp_path, [_api("9.1", A)])
+    e = cache.entries["9.1"]
+    assert (e.sha256, e.verified_by, e.url, e.kind) == (A, ["api"], "https://dl/9.1", "stable")
+    assert cache.sha_for_name(RS.asset_name("9.1")) == (A, "9.1")
+    path.write_text("{깨짐", encoding="utf-8")
+    assert RS.load_cache(path) is None
+
+
+def _down(monkeypatch):
+    tools = Tools(gh=False, git=False)
+    monkeypatch.setattr(RS, "which", tools.which)
+
+    def blocked():
+        raise urllib.error.URLError("막힘")
+    return tools, blocked
+
+
+def test_all_sources_down_uses_a_fresh_saved_list(monkeypatch, tmp_path):
+    _p, cache = _cached(tmp_path, [_api("9.1", A), _api("9.0", B)])
+    tools, blocked = _down(monkeypatch)
+    saved = []
+    entries, reports = RS.collect(api=blocked, gyan_sha=lambda: "", run=tools.run, cache=cache,
+                                  save=saved.append, now=NOW, parallel=False)
+    assert [e.tag for e in entries] == ["9.1", "9.0"] and entries[0].sha256 == A
+    assert reports[-1].name == "저장된 목록" and reports[-1].ok and "대신 씀" in reports[-1].note
+    assert saved == []                                                   # 새로 읽은 게 없으니 저장 안 함
+
+
+def test_saved_list_older_than_seven_days_is_not_used(monkeypatch, tmp_path):
+    _p, cache = _cached(tmp_path, [_api("9.1", A)], days_old=8)
+    tools, blocked = _down(monkeypatch)
+    entries, reports = RS.collect(api=blocked, gyan_sha=lambda: "", run=tools.run, cache=cache,
+                                  now=NOW, parallel=False)
+    assert entries == [] and any(r.name == "저장된 목록" and not r.ok for r in reports)
+
+
+def test_changed_release_file_is_refused_and_old_hash_is_kept(monkeypatch, tmp_path):
+    path, cache = _cached(tmp_path, [_api("9.1", A), _api("9.0", A)])
+    tools = Tools(gh=False, git=False)
+    monkeypatch.setattr(RS, "which", tools.which)
+    entries, reports = RS.collect(api=lambda: [_api("9.1", B), _api("9.0", A)],
+                                  gyan_sha=lambda: "", run=tools.run, cache=cache,
+                                  save=lambda b: RS.save_cache(path, b, cache, now=NOW),
+                                  parallel=False)
+    assert [e.tag for e in entries] == ["9.0"]                          # 바뀐 9.1 은 안 씀
+    assert any("9.1" in r.note and "바뀜" in r.note for r in reports)
+    assert RS.load_cache(path).entries["9.1"].sha256 == A               # 바뀐 해시로 덮어쓰지 않음
+
+
+def test_save_keeps_a_known_hash_when_this_run_had_none(tmp_path):
+    path, cache = _cached(tmp_path, [_api("9.1", A)])
+    book = _book(git="x\trefs/tags/9.1\n")                              # 이번엔 git 만, 해시 없음
+    RS.cross_check(book)
+    RS.save_cache(path, book, cache, now=NOW)
+    assert RS.load_cache(path).entries["9.1"].sha256 == A
+
+
+def test_usb_zip_is_checked_against_the_saved_list_by_name(tmp_path):
+    data = _zip(b"usb")
+    good = hashlib.sha256(data).hexdigest()
+    dest = tmp_path / "tools"
+    book = _book(api=[_api("9.1", good), _api("9.0", A)])
+    RS.cross_check(book)
+    RS.save_cache(dest / F.CACHE_NAME, book, now=NOW)
+    usb = tmp_path / "usb"
+    usb.mkdir()
+    (usb / RS.asset_name("9.1")).write_bytes(data)
+    (usb / RS.asset_name("9.0")).write_bytes(data)                       # 이름은 9.0 인데 내용이 다름
+    (usb / "ffmpeg-custom.zip").write_bytes(data)
+    logs = []
+    assert F.install_from_zip(usb / RS.asset_name("9.0"), dest, run=_ffmpeg_ok,
+                              say=logs.append) == ""
+    assert any("저장된 목록의 9.0" in m for m in logs)
+    assert F.install_from_zip(usb / RS.asset_name("9.1"), dest, run=_ffmpeg_ok,
+                              say=logs.append)
+    assert any("해시 확인 통과 (저장된 목록의 9.1)" in m for m in logs)
+    assert F.install_from_zip(usb / "ffmpeg-custom.zip", dest, run=_ffmpeg_ok, say=logs.append)
+    assert any("기능 확인으로만" in m for m in logs)
+
+
+def test_second_run_offline_installs_from_the_saved_list(tmp_path, monkeypatch):
+    data = _zip(b"cached-run")
+    sha = hashlib.sha256(data).hexdigest()
+    tools = Tools(gh=False, git=False)
+    monkeypatch.setattr(RS, "which", tools.which)
+    url = "https://dl/9.1"
+    rel = _api("9.1", sha)
+    rel["assets"][0]["size"] = len(data)                              # 실제 크기(크기 검사)
+    online = {F.RELEASES_API: json.dumps([rel]).encode(), url: data}
+    r1 = F.install(tmp_path, opener=_opener(online), run=_ffmpeg_ok, tool_run=tools.run,
+                   say=lambda _m: None)
+    assert r1.ok and (tmp_path / F.CACHE_NAME).exists()
+    (tmp_path / "ffmpeg").rename(tmp_path / "gone")                     # 다시 깔아야 하는 상황
+
+    offline = {F.RELEASES_API: urllib.error.URLError("막힘"), url: data}
+    r2 = F.install(tmp_path, opener=_opener(offline), run=_ffmpeg_ok, tool_run=tools.run,
+                   say=lambda _m: None, force=True)
+    assert r2.ok and r2.used.version == "9.1" and r2.used.sha256 == sha
+    assert any(s.startswith("저장된 목록 됨") for s in r2.sources)
+
+
+def test_gh_account_present_but_check_failed_is_not_called_logged_out(monkeypatch):
+    def run(cmd, timeout=60):
+        return types.SimpleNamespace(returncode=1, stderr="", stdout=(
+            "github.com\n  X Failed to log in to github.com account me (keyring)\n"
+            "  - Active account: true\n  - The token in keyring is invalid.\n"))
+    monkeypatch.setattr(RS, "which", lambda n: n)
+    exe, why = RS.gh_ready(run)
+    assert exe == "" and "망이 막혔거나 토큰 만료" in why
+    none = lambda cmd, timeout=60: types.SimpleNamespace(  # noqa: E731
+        returncode=1, stderr="You are not logged into any GitHub hosts.", stdout="")
+    assert RS.gh_ready(none) == ("", "gh 로그인 안 됨")
