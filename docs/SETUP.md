@@ -69,7 +69,17 @@ scripts\install_ffmpeg.bat
 
 1. **winget** 으로 설치: `winget install Gyan.FFmpeg` 와 같습니다. 동의 질문
    (`Do you agree ...? [Y]`)은 옵션으로 전부 자동 승인하므로 멈추지 않습니다.
-2. winget 이 없거나 실패하면 `tools\ffmpeg` 에 zip 을 직접 내려받습니다.
+2. winget 이 없거나 실패하면 **실제 릴리스 목록에서 받아 `tools\ffmpeg` 에 둡니다**
+   (`python -m syncnote.ffmpeg_fetch`). winget 이 받아 오는 것과 같은 저장소
+   [GyanD/codexffmpeg](https://github.com/GyanD/codexffmpeg/releases) 입니다.
+   - 순서: 정식 버전 새 것부터(9.1 → 9.0.2 → …) → 날짜별 git 빌드 → gyan.dev
+   - 후보마다 SHA-256(릴리스에 적힌 값)과 녹화에 필요한 기능(gdigrab·libx264·aac)을
+     확인하고, 하나라도 실패하면 **한 단계 이전 릴리스로 롤백**합니다.
+   - 끊기면 2·4·8초 쉬고 다시 받습니다. 디스크가 꽉 찼으면 바로 멈춥니다.
+   - 이미 있던 `tools\ffmpeg` 는 새 것이 다 확인된 뒤에만 바꾸고, 바꾸다 실패하면
+     되돌려 놓습니다.
+   - `python -m syncnote.ffmpeg_fetch --dry-run` 으로 시도할 순서만 볼 수 있습니다.
+3. 파이썬조차 없을 때만 PowerShell 로 gyan.dev zip 을 받습니다.
 
 winget 은 PATH 를 바꾸지만 **이미 열린 창에는 반영되지 않습니다.** syncnote 는
 winget 이 둔 위치(`%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe`)를 직접 찾으므로
