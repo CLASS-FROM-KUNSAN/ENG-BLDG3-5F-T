@@ -423,3 +423,145 @@ def test_install_from_zip_checks_optional_hash_and_features(tmp_path):
     assert F.install_from_zip(z, dest, run=runner({"usb": ["aac"]}), say=lambda _m: None) == ""
     exe = F.install_from_zip(z, dest, sha256=_sha(data), run=runner(), say=lambda _m: None)
     assert exe and (dest / "ffmpeg" / "bin" / "ffmpeg.exe").read_bytes() == b"usb"
+
+
+# -- 받기 강화: 이어받기 · 크기 · 허용 주소 · 디스크 ------------------------------
+class _RangeServer:
+    """Range 를 아는 가짜 서버. cut_at 바이트에서 한 번 끊습니다."""
+
+    def __init__(self, data, *, cut_at=None, honor_range=True, final_url=None):
+        self.data, self.cut_at, self.honor = data, cut_at, honor_range
+        self.final_url, self.ranges = final_url, []
+
+    def __call__(self, url, timeout=30, headers=None):
+        rng = (headers or {}).get("Range")
+        self.ranges.append(rng)
+        start = int(rng.split("=")[1].rstrip("-")) if rng and self.honor else 0
+        body = self.data[start:]
+        srv = self
+
+        class Resp(io.BytesIO):
+            status = 206 if (rng and srv.honor) else 200
+            url = srv.final_url
+            headers = {"Content-Length": str(len(body))}
+
+            def read(self, n=-1):
+                if srv.cut_at is not None and start + self.tell() >= srv.cut_at:
+                    srv.cut_at = None
+                    raise ConnectionResetError("끊김")
+                return super().read(min(n, 1000) if n and n > 0 else n)
+        return Resp(body)
+
+
+def test_download_resumes_from_the_partial_file(tmp_path):
+    data = bytes(range(256)) * 40
+    c = F.Candidate("a.zip", "https://github.com/x", "9.1", sha256=_sha(data), size=len(data))
+    srv = _RangeServer(data, cut_at=3000)
+    F.download(c, tmp_path / "a.zip", opener=srv, sleep=lambda _s: None, say=lambda _m: None)
+    assert (tmp_path / "a.zip").read_bytes() == data
+    assert srv.ranges == [None, "bytes=3000-"]
+
+
+def test_server_ignoring_range_restarts_cleanly(tmp_path):
+    data = bytes(range(256)) * 40
+    c = F.Candidate("a.zip", "https://github.com/x", "9.1", sha256=_sha(data), size=len(data))
+    (tmp_path / "a.zip.part").write_bytes(data[:500])
+    srv = _RangeServer(data, honor_range=False)
+    logs = []
+    F.download(c, tmp_path / "a.zip", opener=srv, sleep=lambda _s: None, say=logs.append)
+    assert (tmp_path / "a.zip").read_bytes() == data and any("처음부터" in m for m in logs)
+
+
+def test_size_mismatch_is_rejected_before_hashing(tmp_path, monkeypatch):
+    data = b"x" * 100
+    c = F.Candidate("a.zip", "https://github.com/x", "9.1", sha256=_sha(data), size=999)
+    monkeypatch.setattr(F, "_sha256_file", lambda _p: pytest.fail("크기가 다르면 해시를 안 셈"))
+    with pytest.raises(F.CandidateFailed, match="크기") as exc:
+        F.download(c, tmp_path / "a.zip", opener=_RangeServer(data), sleep=lambda _s: None,
+                   say=lambda _m: None)
+    assert exc.value.kind == "hash" and not list(tmp_path.iterdir())
+
+
+def test_redirect_to_a_host_outside_the_list_is_refused(tmp_path):
+    data = b"x" * 100
+    c = F.Candidate("a.zip", "https://github.com/x", "9.1", size=len(data))
+    srv = _RangeServer(data, final_url="https://evil.example/a.zip")
+    waits = []
+    with pytest.raises(F.CandidateFailed, match="허용 밖"):
+        F.download(c, tmp_path / "a.zip", opener=srv, sleep=waits.append, say=lambda _m: None)
+    assert waits == [] and not list(tmp_path.iterdir())                  # 다시 안 함, 안 남김
+    guard = F._GuardRedirect()
+    with pytest.raises(F.HostNotAllowed):
+        guard.redirect_request(None, None, 302, "", {}, "http://github.com/a")
+    assert F.host_ok("https://release-assets.githubusercontent.com/x")
+    assert not F.host_ok("https://github.com.evil.example/x")
+
+
+def test_disk_is_checked_before_downloading(tmp_path):
+    with pytest.raises(F.Fatal, match="디스크"):
+        F.check_disk(tmp_path, 100_000_000, free=lambda _p: 200_000_000)  # 2.5배 = 250MB 필요
+    F.check_disk(tmp_path, 100_000_000, free=lambda _p: 300_000_000)
+    F.check_disk(tmp_path, 0, free=lambda _p: 0)                          # 크기 모르면 안 봄
+
+    routes = _routes(("9.1", _zip(), None), ("9.0", _zip(), None))
+    op = opener_for(routes)
+    r = F.install(tmp_path / "t", opener=op, run=runner(), say=lambda _m: None,
+                  disk_free=lambda _p: 10)
+    assert not r.ok and r.kinds == ["fatal"] and "디스크" in r.tried[0][1]
+    assert not any("/dl/" in u for u in op.calls)                        # 받기 전에 멈춤
+
+
+def test_partial_download_survives_to_the_next_run(tmp_path):
+    data = _zip(marker=b"resumed") + b"\0" * 5000
+    sha = _sha(data)
+    a = _asset("9.1", data)
+    url = a["browser_download_url"]
+    srv = _RangeServer(data, cut_at=2000)
+
+    def first(u, timeout=30, headers=None):
+        if u == F.RELEASES_API:
+            return _Resp(json.dumps([_release("9.1", a)]).encode())
+        if u == url:
+            return srv(u, timeout, headers)
+        raise urllib.error.HTTPError(u, 404, "nf", {}, None)
+
+    fail_net = {"n": 0}
+
+    def flaky(u, timeout=30, headers=None):
+        if u == url and fail_net["n"] < 99:
+            fail_net["n"] += 1
+            if fail_net["n"] == 1:
+                return srv(u, timeout, headers)                             # 2000 에서 끊김
+            raise urllib.error.URLError("망 끊김")
+        return first(u, timeout, headers)
+    r1 = F.install(tmp_path, opener=flaky, run=runner(), sleep=lambda _s: None,
+                   say=lambda _m: None)
+    assert not r1.ok
+    part = tmp_path / "_downloads" / f"{sha[:12]}-{a['name']}.part"
+    assert part.exists() and part.stat().st_size == 2000                    # 다음 실행으로 남김
+
+    srv.ranges.clear()
+    r2 = F.install(tmp_path, opener=first, run=runner(), say=lambda _m: None)
+    assert r2.ok and srv.ranges == ["bytes=2000-"]
+    assert not (tmp_path / "_downloads").exists()                           # 끝나면 정리
+
+
+def test_completed_download_is_reused_and_failed_one_is_removed(tmp_path):
+    data = _zip(marker=b"kept")
+    a = _asset("9.1", data)
+    keep = tmp_path / "_downloads"
+    keep.mkdir()
+    (keep / f"{_sha(data)[:12]}-{a['name']}").write_bytes(data)
+    routes = {F.RELEASES_API: json.dumps([_release("9.1", a)]).encode(),
+              F.GYAN_URL + ".sha256": None}
+    op = opener_for(routes)
+    r = F.install(tmp_path, opener=op, run=runner(), say=lambda _m: None)
+    assert r.ok and a["browser_download_url"] not in op.calls               # 다시 안 받음
+
+    bad = _zip(marker=b"nofeat")
+    b = _asset("9.0", bad)
+    routes = {F.RELEASES_API: json.dumps([_release("9.0", b)]).encode(),
+              b["browser_download_url"]: bad, F.GYAN_URL + ".sha256": None}
+    r = F.install(tmp_path / "t2", opener=opener_for(routes),
+                  run=runner({"nofeat": ["aac"]}), say=lambda _m: None)
+    assert not r.ok and not list((tmp_path / "t2" / "_downloads").glob("*"))  # 기능 실패 -> 지움

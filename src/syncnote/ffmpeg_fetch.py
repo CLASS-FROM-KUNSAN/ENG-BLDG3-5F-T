@@ -129,10 +129,49 @@ def candidates(releases: list[dict]) -> list[Candidate]:
     return [c for c in stable + nightly if c.url]
 
 
-def _open(url: str, timeout: float = 30):
+# 받을 수 있는 곳. GitHub 릴리스 파일은 release-assets(예전엔 objects).githubusercontent.com
+# 으로, gyan.dev 는 같은 호스트의 버전별 파일로 리다이렉트됩니다(2026-11 실제 확인).
+ALLOWED_HOSTS = frozenset({
+    "github.com", "api.github.com", "release-assets.githubusercontent.com",
+    "objects.githubusercontent.com", "www.gyan.dev", "gyan.dev"})
+
+
+class HostNotAllowed(Exception):
+    """허용 밖 주소 — 다른 후보로(다시 해도 같음)."""
+
+
+def host_ok(url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    u = urlsplit(str(url))
+    return u.scheme == "https" and (u.hostname or "").lower() in ALLOWED_HOSTS
+
+
+def _check_host(url: str) -> None:
+    if not host_ok(url):
+        from urllib.parse import urlsplit
+
+        raise HostNotAllowed(f"허용 밖 주소: {urlsplit(str(url)).hostname or url}")
+
+
+class _GuardRedirect(urllib.request.HTTPRedirectHandler):
+    """리다이렉트 한 걸음마다 허용 주소인지 봅니다."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _check_host(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(_GuardRedirect)
+_urlopen = _OPENER.open        # 네트워크 열기(파일 open 이 아님)
+
+
+def _open(url: str, timeout: float = 30, headers: dict | None = None):
+    _check_host(url)
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT,
-                                               "Accept": "application/vnd.github+json"})
-    return urllib.request.urlopen(req, timeout=timeout)  # noqa: S310 — https 고정 주소
+                                               "Accept": "application/vnd.github+json",
+                                               **(headers or {})})
+    return _urlopen(req, timeout=timeout)
 
 
 def _api_get(url: str, opener: Callable = _open):
@@ -198,10 +237,13 @@ def head_size(url: str, opener: Callable = _open) -> int:
     req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": USER_AGENT})
     try:
         if opener is _open:
-            with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310
+            _check_host(url)
+            with _urlopen(req, timeout=30) as r:
                 return int(r.headers.get("Content-Length") or 0)
         with opener(url, timeout=30) as r:                       # 테스트용 가짜
             return int(r.headers.get("Content-Length") or 0)
+    except HostNotAllowed as exc:
+        raise CandidateFailed(str(exc)) from exc
     except urllib.error.HTTPError as exc:
         raise CandidateFailed(f"태그로 만든 주소에 파일이 없음 (HTTP {exc.code})") from exc
     except OSError as exc:
@@ -243,41 +285,93 @@ def _raise_if_disk_full(exc: OSError) -> None:
 
 def download(c: Candidate, dest: Path, *, opener: Callable = _open,
              sleep: Callable[[float], None] = time.sleep, say: Callable[[str], None] = None) -> Path:
-    """dest 로 받고 SHA-256 을 확인합니다. 일시적 오류만 2·4·8 초 뒤 다시."""
+    """dest 로 받고 크기·SHA-256 을 확인합니다.
+
+    끊기면 받은 데까지(.part) 남겨 두고 Range 로 이어받습니다. 서버가 이어받기를
+    무시하고 처음부터 보내면(200) 처음부터 다시 씁니다. 일시적 오류만 2·4·8 초 뒤 다시.
+    """
     say = say or _say
     part = dest.with_suffix(dest.suffix + ".part")
     for attempt in range(len(BACKOFF) + 1):
-        h = hashlib.sha256()
+        offset = part.stat().st_size if part.exists() else 0
+        if c.size and offset >= c.size:
+            part.unlink(missing_ok=True)                     # 다 받았거나 더 큼 -> 처음부터
+            offset = 0
         try:
-            with opener(c.url, timeout=60) as r, part.open("wb") as f:
-                total = int(r.headers.get("Content-Length") or c.size or 0)
-                got, shown = 0, -1
-                while True:
-                    chunk = r.read(1 << 20)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    h.update(chunk)
-                    got += len(chunk)
-                    pct = got * 100 // total if total else -1
-                    if pct >= 0 and pct // 20 != shown:
-                        shown = pct // 20
-                        say(f"      {pct:3d}%  {got / 1e6:,.0f} / {total / 1e6:,.0f} MB")
+            if offset:
+                resp = opener(c.url, timeout=60, headers={"Range": f"bytes={offset}-"})
+            else:
+                resp = opener(c.url, timeout=60)
+            with resp as r:
+                final = getattr(r, "url", None)
+                if final:
+                    _check_host(final)                       # 리다이렉트 끝 주소
+                status = getattr(r, "status", None) or getattr(r, "code", None) or 200
+                if offset and status != 206:
+                    say("      서버가 이어받기를 받지 않아 처음부터 받습니다")
+                    offset = 0
+                elif offset:
+                    say(f"      이어받기: {offset / 1e6:,.0f} MB 부터")
+                total = c.size or (offset + int(r.headers.get("Content-Length") or 0))
+                with (part.open("ab") if offset else part.open("wb")) as f:
+                    got, shown = offset, -1
+                    while True:
+                        chunk = r.read(1 << 20)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        got += len(chunk)
+                        pct = got * 100 // total if total else -1
+                        if pct >= 0 and pct // 20 != shown:
+                            shown = pct // 20
+                            say(f"      {pct:3d}%  {got / 1e6:,.0f} / {total / 1e6:,.0f} MB")
             break
+        except HostNotAllowed as exc:
+            part.unlink(missing_ok=True)
+            raise CandidateFailed(str(exc)) from exc
         except OSError as exc:
             if not isinstance(exc, urllib.error.URLError):
                 _raise_if_disk_full(exc)
-            part.unlink(missing_ok=True)
             if attempt < len(BACKOFF) and _transient(exc):
-                say(f"      내려받기 끊김({exc}) — {BACKOFF[attempt]}초 뒤 다시")
+                say(f"      내려받기 끊김({exc}) — {BACKOFF[attempt]}초 뒤 이어서")
                 sleep(BACKOFF[attempt])
-                continue
+                continue                                     # .part 는 남겨 이어받기
+            if not _transient(exc):
+                part.unlink(missing_ok=True)
             raise CandidateFailed(f"내려받기 실패: {exc}", "net") from exc
-    if c.sha256 and h.hexdigest() != c.sha256:
+    size = part.stat().st_size
+    if c.size and size != c.size:
+        part.unlink(missing_ok=True)
+        raise CandidateFailed(f"크기가 릴리스에 적힌 값과 다름 ({size:,} / {c.size:,} 바이트)",
+                              "hash")
+    if c.sha256 and _sha256_file(part) != c.sha256:
         part.unlink(missing_ok=True)
         raise CandidateFailed("SHA-256 이 릴리스에 적힌 값과 다름", "hash")
     part.replace(dest)
     return dest
+
+
+def _sha256_file(p: Path) -> str:
+    h = hashlib.sha256()
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+DISK_FACTOR = 2.5             # zip + 압축 푼 것 + 바꿔 끼우는 동안의 옛것
+
+
+def check_disk(dest: Path, size: int, *, free: Callable[[Path], int] | None = None) -> None:
+    """받기 전에 남은 공간을 봅니다. 모자라면 Fatal(다른 후보도 같음)."""
+    if not size:
+        return
+    free = free or (lambda p: shutil.disk_usage(p).free)
+    need = int(size * DISK_FACTOR)
+    have = free(dest)
+    if have < need:
+        raise Fatal(f"디스크 공간이 부족합니다 (필요 약 {need / 1e9:.1f}GB, "
+                    f"남음 {have / 1e9:.1f}GB). 공간을 비운 뒤 다시 실행하세요.")
 
 
 def extract(zip_path: Path, into: Path) -> Path:
@@ -351,7 +445,8 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
             opener: Callable = _open, run: Callable = subprocess.run,
             sleep: Callable[[float], None] = time.sleep,
             say: Callable[[str], None] = None, allow_unverified: bool = False,
-            tool_run: Callable | None = None) -> Result:
+            tool_run: Callable | None = None,
+            disk_free: Callable[[Path], int] | None = None) -> Result:
     say = say or _say
     dest = Path(dest)
     current = dest / "ffmpeg" / "bin" / "ffmpeg.exe"
@@ -395,8 +490,22 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
             if c.synthesized and not c.sha256:
                 size = head_size(c.url, opener)
                 say(f"      태그로 만든 주소 확인: {size / 1e6:,.0f} MB (해시 없음)")
+                c.size = c.size or size
+            check_disk(dest, c.size, free=disk_free)
+            # 해시가 있으면 같은 파일임이 보장되니 실행을 넘어 이어받습니다(_downloads).
+            # 해시가 없으면 파일이 바뀌었을 수 있어 이번 실행 안에서만.
+            if c.sha256:
+                keep = dest / "_downloads"
+                keep.mkdir(parents=True, exist_ok=True)
+                target = keep / f"{c.sha256[:12]}-{c.name}"
+            else:
+                target = work / c.name
             try:
-                z = download(c, work / c.name, opener=opener, sleep=sleep, say=say)
+                if c.sha256 and target.exists() and _sha256_file(target) == c.sha256:
+                    say("      지난번에 다 받아 둔 파일을 씁니다(해시 통과)")
+                    z = target
+                else:
+                    z = download(c, target, opener=opener, sleep=sleep, say=say)
             except CandidateFailed as exc:
                 if exc.kind != "net" or c.version == "gyan.dev":
                     raise
@@ -405,6 +514,7 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
             by = "·".join(c.verified_by)
             say("      해시 확인 " + (f"통과 ({by})" if c.sha256 else "생략(해시 없음)"))
             exe = _install_zip(z, work, dest, run=run)
+            shutil.rmtree(dest / "_downloads", ignore_errors=True)       # 다 됐으니 받은 것 정리
             say(f"완료: {exe}  ({c.version})")
             result.ok, result.ffmpeg, result.used = True, str(exe), c
             return result
@@ -412,6 +522,9 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
             say(f"      [X] {exc}")
             result.tried.append((c.version, str(exc)))
             result.kinds.append(exc.kind)
+            if exc.kind != "net" and c.sha256:           # 다시 써도 같은 실패 -> 받은 것 지움
+                for left in (dest / "_downloads").glob(f"{c.sha256[:12]}-*"):
+                    left.unlink(missing_ok=True)
         except Fatal as exc:
             say(f"[X] {exc}")
             result.tried.append((c.version, str(exc)))
