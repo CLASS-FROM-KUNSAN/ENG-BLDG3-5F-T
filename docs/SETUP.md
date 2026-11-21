@@ -87,7 +87,20 @@ scripts\install_ffmpeg.bat
    - 끊기면 2·4·8초 쉬고 다시 받습니다. 디스크가 꽉 찼으면 바로 멈춥니다.
    - 이미 있던 `tools\ffmpeg` 는 새 것이 다 확인된 뒤에만 바꾸고, 바꾸다 실패하면
      되돌려 놓습니다.
-   - `python -m syncnote.ffmpeg_fetch --dry-run` 으로 시도할 순서만 볼 수 있습니다.
+   - 목록은 **세 출처를 함께** 읽어 합칩니다. 하나가 막혀도 나머지로 갑니다.
+
+     | 출처 | 주는 것 | 없거나 막히면 |
+     |---|---|---|
+     | GitHub API | 목록·파일·SHA-256 | 로그인 없이 시간당 60회 제한 |
+     | `gh` (로그인돼 있을 때) | 목록 + `view` 로 SHA-256, 받기 대체 | 건너뜀 (로그인을 시키지 않음) |
+     | `git ls-remote --tags` | 태그 이름만 (주소는 태그로 만듦) | 건너뜀 |
+
+     - API 와 gh 의 SHA-256 이 다르면 그 버전은 버립니다.
+     - git 으로만 찾은 버전은 해시가 없어 **기본으로 쓰지 않습니다.** 예외로 가장 새 정식 버전은
+       gyan.dev 가 공개한 해시(같은 빌드)를 빌려 검증합니다. API·gh 가 다 막혀도 됩니다.
+     - 해시 없는 버전까지 쓰려면 `--allow-unverified`. 받기 전에 파일이 실제로 있는지 먼저 봅니다.
+     - urllib 로 못 받으면 같은 버전을 `gh release download` 로 다시 받습니다(해시 확인 그대로).
+   - `python -m syncnote.ffmpeg_fetch --dry-run` 으로 출처별 결과와 시도할 순서만 볼 수 있습니다.
 4. 다운로드 폴더(`%USERPROFILE%\Downloads`)의 `ffmpeg*.zip`.
 5. 파이썬조차 없을 때만 winget → PowerShell 로 gyan.dev zip.
 

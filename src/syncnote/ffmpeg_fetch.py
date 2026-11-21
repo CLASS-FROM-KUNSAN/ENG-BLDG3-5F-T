@@ -82,6 +82,9 @@ class Candidate:
     size: int = 0
     stable: bool = False
     published: str = ""
+    sources: tuple[str, ...] = ()        # 이 버전을 알려 준 출처(api·gh·git)
+    verified_by: tuple[str, ...] = ()    # 해시를 준 출처(api·gh·gyan.dev)
+    synthesized: bool = False            # git 에서 와서 주소를 태그로 만들었음
 
 
 @dataclass
@@ -92,6 +95,7 @@ class Result:
     tried: list[tuple[str, str]] = field(default_factory=list)   # (버전, 실패 이유)
     kinds: list[str] = field(default_factory=list)                # tried 와 같은 순서
     list_failed: bool = False                                     # 릴리스 목록을 못 읽음
+    sources: list[str] = field(default_factory=list)              # 출처별 조회 결과
 
 
 # ---------------------------------------------------------------------------
@@ -135,16 +139,66 @@ def fetch_releases(opener: Callable = _open) -> list[dict]:
         return json.loads(r.read().decode("utf-8"))
 
 
-def gyan_candidate(opener: Callable = _open) -> Candidate:
-    """목록을 못 읽었을 때의 마지막 후보. 해시는 gyan.dev 가 옆에 둔 .sha256 으로."""
-    sha = ""
+def gyan_sha(opener: Callable = _open) -> str:
+    """gyan.dev 가 release-essentials 옆에 둔 .sha256 (최신 정식 버전과 같은 빌드)."""
+    from .release_sources import norm_sha
+
     try:
         with opener(GYAN_URL + ".sha256", timeout=15) as r:
-            sha = r.read().decode("ascii", "replace").split()[0].strip().lower()
+            return norm_sha(r.read().decode("ascii", "replace"))
     except Exception:  # noqa: BLE001 — 없으면 기능 확인만으로 판단
-        sha = ""
+        return ""
+
+
+def gyan_candidate(opener: Callable = _open, sha: str | None = None) -> Candidate:
+    """목록을 못 읽었을 때의 마지막 후보. 해시는 gyan.dev 가 옆에 둔 .sha256 으로."""
+    sha = gyan_sha(opener) if sha is None else sha
     return Candidate(name="ffmpeg-release-essentials.zip", url=GYAN_URL, version="gyan.dev",
-                     sha256=sha if re.fullmatch(r"[0-9a-f]{64}", sha) else "", stable=True)
+                     sha256=sha, stable=True, sources=("gyan.dev",),
+                     verified_by=("gyan.dev",) if sha else ())
+
+
+def to_candidate(e) -> Candidate:
+    from .release_sources import asset_name
+
+    return Candidate(name=asset_name(e.tag), url=e.url, version=e.tag, sha256=e.sha256,
+                     size=e.size, stable=e.kind == "stable", published=e.published,
+                     sources=tuple(sorted(e.sources)), verified_by=tuple(e.verified_by),
+                     synthesized=e.synthesized)
+
+
+def head_size(url: str, opener: Callable = _open) -> int:
+    """받기 전에 파일이 실제로 있는지(만든 주소일 때). 없으면 CandidateFailed."""
+    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": USER_AGENT})
+    try:
+        if opener is _open:
+            with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310
+                return int(r.headers.get("Content-Length") or 0)
+        with opener(url, timeout=30) as r:                       # 테스트용 가짜
+            return int(r.headers.get("Content-Length") or 0)
+    except urllib.error.HTTPError as exc:
+        raise CandidateFailed(f"태그로 만든 주소에 파일이 없음 (HTTP {exc.code})") from exc
+    except OSError as exc:
+        raise CandidateFailed(f"파일 확인 실패: {exc}", "net") from exc
+
+
+def gh_download(c: Candidate, work: Path, *, run: Callable | None = None) -> Path:
+    """urllib 가 안 될 때: 로그인한 gh 로 같은 첨부 파일을 받습니다."""
+    from . import release_sources as RS
+
+    run = run or RS._run
+    exe, why = RS.gh_ready(run)
+    if not exe:
+        raise CandidateFailed(f"gh 로도 못 받음: {why}", "net")
+    p = run([exe, "release", "download", c.version, "-R", RS.REPO, "-p", c.name,
+             "-D", str(work), "--clobber"], timeout=1800)
+    out = work / c.name
+    if p.returncode != 0 or not out.exists():
+        raise CandidateFailed(f"gh release download 실패: {(p.stderr or '').strip()[:160]}", "net")
+    if c.sha256 and hashlib.sha256(out.read_bytes()).hexdigest() != c.sha256:
+        out.unlink(missing_ok=True)
+        raise CandidateFailed("SHA-256 이 릴리스에 적힌 값과 다름 (gh)", "hash")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +324,8 @@ def swap_in(new_dir: Path, dest: Path) -> Path:
 def install(dest: Path, *, max_tries: int = 6, force: bool = False,
             opener: Callable = _open, run: Callable = subprocess.run,
             sleep: Callable[[float], None] = time.sleep,
-            say: Callable[[str], None] = None) -> Result:
+            say: Callable[[str], None] = None, allow_unverified: bool = False,
+            tool_run: Callable | None = None) -> Result:
     say = say or _say
     dest = Path(dest)
     current = dest / "ffmpeg" / "bin" / "ffmpeg.exe"
@@ -278,18 +333,29 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
         say(f"이미 쓸 수 있는 ffmpeg 가 있습니다: {current}")
         return Result(True, str(current))
 
-    try:
-        cands = candidates(fetch_releases(opener))[:max_tries]
-        say(f"릴리스 목록에서 후보 {len(cands)}개: " + ", ".join(c.version for c in cands))
-    except Exception as exc:  # noqa: BLE001 — 목록을 못 읽어도 마지막 후보는 있음
-        say(f"[!] 릴리스 목록을 읽지 못했습니다({exc}). gyan.dev 로 시도합니다.")
-        cands = []
-        listing_failed = True
-    else:
-        listing_failed = False
-    cands.append(gyan_candidate(opener))
+    from . import release_sources as RS
 
-    result = Result(False, list_failed=listing_failed)
+    shas: dict[str, str] = {}
+
+    def borrowed() -> str:
+        shas.setdefault("gyan", gyan_sha(opener))
+        return shas["gyan"]
+
+    entries, reports = RS.collect(api=lambda: fetch_releases(opener), gyan_sha=borrowed,
+                                  run=tool_run or RS._run, allow_unverified=allow_unverified)
+    lines = [f"{r.name} {'됨' if r.ok else '안 됨'} — {r.note}" for r in reports]
+    for ln in lines:
+        say("출처: " + ln)
+    listing_failed = not any(r.ok for r in reports if r.name in ("API", "gh", "git"))
+    cands = [to_candidate(e) for e in entries][:max_tries]
+    if cands:
+        say(f"후보 {len(cands)}개: " + ", ".join(
+            c.version + ("" if c.sha256 else "(해시 없음)") for c in cands))
+    else:
+        say("[!] 쓸 수 있는 릴리스 후보가 없습니다. gyan.dev 로 시도합니다.")
+    cands.append(gyan_candidate(opener, sha=borrowed()))
+
+    result = Result(False, list_failed=listing_failed, sources=lines)
     dest.mkdir(parents=True, exist_ok=True)
     for i, c in enumerate(cands):
         if i:
@@ -298,8 +364,18 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
         say(f"[{i + 1}/{len(cands)}] {c.version}  {c.name}{size}")
         work = Path(tempfile.mkdtemp(prefix="_ffmpeg_", dir=dest))
         try:
-            z = download(c, work / c.name, opener=opener, sleep=sleep, say=say)
-            say("      해시 확인 " + ("통과" if c.sha256 else "생략(릴리스에 해시 없음)"))
+            if c.synthesized and not c.sha256:
+                size = head_size(c.url, opener)
+                say(f"      태그로 만든 주소 확인: {size / 1e6:,.0f} MB (해시 없음)")
+            try:
+                z = download(c, work / c.name, opener=opener, sleep=sleep, say=say)
+            except CandidateFailed as exc:
+                if exc.kind != "net" or c.version == "gyan.dev":
+                    raise
+                say(f"      [!] {exc} — gh 로 받아 봅니다")
+                z = gh_download(c, work, run=tool_run)
+            by = "·".join(c.verified_by)
+            say("      해시 확인 " + (f"통과 ({by})" if c.sha256 else "생략(해시 없음)"))
             exe = _install_zip(z, work, dest, run=run)
             say(f"완료: {exe}  ({c.version})")
             result.ok, result.ffmpeg, result.used = True, str(exe), c
@@ -420,6 +496,7 @@ class AutoResult:
     ffmpeg: str = ""
     steps: list[Step] = field(default_factory=list)
     next_action: str = ""
+    sources: list[str] = field(default_factory=list)
 
 
 def _state(path: Path | None) -> dict:
@@ -461,7 +538,7 @@ def next_action(steps: list[Step], kinds: list[str], *, list_failed: bool = Fals
 
 
 def auto(dest: Path, *, state_path: Path | None = None, retry_skipped: bool = False,
-         downloads: Path | None = None,
+         downloads: Path | None = None, allow_unverified: bool = False,
          find: Callable[[], str] = None, pip: Callable[[], str] = None,
          winget: Callable[[], WingetOutcome] = None, release: Callable[[], Result] = None,
          from_zip: Callable[[Path], str] = None,
@@ -471,7 +548,7 @@ def auto(dest: Path, *, state_path: Path | None = None, retry_skipped: bool = Fa
     find = find or (lambda: find_usable(say=say))
     pip = pip or (lambda: pip_install(say=say))
     winget = winget or (lambda: winget_install(say=say))
-    release = release or (lambda: install(dest, say=say))
+    release = release or (lambda: install(dest, say=say, allow_unverified=allow_unverified))
     from_zip = from_zip or (lambda z: install_from_zip(z, dest, say=say))
     r = AutoResult(False)
     state = _state(state_path)
@@ -513,6 +590,7 @@ def auto(dest: Path, *, state_path: Path | None = None, retry_skipped: bool = Fa
             _save_state(state_path, state)
 
     rel = release()
+    r.sources = list(getattr(rel, "sources", []) or [])
     if rel.ok:
         return done(f"릴리스 목록 ({rel.used.version if rel.used else ''})", rel.ffmpeg)
     kinds = rel.kinds if len(rel.kinds) == len(rel.tried) else ["other"] * len(rel.tried)
@@ -538,6 +616,10 @@ def print_summary(r: AutoResult, say: Callable[[str], None] = None) -> None:
     if r.ok:
         return
     say("")
+    if r.sources:
+        say("[X] 릴리스 목록 출처별 결과:")
+        for ln in r.sources:
+            say(f"  - {ln}")
     say("[X] ffmpeg 를 설치하지 못했습니다. 시도한 순서와 이유:")
     for i, s in enumerate(r.steps, 1):
         mark = {"skip": "건너뜀", "fatal": "중단"}.get(s.status, "실패")
@@ -595,6 +677,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="찾기 -> 가져온 zip -> pip -> winget -> 릴리스 목록 -> 다운로드 폴더 zip")
     ap.add_argument("--retry-skipped", action="store_true",
                     help="지난번에 '다시 해도 같음' 으로 건너뛴 winget 도 다시 시도")
+    ap.add_argument("--allow-unverified", action="store_true",
+                    help="해시가 없는 후보(git 에서만 찾은 버전)도 시도 — 기본은 안 함")
     ap.add_argument("--from-zip", help="가져온 zip 으로 설치(오프라인)")
     ap.add_argument("--sha256", default="", help="--from-zip 의 SHA-256 (있으면 확인)")
     ap.add_argument("--dest", default=str(REPO_ROOT / "tools"))
@@ -607,7 +691,8 @@ def main(argv: list[str] | None = None) -> int:
     if a.auto:
         downloads = Path(os.environ.get("USERPROFILE") or Path.home()) / "Downloads"
         r = auto(Path(a.dest), state_path=Path(a.dest) / ".ffmpeg_install.json",
-                 retry_skipped=a.retry_skipped, downloads=downloads)
+                 retry_skipped=a.retry_skipped, downloads=downloads,
+                 allow_unverified=a.allow_unverified)
         print_summary(r)
         return 0 if r.ok else 1
     if a.find or a.pip:
@@ -616,11 +701,21 @@ def main(argv: list[str] | None = None) -> int:
             print(f"쓸 수 있는 ffmpeg: {exe}")
         return 0 if exe else 1
     if a.dry_run:
-        cands = candidates(fetch_releases())[:a.max] + [gyan_candidate()]
+        from . import release_sources as RS
+
+        sha = gyan_sha()
+        entries, reports = RS.collect(api=fetch_releases, gyan_sha=lambda: sha,
+                                      allow_unverified=a.allow_unverified)
+        for rep in reports:
+            print(f"출처: {rep.name} {'됨' if rep.ok else '안 됨'} — {rep.note}")
+        cands = [to_candidate(e) for e in entries][:a.max] + [gyan_candidate(sha=sha)]
         for i, c in enumerate(cands, 1):
-            print(f"{i}. {c.version:<28} {c.name}  sha256={c.sha256[:12] or '-'}")
+            mark = "·".join(c.verified_by) or "없음"
+            made = " (만든 주소)" if c.synthesized else ""
+            print(f"{i}. {c.version:<28} 출처 {'·'.join(c.sources):<14} 해시 {mark}{made}")
         return 0
-    r = install(Path(a.dest), max_tries=a.max, force=a.force)
+    r = install(Path(a.dest), max_tries=a.max, force=a.force,
+                allow_unverified=a.allow_unverified)
     if not r.ok and r.tried:
         print("\n시도한 순서와 실패 이유:")
         for v, why in r.tried:
