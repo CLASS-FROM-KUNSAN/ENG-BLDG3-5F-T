@@ -16,6 +16,15 @@ import pytest
 
 from syncnote import ffmpeg_fetch as F
 
+
+@pytest.fixture(autouse=True)
+def _no_real_gh_or_git(monkeypatch):
+    """진짜 gh·git 을 부르지 않습니다(네트워크·로그인 상태에 따라 결과가 달라지므로).
+    세 출처를 쓰는 시험은 which 와 run 을 직접 넘깁니다."""
+    from syncnote import release_sources as RS
+
+    monkeypatch.setattr(RS, "which", lambda _n: None)
+
 GOOD_DEVICES = " D  dshow\n D  gdigrab         GDI API Windows frame grabber\n"
 GOOD_ENCODERS = " V....D libx264  H.264\n A....D aac      AAC (Advanced Audio Coding)\n"
 
