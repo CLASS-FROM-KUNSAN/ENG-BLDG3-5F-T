@@ -100,6 +100,14 @@ scripts\install_ffmpeg.bat
        gyan.dev 가 공개한 해시(같은 빌드)를 빌려 검증합니다. API·gh 가 다 막혀도 됩니다.
      - 해시 없는 버전까지 쓰려면 `--allow-unverified`. 받기 전에 파일이 실제로 있는지 먼저 봅니다.
      - urllib 로 못 받으면 같은 버전을 `gh release download` 로 다시 받습니다(해시 확인 그대로).
+     - **두 번 읽기**: 먼저 세 출처를 넓게 읽고(API 는 1쪽 100개), 실제로 시도할 앞쪽 후보
+       (`--max`, 기본 6)만 다시 확인합니다. gh 가 있으면 `gh release view`, 해시가 아예 없으면
+       API 로 그 태그 하나만 조회합니다. API 남은 한도가 10 미만이면 더 부르지 않습니다.
+     - **신뢰 등급**: T3 두 출처 일치 · T2 한 출처 · T1 해시 없음(`--allow-unverified` 때만) ·
+       T0 출처끼리 다름(안 씀). 순서는 등급이 아니라 정식 버전 → 개발 빌드, 새 것부터입니다.
+       2025년 이전에 올라간 파일(7.x 이하)은 GitHub 에 해시가 없어 T1 로 남습니다.
+     - **한도**: API 한도를 다 쓰면(시간당 60회) 다시 시도하지 않고 "HH:MM 에 풀림" 을
+       보여 준 뒤 gh·git 으로 진행합니다. 한도가 남았는데 403 이면 막힌 망으로 봅니다.
    - `python -m syncnote.ffmpeg_fetch --dry-run` 으로 출처별 결과와 시도할 순서만 볼 수 있습니다.
 4. 다운로드 폴더(`%USERPROFILE%\Downloads`)의 `ffmpeg*.zip`.
 5. 파이썬조차 없을 때만 winget → PowerShell 로 gyan.dev zip.

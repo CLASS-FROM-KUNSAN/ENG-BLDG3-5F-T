@@ -42,7 +42,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RELEASES_API = "https://api.github.com/repos/GyanD/codexffmpeg/releases?per_page=30"
+RELEASES_API = "https://api.github.com/repos/GyanD/codexffmpeg/releases?per_page=100"
+RELEASE_TAG_API = "https://api.github.com/repos/GyanD/codexffmpeg/releases/tags/{tag}"
 GYAN_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 USER_AGENT = "syncnote-setup"
 ASSET_SUFFIX = "-essentials_build.zip"      # 녹화에 필요한 것은 다 있고 full 의 절반 크기
@@ -134,9 +135,34 @@ def _open(url: str, timeout: float = 30):
     return urllib.request.urlopen(req, timeout=timeout)  # noqa: S310 — https 고정 주소
 
 
-def fetch_releases(opener: Callable = _open) -> list[dict]:
-    with opener(RELEASES_API) as r:
-        return json.loads(r.read().decode("utf-8"))
+def _api_get(url: str, opener: Callable = _open):
+    """GitHub API GET -> ApiResult(데이터, 남은 한도). 한도 초과·막힘은 따로 가림."""
+    from .release_sources import ApiResult, api_error
+
+    try:
+        with opener(url) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            h = getattr(r, "headers", {}) or {}
+    except urllib.error.HTTPError as exc:
+        special = api_error(exc.code, exc.headers)
+        if special is not None:
+            raise special from exc
+        raise
+
+    def num(k):
+        v = str(h.get(k) or "")
+        return int(v) if v.isdigit() else None
+    return ApiResult(data, num("X-RateLimit-Remaining"), num("X-RateLimit-Limit"))
+
+
+def fetch_releases(opener: Callable = _open):
+    return _api_get(RELEASES_API, opener)
+
+
+def fetch_release_tag(tag: str, opener: Callable = _open):
+    from urllib.parse import quote
+
+    return _api_get(RELEASE_TAG_API.format(tag=quote(tag, safe="")), opener)
 
 
 def gyan_sha(opener: Callable = _open) -> str:
@@ -342,7 +368,9 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
         return shas["gyan"]
 
     entries, reports = RS.collect(api=lambda: fetch_releases(opener), gyan_sha=borrowed,
-                                  run=tool_run or RS._run, allow_unverified=allow_unverified)
+                                  api_tag=lambda tag: fetch_release_tag(tag, opener),
+                                  run=tool_run or RS._run, allow_unverified=allow_unverified,
+                                  max_tries=max_tries)
     lines = [f"{r.name} {'됨' if r.ok else '안 됨'} — {r.note}" for r in reports]
     for ln in lines:
         say("출처: " + ln)
@@ -705,6 +733,7 @@ def main(argv: list[str] | None = None) -> int:
 
         sha = gyan_sha()
         entries, reports = RS.collect(api=fetch_releases, gyan_sha=lambda: sha,
+                                      api_tag=fetch_release_tag, max_tries=a.max,
                                       allow_unverified=a.allow_unverified)
         for rep in reports:
             print(f"출처: {rep.name} {'됨' if rep.ok else '안 됨'} — {rep.note}")
@@ -712,7 +741,8 @@ def main(argv: list[str] | None = None) -> int:
         for i, c in enumerate(cands, 1):
             mark = "·".join(c.verified_by) or "없음"
             made = " (만든 주소)" if c.synthesized else ""
-            print(f"{i}. {c.version:<28} 출처 {'·'.join(c.sources):<14} 해시 {mark}{made}")
+            tier = f"T{min(3, 1 + len(c.verified_by))}" if c.sha256 else "T1"
+            print(f"{i}. {c.version:<28} {tier} 출처 {'·'.join(c.sources):<14} 해시 {mark}{made}")
         return 0
     r = install(Path(a.dest), max_tries=a.max, force=a.force,
                 allow_unverified=a.allow_unverified)
