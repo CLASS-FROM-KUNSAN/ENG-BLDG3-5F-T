@@ -81,6 +81,25 @@ class RecordingMeta:
     machine: str = ""
     version: str = ""
 
+    def to_state(self) -> dict:
+        """JSON 으로 저장(소리만 녹음한 뒤 나중에 파일을 만들 때 그대로 되살림)."""
+        def t(v):
+            return v.isoformat() if isinstance(v, datetime) else v
+        d = {k: t(v) for k, v in asdict(self).items() if k != "classes"}
+        d["classes"] = [{k: t(v) for k, v in asdict(c).items()} for c in self.classes]
+        return d
+
+    @classmethod
+    def from_state(cls, d: dict) -> RecordingMeta:
+        def t(v):
+            return datetime.fromisoformat(v) if isinstance(v, str) and v else None
+        d = dict(d)
+        classes = [ClassMeta(**{**c, "start": t(c["start"]), "end": t(c["end"])})
+                   for c in d.pop("classes", [])]
+        for k in ("window_start", "window_end"):
+            d[k] = t(d.get(k))
+        return cls(classes=classes, **d)
+
     @property
     def overlapping(self) -> bool:
         cs = sorted(self.classes, key=lambda c: c.start)

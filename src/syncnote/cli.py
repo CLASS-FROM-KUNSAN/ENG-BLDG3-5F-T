@@ -887,6 +887,61 @@ class _WatchOnceDone(Exception):
     """
 
 
+def cmd_record_remux(args) -> int:
+    """ffmpeg 없이 소리만 녹음한 세그먼트를 파일(mkv/mp4)로 만듭니다."""
+    from .recorder import remux
+    from .recorder.ffmpeg_util import FFmpegMissing, find_ffmpeg
+
+    cfg, layout = _load(args)
+    pend = remux.find_pending(layout.recordings)
+    if not pend:
+        print("파일로 만들 녹음이 없습니다.")
+        return 0
+    print(f"소리만 녹음해 둔 세그먼트 {len(pend)}개:")
+    for p in pend:
+        print(f"  - {p.relative_to(layout.recordings)}")
+    if args.dry_run:
+        return 0
+    try:
+        print(f"ffmpeg: {find_ffmpeg()}")
+    except FFmpegMissing as exc:
+        print(f"[X] {exc}")
+        return 1
+    done, failed = remux.remux_all(layout.recordings)
+    if args.upload and done:
+        _upload_remuxed(cfg, layout, done, dry_run=args.upload_dry_run)
+    print(f"만듦 {len(done)}개, 실패 {len(failed)}개")
+    return 0 if not failed else 1
+
+
+def _upload_remuxed(cfg, layout, done, *, dry_run: bool) -> None:
+    """녹화 때와 같은 규칙으로 올립니다: 과목을 모르면(course_repos 가 있을 때) 올리지 않음."""
+    from . import courses as courses_mod
+    from .release import tag_for
+    from .state import sha256_file
+
+    store = _store(layout, "recordings")
+    courses = courses_mod.load(cfg)
+    for r in done:
+        course = next((c for c in courses if str(getattr(c, "id", "")) == r.course_id), None)
+        uploader = _uploader(cfg, dry_run=dry_run, course=course, what=r.final.name)
+        if uploader is None or not r.final.exists():
+            continue
+        tag = tag_for(str(cfg.get("github.tag_prefix_recording", "recordings")),
+                      r.started.date() if r.started else None)
+        try:
+            digest = sha256_file(r.final)
+            if store.is_uploaded(digest):
+                continue
+            res = uploader.upload(r.final, tag, prefix=f"{cfg.machine_label}_")
+            store.mark_uploaded(digest, tag=tag,
+                                asset_name=res["assets"][0].get("name", "") if res["assets"] else "",
+                                size=r.final.stat().st_size)
+            store.save()
+        except Exception:
+            log.exception("업로드 실패 (로컬 파일은 남아 있습니다): %s", r.final.name)
+
+
 def cmd_record_watch(args) -> int:
     from .recorder.watcher import Watcher
 
@@ -1704,6 +1759,12 @@ def build_parser() -> argparse.ArgumentParser:
         dest="sub", required=True)
     tt.add_parser("edit", help="PySide6 편집기로 [[recording.timetable]] 편집").set_defaults(
         func=cmd_timetable_edit)
+
+    p = rec.add_parser("remux", help="ffmpeg 없이 소리만 녹음해 둔 것을 파일로 만들기")
+    p.add_argument("--upload", action="store_true", help="만든 파일을 녹화 때처럼 올림")
+    p.add_argument("--upload-dry-run", action="store_true", help="업로드 흉내만")
+    p.add_argument("--dry-run", action="store_true", help="목록만 보여 줌")
+    p.set_defaults(func=cmd_record_remux)
 
     p = rec.add_parser("watch", help="프로그램이 뜨면 자동 녹화")
     p.add_argument("-l", "--label")
