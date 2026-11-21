@@ -106,7 +106,16 @@ scripts\install_ffmpeg.bat
      - **신뢰 등급**: T3 두 출처 일치 · T2 한 출처 · T1 해시 없음(`--allow-unverified` 때만) ·
        T0 출처끼리 다름(안 씀). 순서는 등급이 아니라 정식 버전 → 개발 빌드, 새 것부터입니다.
        2025년 이전에 올라간 파일(7.x 이하)은 GitHub 에 해시가 없어 T1 로 남습니다.
-     - **한도**: API 한도를 다 쓰면(시간당 60회) 다시 시도하지 않고 "HH:MM 에 풀림" 을
+     - **받기 전·받는 중**
+       - 남은 디스크가 파일 크기의 2.5배(zip + 압축 푼 것 + 바꾸는 동안의 옛것)보다 적으면
+         받기 전에 멈춥니다.
+       - 끊기면 받은 데까지 남겨 두고 이어받습니다(HTTP Range). 해시가 있는 버전은
+         `tools\_downloads` 에 남겨 **다음 실행에서도** 이어받고, 다 받아 둔 파일은 다시
+         받지 않습니다. 서버가 이어받기를 받지 않으면 처음부터 받습니다.
+       - 크기가 릴리스에 적힌 값과 다르면 해시를 셈하기 전에 버립니다.
+       - `github.com`·`api.github.com`·`release-assets.githubusercontent.com`·
+         `objects.githubusercontent.com`·`www.gyan.dev` 의 HTTPS 만 받습니다. 리다이렉트
+         한 걸음마다, 그리고 끝 주소도 봅니다.     - **한도**: API 한도를 다 쓰면(시간당 60회) 다시 시도하지 않고 "HH:MM 에 풀림" 을
        보여 준 뒤 gh·git 으로 진행합니다. 한도가 남았는데 403 이면 막힌 망으로 봅니다.
    - `python -m syncnote.ffmpeg_fetch --dry-run` 으로 출처별 결과와 시도할 순서만 볼 수 있습니다.
 4. 다운로드 폴더(`%USERPROFILE%\Downloads`)의 `ffmpeg*.zip`.
