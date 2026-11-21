@@ -306,24 +306,20 @@ fps = 5              # 반드시 같이 낮추세요
 
 ## 업로드
 
-### 태그 전략
+### 릴리스 태그 — 전부 일 단위
 
-```toml
-[github]
-tag_strategy        = "monthly"   # 녹화
-tag_strategy_eclass = "daily"     # e-class 자료 -> eclass-2026-11-13
-```
+릴리스는 종류와 상관없이 **날짜별**(`<접두사>-년-월-일`)입니다. 한 달치가 한
+릴리스에 쌓이지 않습니다. 같은 파일은 업로드 기록으로 걸러지므로 그날 새로
+올린 것만 그날 릴리스에 들어갑니다.
 
-e-class 자료는 기본으로 **날짜별** 릴리스(`eclass-년-월-일`)에 올라갑니다.
-같은 파일은 업로드 기록으로 걸러지므로 날마다 새로 받은 것만 그날 릴리스에 들어갑니다.
-아래 값은 두 키 모두에 쓸 수 있습니다.
-
-| 값 | 태그 예시 | 언제 |
+| 무엇 | 접두사 키 | 태그 예시 |
 |---|---|---|
-| `monthly` | `recordings-2026-11` | 기본. 태그가 1년에 12개 |
-| `weekly` | `recordings-2026-W46` | 과목이 많고 자료가 자주 올라올 때 |
-| `daily` | `recordings-2026-11-11` | 태그가 금방 수백 개가 됩니다 |
-| `single` | `recordings-archive` | 전부 한 릴리스에. 에셋이 너무 많아집니다 |
+| 녹화·전사 | `github.tag_prefix_recording` | `recordings-2026-11-21` |
+| e-class 자료 | `github.tag_prefix_eclass` | `eclass-2026-11-21` |
+| 홈 백업 | `backup.home.tag_prefix` | `home-2026-11-21` |
+
+예전 키 `tag_strategy`·`tag_strategy_eclass`·`fixed_tag` 는 없앴습니다. 남아 있으면
+무시하고 `doctor` 가 지워도 된다고 알려 줍니다. `upload --tag` 로 직접 준 태그만 예외입니다.
 
 ### 민감한 것은 올리지 않기
 

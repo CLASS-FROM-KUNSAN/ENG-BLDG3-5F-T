@@ -128,7 +128,18 @@ def test_record_schedule_uses_the_overlap_plan(monkeypatch, tmp_path):
         def get(self, key, default=None):
             return self._d.get(key, default)
 
-    base = datetime.now().replace(second=0, microsecond=0) + timedelta(minutes=10)
+    # 시계를 월요일 아침에 고정합니다. 실제 시계를 쓰면 자정 90분 전부터는 B 수업이
+    # 다음 날로 넘어가 CI(UTC 23시대)에서만 실패했습니다(수업은 자정을 넘지 않음).
+    frozen = datetime(2026, 11, 23, 8, 50)
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen if tz is None else frozen.astimezone(tz)
+
+    monkeypatch.setattr(cli, "datetime", _Clock)
+    monkeypatch.setattr(S, "datetime", _Clock)
+    base = frozen + timedelta(minutes=10)
     day = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")[base.weekday()]
     hm = lambda d: d.strftime("%H:%M")  # noqa: E731
     rows = [{"name": "A", "day": day, "start": hm(base), "end": hm(base + timedelta(minutes=60))},

@@ -45,11 +45,7 @@ DEFAULTS: dict[str, Any] = {
         "enabled": True,
         "owner": "",
         "repo": "",
-        "tag_strategy": "monthly",
-        # e-class 자료는 날짜별 릴리스(eclass-2026-11-13)로 올립니다.
-        # 언제 받은 자료인지 릴리스 이름만 보고 알 수 있어야 합니다.
-        "tag_strategy_eclass": "daily",
-        "fixed_tag": "archive",
+        # 릴리스는 전부 일 단위(<접두사>-년-월-일). 언제 것인지 이름만 보고 알 수 있게.
         "tag_prefix_eclass": "eclass",
         "tag_prefix_recording": "recordings",
         "draft": False,
@@ -508,7 +504,8 @@ def load(path: str | Path | None = None) -> Config:
 # ---------------------------------------------------------------------------
 # 검증
 # ---------------------------------------------------------------------------
-_VALID_TAG_STRATEGIES = {"monthly", "weekly", "daily", "single"}
+# 예전 설정 키. 지금은 릴리스가 항상 일 단위라 값과 상관없이 무시합니다(경고만).
+_RETIRED_TAG_KEYS = ("github.tag_strategy", "github.tag_strategy_eclass", "github.fixed_tag")
 _VALID_TRACK_LAYOUTS = {"separate", "mixed", "both"}
 _VALID_VIDEO_BACKENDS = {"gdigrab", "ddagrab"}
 _VALID_AUDIO_BACKENDS = {"soundcard", "dshow"}
@@ -651,9 +648,7 @@ def problems(cfg: Config) -> list[str]:
     _validate_stream(cfg, errors)
     _validate_activity(cfg, errors)
 
-    _choice(cfg, "github.tag_strategy", _VALID_TAG_STRATEGIES, errors)
     _choice(cfg, "recording.overlap", _VALID_OVERLAP, errors)
-    _choice(cfg, "github.tag_strategy_eclass", _VALID_TAG_STRATEGIES, errors)
     _choice(cfg, "recording.audio.track_layout", _VALID_TRACK_LAYOUTS, errors)
     _choice(cfg, "recording.video.backend", _VALID_VIDEO_BACKENDS, errors)
     _choice(cfg, "recording.audio.backend", _VALID_AUDIO_BACKENDS, errors)
@@ -790,6 +785,13 @@ def problems(cfg: Config) -> list[str]:
 def warnings_for(cfg: Config) -> list[str]:
     """막지는 않지만 알려줘야 할 것들."""
     notes: list[str] = []
+
+    old = [k for k in _RETIRED_TAG_KEYS if cfg.get(k) not in (None, "daily")]
+    if old:
+        notes.append(
+            f"{', '.join(old)} 는 더 이상 쓰지 않습니다. 릴리스는 항상 일 단위"
+            "(예: recordings-2026-11-21)로 올립니다. config.toml 에서 지워도 됩니다."
+        )
 
     if cfg.get("transcribe.realtime.enabled"):
         notes.append(

@@ -102,7 +102,6 @@ def harness(tmp_path, monkeypatch):
             return {"eclass.upload.exclude_menus": [],
                     "eclass.upload.allow_extensions": [],
                     "eclass.upload.max_file_mb": 0,
-                    "github.tag_strategy": "monthly",
                     "github.create_missing_repos": False,
                     "github.repo_private": True}.get(key, default)
 
@@ -307,7 +306,7 @@ def test_manual_upload_returns_zero_on_success(upload_cmd, capsys):
 def test_eclass_release_is_named_by_date(tmp_path, monkeypatch):
     """e-class 자료는 eclass-년-월-일 릴리스로 올라가야 합니다.
 
-    녹화용 tag_strategy(monthly)를 같이 쓰면 eclass-2026-11 이 됩니다.
+    예전 config.toml 에 tag_strategy = "monthly" 가 남아 있어도 월 단위가 되면 안 됩니다.
     부품(tag_for)이 아니라 _upload_eclass 가 실제로 넘기는 태그를 봅니다.
     """
     from datetime import date
@@ -325,8 +324,9 @@ def test_eclass_release_is_named_by_date(tmp_path, monkeypatch):
         machine_label = "pc"
 
         def get(self, key, default=None):
-            # 녹화 쪽은 monthly 로 둡니다. 이게 새어 들어오면 안 됩니다.
-            return {"github.tag_strategy": "monthly"}.get(key, default)
+            # 예전 키를 남겨 둡니다. 이게 새어 들어오면 안 됩니다.
+            return {"github.tag_strategy": "monthly",
+                    "github.tag_strategy_eclass": "monthly"}.get(key, default)
 
         def section(self, _k):
             return {}

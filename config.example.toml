@@ -40,17 +40,10 @@ enabled = true
 owner = "seongbin45"
 repo  = "gym-w-hall-2f"
 
-# 릴리스 태그 전략
-#   "monthly"  -> recordings-2026-11   (한 달에 릴리스 1개, 에셋 누적)  [권장]
-#   "weekly"   -> recordings-2026-W46
-#   "daily"    -> recordings-2026-11-11
-#   "single"   -> 아래 fixed_tag 하나만 계속 사용
-tag_strategy = "monthly"
-fixed_tag    = "archive"
-
-# e-class 자료만 따로 정합니다. 기본은 날짜별: eclass-2026-11-13
-# (위 tag_strategy 는 녹화에만 적용됩니다.)
-tag_strategy_eclass = "daily"
+# 릴리스는 전부 일 단위입니다: <접두사>-년-월-일
+#   녹화·전사  -> recordings-2026-11-21
+#   e-class    -> eclass-2026-11-21
+# 그날 올린 것만 그날 릴리스에 들어갑니다(같은 파일은 업로드 기록으로 걸러짐).
 
 # 태그 앞에 붙는 접두사. 종류별로 릴리스를 나누고 싶을 때 바꾸세요.
 tag_prefix_eclass    = "eclass"

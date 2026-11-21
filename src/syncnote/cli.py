@@ -471,11 +471,7 @@ def _upload_eclass(cfg, layout: Layout, store: Store, term: str, *, dry_run: boo
         log.info("새로 올릴 폴더가 없습니다.")
         return 0
 
-    tag = tag_for(
-        str(cfg.get("github.tag_strategy_eclass", "daily")),
-        str(cfg.get("github.tag_prefix_eclass", "eclass")),
-        fixed=str(cfg.get("github.fixed_tag", "archive")),
-    )
+    tag = tag_for(str(cfg.get("github.tag_prefix_eclass", "eclass")))
     course_list = courses_mod.load(cfg)
     # 같은 과목이 두 강의실 PC 에 배포될 수 있습니다. 이름이 같으면 뒤에
     # 올린 쪽이 앞엣것을 지웁니다(중복 제거 기록은 PC 안에만 있어 서로를
@@ -600,11 +596,7 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
     from .transcribe.batch import enqueue_segment
 
     uploader = _uploader(cfg, dry_run=dry_run, course=course, what=label) if upload else None
-    tag = tag_for(
-        str(cfg.get("github.tag_strategy", "monthly")),
-        str(cfg.get("github.tag_prefix_recording", "recordings")),
-        fixed=str(cfg.get("github.fixed_tag", "archive")),
-    )
+    tag = tag_for(str(cfg.get("github.tag_prefix_recording", "recordings")))
 
     def on_done(segment) -> None:
         try:
@@ -989,11 +981,7 @@ def cmd_transcribe_queue(args) -> int:
         from .release import tag_for, upload_many
 
         store = _store(layout, "recordings")
-        tag = tag_for(
-            str(cfg.get("github.tag_strategy", "monthly")),
-            str(cfg.get("github.tag_prefix_recording", "recordings")),
-            fixed=str(cfg.get("github.fixed_tag", "archive")),
-        )
+        tag = tag_for(str(cfg.get("github.tag_prefix_recording", "recordings")))
         files = [p for r in results for p in r.outputs]
         uploader = _uploader(cfg, dry_run=args.dry_run, what="전사 결과")
         if uploader is None:
@@ -1059,11 +1047,7 @@ def cmd_upload(args) -> int:
         print("올릴 파일이 없습니다.")
         return 0
 
-    tag = args.tag or tag_for(
-        str(cfg.get("github.tag_strategy", "monthly")),
-        str(cfg.get("github.tag_prefix_recording", "recordings")),
-        fixed=str(cfg.get("github.fixed_tag", "archive")),
-    )
+    tag = args.tag or tag_for(str(cfg.get("github.tag_prefix_recording", "recordings")))
     store = _store(layout, "manual_upload")
     print(f"릴리스 '{tag}' 에 {len(files)}개 파일을 올립니다.")
     # 폴더를 올릴 때 root 를 넘기지 않으면 에셋 이름이 '파일 이름' 만으로
@@ -1197,7 +1181,7 @@ def cmd_backup_home(args) -> int:
         log.error("홈 백업: %s", why)
         return 1
 
-    tag = tag_for("daily", str(cfg.get("backup.home.tag_prefix", "home")))
+    tag = tag_for(str(cfg.get("backup.home.tag_prefix", "home")))
     # 정리가 돌고 있으면 끝나기를 기다립니다(정리는 보통 몇 분).
     with exclusive(_home_lock_path(layout), wait_sec=HOME_LOCK_WAIT_SEC) as got:
         if not got:

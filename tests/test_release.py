@@ -109,17 +109,13 @@ def test_asset_name_prefix_and_length():
 # ---------------------------------------------------------------------------
 # 태그
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "strategy,expected",
-    [
-        ("monthly", "rec-2026-11"),
-        ("weekly", "rec-2026-W46"),
-        ("daily", "rec-2026-11-11"),
-        ("single", "rec-archive"),
-    ],
-)
-def test_tag_for(strategy, expected):
-    assert tag_for(strategy, "rec", date(2026, 11, 11), fixed="archive") == expected
+def test_tag_for_is_always_year_month_day():
+    """릴리스는 전부 일 단위 — 월이 바뀌는 날도, 한 자리 월·일도 년-월-일."""
+    assert tag_for("rec", date(2026, 11, 11)) == "rec-2026-11-11"
+    assert tag_for("eclass", date(2026, 3, 1)) == "eclass-2026-03-01"
+    assert tag_for("rec", date(2026, 11, 30)) != tag_for("rec", date(2026, 11, 29))
+    assert tag_for("", date(2026, 12, 31)) == "2026-12-31"
+    assert tag_for("home") == f"home-{date.today():%Y-%m-%d}"
 
 
 # ---------------------------------------------------------------------------

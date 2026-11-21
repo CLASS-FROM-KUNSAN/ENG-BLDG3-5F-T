@@ -137,10 +137,11 @@ def test_problems_use_the_real_validator_and_point_at_fields():
     base = S.problems(EXAMPLE)
     filled = S.problems(S.apply(EXAMPLE, {"eclass.username": "20261234"}))
     assert len(filled) < len(base) or not base
-    bad = S.problems(S.apply(EXAMPLE, {"eclass.username": "x", "github.tag_strategy": "hourly"}))
-    assert any("github.tag_strategy" in p for p in bad)
+    bad = S.problems(S.apply(EXAMPLE, {"eclass.username": "x",
+                                       "recording.video.backend": "nope"}))
+    assert any("recording.video.backend" in p for p in bad)
     hit = [f.dotted for p in bad for f in S.fields_in(p, fields)]
-    assert "github.tag_strategy" in hit and "github.tag_strategy_eclass" not in hit
+    assert "recording.video.backend" in hit and "recording.audio.backend" not in hit
 
 
 EXISTING = """# 내 설정
