@@ -56,6 +56,24 @@ PowerShell 에서 `winget install Gyan.FFmpeg`, 또는 받아서 환경변수 `F
 전에 열린 것입니다. 창을 새로 여세요. syncnote 자체는 창을 다시 열지 않아도 winget 이
 둔 위치를 찾습니다.
 
+### ffmpeg 가 없는데 녹화 시간이 됐습니다
+
+수업을 통째로 잃지 않게 **소리만 녹음합니다**(soundcard → WAV). 화면은 ffmpeg 가
+있어야 잡을 수 있어 녹화되지 않습니다. 로그와 녹화 결과에
+"ffmpeg 가 없어 소리만 녹음합니다" 가 한 번 남습니다.
+
+- 세그먼트마다 WAV 가 `audio\` 에 남고, 옆에 `<세그먼트>.pending.json` 이 생깁니다.
+  전사 설정(`transcribe.enabled`)이 꺼져 있어도 이 WAV 는 지우지 않습니다.
+- ffmpeg 를 설치한 뒤(`scripts\install_ffmpeg.bat`) 파일로 만드세요.
+
+```bat
+python -m syncnote record remux --dry-run   REM 만들 목록만
+python -m syncnote record remux             REM 소리 트랙 mkv/mp4 + 수업 태그·챕터
+python -m syncnote record remux --upload    REM 만든 파일을 녹화 때처럼 올림
+```
+
+만들다 실패한 것은 `pending.json` 이 남아 다음에 다시 시도합니다. 올릴 때는 녹화 때와
+같은 규칙입니다(과목을 모르면 `course_repos` 가 있을 때 올리지 않음).
 ### 영상이 검은 화면입니다
 
 작업 스케줄러에서 **"사용자의 로그온 여부에 관계없이 실행"** 으로 설정한

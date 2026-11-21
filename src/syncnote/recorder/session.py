@@ -322,6 +322,22 @@ class RecordingSession:
         video_on = bool(cfg.get("recording.video.enabled", True))
         audio_on = bool(cfg.get("recording.audio.enabled", True))
 
+        # ffmpeg 가 없으면 화면은 잡을 수 없지만 소리(soundcard -> WAV)는 됩니다.
+        # 수업을 통째로 잃지 않게 소리만 녹음하고, 파일(mkv/mp4)은 ffmpeg 가 생긴 뒤
+        # `record remux` 로 만듭니다. 세그먼트마다 실패를 반복하지 않게 처음에 한 번 봅니다.
+        self.audio_only = False
+        if audio_on:
+            from .ffmpeg_util import FFmpegMissing, find_ffmpeg
+            try:
+                find_ffmpeg()
+            except FFmpegMissing:
+                self.audio_only = True
+                video_on = False
+                msg = ("ffmpeg 가 없어 소리만 녹음합니다(화면은 녹화되지 않음). "
+                       "ffmpeg 를 설치한 뒤 `python -m syncnote record remux` 로 파일을 만드세요.")
+                log.warning("%s", msg)
+                result.warnings.append(msg)
+
         log.info("=" * 58)
         log.info("녹화 시작: %s", self.label)
         log.info("  폴더   : %s", out_dir)
@@ -531,10 +547,11 @@ class RecordingSession:
         ]
         wav_copies = {t.name: t.path for t in audio_results if t.path.exists()}
         keep_wav = bool(cfg.get("transcribe.enabled", True))
+        audio_only = bool(getattr(self, "audio_only", False)) and bool(mux_inputs)
 
         # 모니터가 여러 개면 모니터마다 mux, 하나면 기존대로.
         final_paths: list[Path] = []
-        for video_path, sfx in stopped_video_paths:
+        for video_path, sfx in ([] if audio_only else stopped_video_paths):
             video_started = 0.0
             if video_recs:
                 for vr, s in video_recs:
@@ -555,8 +572,9 @@ class RecordingSession:
                 log.error("합치기 실패%s: %s", f" (모니터{sfx})" if multi else "", exc)
                 result.warnings.append(f"세그먼트 {index} 합치기 실패{sfx}: {exc}")
 
-        # WAV 삭제 (전사 불필요) or 이동
-        if not keep_wav:
+        # WAV 삭제 (전사 불필요) or 이동. 소리만 녹음했으면 그 WAV 가 유일한 기록이라
+        # 전사 설정과 상관없이 남깁니다(파일을 만든 뒤 지울지는 pending 에 적어 둠).
+        if not keep_wav and not audio_only:
             for t in audio_results:
                 if t.path.exists():
                     try:
@@ -587,6 +605,17 @@ class RecordingSession:
                 work.rmdir()
         except OSError as exc:
             log.debug("작업 폴더 정리 생략: %s", exc)
+
+        if audio_only:
+            from .remux import write_pending
+            write_pending(
+                out_dir / f"{stem}.{container}",
+                [(t.name, wav_copies.get(t.name, t.path), t.started_at or audio_started)
+                 for t in audio_results if not t.error and wav_copies.get(t.name)],
+                layout=str(cfg.get("recording.audio.track_layout", "separate")),
+                meta=self.meta, segment_index=index, ended_at=ended_at,
+                delete_wav=not keep_wav, course_id=str(getattr(self.course, "id", "") or ""),
+                started=now)
 
         from .ffmpeg_util import duration_of
 
