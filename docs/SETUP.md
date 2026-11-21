@@ -65,11 +65,22 @@ Eclass 수집을 쓸 때만 필요합니다. 약 150MB.
 scripts\install_ffmpeg.bat
 ```
 
-자동 설치가 안 되면:
+`setup.bat` 도 ffmpeg 가 없으면 이 스크립트를 부릅니다. 순서는 이렇습니다.
 
-1. <https://www.gyan.dev/ffmpeg/builds/> 에서
+1. **winget** 으로 설치: `winget install Gyan.FFmpeg` 와 같습니다. 동의 질문
+   (`Do you agree ...? [Y]`)은 옵션으로 전부 자동 승인하므로 멈추지 않습니다.
+2. winget 이 없거나 실패하면 `tools\ffmpeg` 에 zip 을 직접 내려받습니다.
+
+winget 은 PATH 를 바꾸지만 **이미 열린 창에는 반영되지 않습니다.** syncnote 는
+winget 이 둔 위치(`%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe`)를 직접 찾으므로
+창을 다시 열지 않아도 녹화됩니다. 터미널에서 `ffmpeg` 명령을 치려면 창을 새로 여세요.
+
+둘 다 안 되면:
+
+1. PowerShell 에서 `winget install Gyan.FFmpeg` 를 직접 실행하거나
+2. <https://www.gyan.dev/ffmpeg/builds/> 에서
    `ffmpeg-release-essentials.zip` 을 받습니다.
-2. 압축을 풀어 `<레포>\tools\ffmpeg\bin\ffmpeg.exe` 가 되도록 둡니다.
+   압축을 풀어 `<레포>\tools\ffmpeg\bin\ffmpeg.exe` 가 되도록 둡니다.
 3. 또는 PATH 에 추가하거나, 환경변수 `FFMPEG` 에 전체 경로를 넣습니다.
 
 ```bat

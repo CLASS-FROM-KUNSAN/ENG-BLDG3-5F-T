@@ -22,10 +22,9 @@ class FFmpegMissing(Exception):
     def __str__(self) -> str:
         return (
             "ffmpeg 를 찾지 못했습니다.\n"
-            "  1) https://www.gyan.dev/ffmpeg/builds/ 에서 release-essentials 를 받고\n"
-            "  2) 압축을 푼 뒤 bin 폴더를 PATH 에 추가하거나\n"
-            "  3) 환경변수 FFMPEG 에 ffmpeg.exe 전체 경로를 넣으세요.\n"
-            "  (scripts/setup.bat 이 자동으로 받아 줍니다)"
+            "  1) scripts\\install_ffmpeg.bat 실행 (winget install Gyan.FFmpeg, 안 되면 zip)\n"
+            "  2) 또는 https://www.gyan.dev/ffmpeg/builds/ 에서 받아 bin 폴더를 PATH 에\n"
+            "  3) 또는 환경변수 FFMPEG 에 ffmpeg.exe 전체 경로를 넣으세요."
         )
 
 
@@ -42,7 +41,30 @@ def find_ffmpeg() -> str:
         p = here / rel
         if p.exists():
             return str(p)
+    found = _winget_ffmpeg()
+    if found:
+        return found
     raise FFmpegMissing()
+
+
+def _winget_ffmpeg() -> str | None:
+    """`winget install Gyan.FFmpeg` 이 둔 ffmpeg.exe.
+
+    winget 은 PATH 를 바꾸지만, 설치 전에 열린 창(설치·점검 창, setup.bat 의 cmd,
+    이미 떠 있는 녹화기)에는 반영되지 않아 which 로는 못 찾습니다(이슈 #59).
+    그래서 winget 이 실제로 만드는 두 곳을 직접 봅니다.
+      %LOCALAPPDATA%\\Microsoft\\WinGet\\Links\\ffmpeg.exe              (별칭)
+      %LOCALAPPDATA%\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg*\\ffmpeg-*\\bin  (본체)
+    """
+    local = os.environ.get("LOCALAPPDATA")
+    if not local:
+        return None
+    root = Path(local) / "Microsoft" / "WinGet"
+    link = root / "Links" / "ffmpeg.exe"
+    if link.exists():
+        return str(link)
+    hits = sorted(root.glob("Packages/Gyan.FFmpeg*/ffmpeg-*/bin/ffmpeg.exe"))
+    return str(hits[-1]) if hits else None
 
 
 def find_ffprobe() -> str | None:
