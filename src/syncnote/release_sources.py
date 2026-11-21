@@ -22,8 +22,19 @@
   git 에만 있으면 주소를 만들고(만든 주소 표시) 해시가 없으므로 뒤로
   gyan.dev 의 .sha256 은 최신 정식 버전과 같은 빌드라, 해시 없는 최신 정식
   버전에 빌려 붙임(API·gh 가 막혀도 git + gyan.dev 로 검증 가능)
-정렬
-  해시 있는 정식 버전 -> 해시 있는 개발 빌드 -> (allow_unverified 일 때만) 해시 없는 것
+신뢰 등급(쓸지 말지만 정함 — 순서는 종류 -> 버전)
+  T3 두 출처의 해시가 같음   T2 한 출처의 해시   T1 해시 없음   T0 출처끼리 다름(버림)
+  T1 은 allow_unverified 일 때만. 2025년 이전에 올라간 파일은 GitHub 에 해시가 없어
+  어느 출처로도 T2 가 될 수 없습니다(실제 6.1.1 확인).
+두 번 읽기
+  1단계(넓게)  API 목록 1쪽(100개) · gh release list · git ls-remote 를 동시에
+  2단계(보강)  시도할 앞쪽 후보 중 해시가 없거나 한 출처뿐인 것만 다시:
+               gh 가 로그인돼 있으면 gh release view(gh 확인 추가),
+               해시가 아예 없으면 API 로 태그 하나 조회 — API 남은 한도가 10 미만이면 멈춤
+한도·막힘
+  API 403/429 + 남은 한도 0 -> 한도 초과(다시 안 함, 풀리는 시각 표시)
+  API 403 + 한도 남음       -> 막힘(학교망 등)
+  gh 출력에 rate limit      -> gh 한도 초과
 
 gh 가 없거나 로그인이 안 돼 있으면 그 출처만 건너뜁니다. 로그인 창을 띄우거나
 토큰을 찾지 않습니다(GH_PROMPT_DISABLED, GIT_TERMINAL_PROMPT=0).
@@ -117,6 +128,49 @@ class Entry:
     @property
     def verified_by(self) -> list[str]:
         return sorted(k for k, v in self.sha.items() if v and v == self.sha256)
+
+    @property
+    def trust(self) -> int:
+        """3 두 출처 일치 · 2 한 출처 · 1 해시 없음 · 0 출처끼리 다름."""
+        if self.conflict:
+            return 0
+        return min(3, 1 + len(self.verified_by)) if self.sha256 else 1
+
+
+@dataclass
+class ApiResult:
+    """API 응답과 남은 한도. remaining 이 None 이면 모름(헤더 없음)."""
+    data: object
+    remaining: int | None = None
+    limit: int | None = None
+
+
+class ApiLimited(Exception):
+    """API 한도 초과 — 다시 해도 소용없음."""
+
+    def __init__(self, reset: str = "") -> None:
+        super().__init__(f"API 한도 초과{f' ({reset}에 풀림)' if reset else ''}")
+        self.reset = reset
+
+
+class ApiBlocked(Exception):
+    """403 인데 한도는 남음 — 학교망 등이 막음."""
+
+
+def api_error(code: int, headers) -> Exception | None:
+    """HTTP 오류를 한도 초과/막힘으로 가립니다(순수 함수, 시험용)."""
+    if code not in (403, 429):
+        return None
+    get = (headers or {}).get
+    remaining = str(get("X-RateLimit-Remaining") or "")
+    if remaining == "0" or code == 429:
+        reset = ""
+        raw = str(get("X-RateLimit-Reset") or "")
+        if raw.isdigit():
+            import datetime as _dt
+            reset = _dt.datetime.fromtimestamp(int(raw)).strftime("%H:%M")
+        return ApiLimited(reset)
+    return ApiBlocked(f"API 가 막혀 있음 (HTTP {code})")
 
 
 @dataclass
@@ -238,23 +292,28 @@ def gh_ready(run: Callable = _run) -> tuple[str, str]:
     return exe, ""
 
 
-def read_gh(book_tags: Callable[[list[dict]], list[str]], *, run: Callable = _run,
-            limit: int = 30, view_max: int = 8) -> tuple[list[dict], dict[str, list[dict]], str]:
-    """(list 결과, 태그별 assets, 실패 이유)."""
+def _gh_why(p) -> str:
+    err = (p.stderr or "").strip()
+    return "gh 한도 초과" if "rate limit" in err.lower() else err[:120]
+
+
+def read_gh(*, run: Callable = _run, limit: int = 100) -> tuple[str, list[dict], str]:
+    """1단계: (gh 경로, release list 결과, 실패 이유)."""
     exe, why = gh_ready(run)
     if not exe:
-        return [], {}, why
+        return "", [], why
     p = run([exe, "release", "list", "-R", REPO, "--limit", str(limit), "--json",
              "tagName,isDraft,isPrerelease,publishedAt"])
     if p.returncode != 0:
-        return [], {}, f"gh release list 실패: {(p.stderr or '').strip()[:120]}"
-    items = json.loads(p.stdout or "[]")
-    assets: dict[str, list[dict]] = {}
-    for tag in book_tags(items)[:view_max]:          # view 는 시도할 앞쪽 몇 개만
-        v = run([exe, "release", "view", tag, "-R", REPO, "--json", "assets"])
-        if v.returncode == 0:
-            assets[tag] = (json.loads(v.stdout or "{}") or {}).get("assets") or []
-    return items, assets, ""
+        return "", [], f"gh release list 실패: {_gh_why(p)}"
+    return exe, json.loads(p.stdout or "[]"), ""
+
+
+def gh_view(exe: str, tag: str, *, run: Callable = _run) -> list[dict] | None:
+    p = run([exe, "release", "view", tag, "-R", REPO, "--json", "assets"], timeout=30)
+    if p.returncode != 0:
+        return None
+    return (json.loads(p.stdout or "{}") or {}).get("assets") or []
 
 
 def read_git(*, run: Callable = _run) -> tuple[str, str]:
@@ -270,32 +329,40 @@ def read_git(*, run: Callable = _run) -> tuple[str, str]:
     return p.stdout or "", ""
 
 
-def _gh_view_order(items: list[dict]) -> list[str]:
-    tmp: dict[str, Entry] = {}
-    add_gh_list(tmp, items)
-    return [e.tag for e in ordered_all(tmp)]
-
-
 def ordered_all(book: dict[str, Entry]) -> list[Entry]:
     live = [e for e in book.values() if not e.draft]
     return sorted(live, key=lambda e: (e.kind == "stable", e.key), reverse=True)
 
 
-def collect(*, api: Callable[[], list[dict]], gyan_sha: Callable[[], str],
-            run: Callable = _run, allow_unverified: bool = False,
+MIN_API_LEFT = 10           # 이보다 적게 남으면 2단계에서 API 를 더 부르지 않음
+
+
+def _as_api(res) -> ApiResult:
+    return res if isinstance(res, ApiResult) else ApiResult(res)
+
+
+def collect(*, api: Callable[[], object], gyan_sha: Callable[[], str],
+            api_tag: Callable[[str], object] | None = None,
+            run: Callable = _run, allow_unverified: bool = False, max_tries: int = 6,
             parallel: bool = True) -> tuple[list[Entry], list[SourceReport]]:
-    """세 출처를 함께 읽어 시도할 순서와 출처별 결과를 돌려줍니다."""
+    """세 출처를 함께 읽고(1단계) 앞쪽 후보만 보강해(2단계) 시도할 순서를 돌려줍니다.
+
+    api      목록 1쪽 -> list 또는 ApiResult(남은 한도 포함)
+    api_tag  태그 하나 -> release dict 또는 ApiResult. 없으면 API 보강 안 함
+    """
     def do_api():
         try:
-            return api(), ""
+            return _as_api(api()), ""
+        except ApiLimited as exc:
+            return None, str(exc)
         except Exception as exc:  # noqa: BLE001
             return None, f"API 실패: {exc}"
 
     def do_gh():
         try:
-            return read_gh(_gh_view_order, run=run)
+            return read_gh(run=run)
         except Exception as exc:  # noqa: BLE001
-            return [], {}, f"gh 실패: {exc}"
+            return "", [], f"gh 실패: {exc}"
 
     def do_git():
         try:
@@ -312,20 +379,24 @@ def collect(*, api: Callable[[], list[dict]], gyan_sha: Callable[[], str],
 
     book: dict[str, Entry] = {}
     reports = []
-    rels, why = api_res
-    if rels is None:
+    res, why = api_res
+    api_left: int | None = None
+    api_ok = res is not None
+    if res is None:
         reports.append(SourceReport("API", False, why))
     else:
+        rels = res.data or []
+        api_left = res.remaining
         n = add_api(book, rels)
-        reports.append(SourceReport("API", True, f"릴리스 {len(rels)}개 (essentials {n}개)"))
-    items, gh_assets, why = gh_res
+        quota = f", 한도 {res.remaining}/{res.limit}" if res.remaining is not None else ""
+        reports.append(SourceReport("API", True,
+                                    f"릴리스 {len(rels)}개 (essentials {n}개{quota})"))
+    gh_exe, items, why = gh_res
     if why:
         reports.append(SourceReport("gh", False, why))
     else:
         add_gh_list(book, items)
-        for tag, assets in gh_assets.items():
-            add_gh_assets(book, tag, assets)
-        reports.append(SourceReport("gh", True, f"릴리스 {len(items)}개, 해시 {len(gh_assets)}개 확인"))
+        reports.append(SourceReport("gh", True, f"릴리스 {len(items)}개"))
     text, why = git_res
     if why:
         reports.append(SourceReport("git", False, why))
@@ -333,7 +404,54 @@ def collect(*, api: Callable[[], list[dict]], gyan_sha: Callable[[], str],
         n = add_git(book, text)
         reports.append(SourceReport("git", True,
                                     f"태그 {len(text.splitlines())}개 (릴리스 버전 {n}개)"))
-    cross_check(book, gyan_sha() if any(not e.sha256 for e in book.values()) else "")
+    cross_check(book)                                       # 주소 채우기 + 1차 불일치
+
+    # -- 2단계: 시도할 앞쪽 후보만 보강 ------------------------------------------
+    top = [e for e in ordered_all(book) if not e.conflict][:max_tries]
+    notes: list[str] = []
+
+    def enrich_gh(e: Entry) -> None:
+        assets = gh_view(gh_exe, e.tag, run=run)
+        if assets is not None:
+            add_gh_assets(book, e.tag, assets)
+
+    gh_todo = [e for e in top if gh_exe and "gh" not in e.sha]
+    if gh_todo:
+        if parallel:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(enrich_gh, gh_todo))
+        else:
+            for e in gh_todo:
+                enrich_gh(e)
+    for e in top:
+        if e.sha256 or api_tag is None or not api_ok:
+            continue
+        if api_left is not None and api_left < MIN_API_LEFT:
+            notes.append(f"API 남은 한도 {api_left} — 보강 멈춤")
+            break
+        try:
+            got = _as_api(api_tag(e.tag))
+        except ApiLimited as exc:
+            notes.append(str(exc))
+            api_ok = False
+            break
+        except Exception as exc:  # noqa: BLE001 — 그 태그만 못 봄
+            notes.append(f"{e.tag} API 조회 실패: {exc}")
+            continue
+        if got.remaining is not None:
+            api_left = got.remaining
+        if isinstance(got.data, dict):
+            add_api(book, [got.data])
+    cross_check(book, gyan_sha() if any(not e.sha256 for e in top) else "")
+    for e in top:
+        if e.conflict:
+            continue
+        if e.sha256:
+            notes.append(f"{e.tag} T{e.trust} {'·'.join(e.verified_by)}")
+        else:
+            notes.append(f"{e.tag} T1 해시 없음")
+    if notes:
+        reports.append(SourceReport("보강", True, ", ".join(notes)))
     conflicts = [e for e in book.values() if e.conflict]
     if conflicts:
         reports.append(SourceReport("교차 검증", False, ", ".join(

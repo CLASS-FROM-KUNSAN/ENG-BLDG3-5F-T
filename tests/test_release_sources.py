@@ -153,7 +153,7 @@ def test_collect_reads_all_three_and_reports_each(monkeypatch):
     entries, reports = _collect(monkeypatch, tools, api=[_api("9.1", A)])
     assert [e.tag for e in entries] == ["9.1"] and entries[0].verified_by == ["api", "gh"]
     assert entries[0].sources == {"api", "gh", "git"}
-    assert [(r.name, r.ok) for r in reports] == [("API", True), ("gh", True), ("git", True)]
+    assert [(r.name, r.ok) for r in reports][:3] == [("API", True), ("gh", True), ("git", True)]
     assert "태그 2개 (릴리스 버전 1개)" in reports[2].note
 
 
@@ -173,7 +173,7 @@ def test_one_source_failing_does_not_stop_the_others(monkeypatch):
                   ls_remote="x\trefs/tags/9.1\n", fail={"git"})
     entries, reports = _collect(monkeypatch, tools, api=urllib.error.URLError("rate limit"))
     assert [e.tag for e in entries] == ["9.1"] and entries[0].verified_by == ["gh"]
-    assert [(r.name, r.ok) for r in reports] == [("API", False), ("gh", True), ("git", False)]
+    assert [(r.name, r.ok) for r in reports][:3] == [("API", False), ("gh", True), ("git", False)]
 
 
 def test_conflict_is_reported(monkeypatch):
@@ -265,3 +265,107 @@ def test_unverified_candidates_need_the_flag_and_a_real_file(tmp_path, monkeypat
                   sleep=lambda _s: None, say=lambda _m: None, allow_unverified=True)
     assert r.ok and r.used.version == "8.0" and r.used.sha256 == ""
     assert r.tried[0][0] == "8.1.2" and "파일이 없음" in r.tried[0][1]   # 만든 주소에 없음 -> 롤백
+
+
+# -- 2단계 보강 · 한도 · 신뢰 등급 ----------------------------------------------
+def test_api_error_tells_limit_from_block():
+    lim = RS.api_error(403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1795260000"})
+    assert isinstance(lim, RS.ApiLimited) and "에 풀림" in str(lim) and len(lim.reset) == 5
+    assert isinstance(RS.api_error(429, {}), RS.ApiLimited)
+    assert isinstance(RS.api_error(403, {"X-RateLimit-Remaining": "41"}), RS.ApiBlocked)
+    assert RS.api_error(404, {}) is None
+
+
+def test_api_get_reads_quota_and_raises_limited(monkeypatch):
+    class Resp(io.BytesIO):
+        headers = {"X-RateLimit-Remaining": "57", "X-RateLimit-Limit": "60"}
+    ok = F._api_get("u", opener=lambda *_a, **_k: Resp(b"[]"))
+    assert (ok.data, ok.remaining, ok.limit) == ([], 57, 60)
+
+    def limited(*_a, **_k):
+        raise urllib.error.HTTPError("u", 403, "rate", {"X-RateLimit-Remaining": "0"}, None)
+    with pytest.raises(RS.ApiLimited):
+        F._api_get("u", opener=limited)
+
+
+def test_trust_levels():
+    book = _book(api=[_api("9.1", A), _api("9.0", A), _api("8.0", A)],
+                 gh_assets={"9.1": A, "8.0": B}, git="x\trefs/tags/7.0\n")
+    book["9.1"].sources.add("gh")
+    RS.cross_check(book)
+    assert {t: e.trust for t, e in book.items()} == {"9.1": 3, "9.0": 2, "8.0": 0, "7.0": 1}
+
+
+def _phase2(monkeypatch, *, git, api_page=(), tag_db=None, remaining=50, gh=False, max_tries=6,
+            gh_assets=None, gh_list=()):
+    tools = Tools(gh=gh, gh_list=list(gh_list), gh_assets=gh_assets or {}, ls_remote=git)
+    monkeypatch.setattr(RS, "which", tools.which)
+    asked = []
+    left = {"n": remaining}
+
+    def api_tag(tag):
+        asked.append(tag)
+        left["n"] -= 1
+        if isinstance(tag_db, Exception):
+            raise tag_db
+        rel = (tag_db or {}).get(tag)
+        return RS.ApiResult(rel, left["n"], 60)
+    entries, reports = RS.collect(api=lambda: RS.ApiResult(list(api_page), remaining, 60),
+                                  api_tag=api_tag, gyan_sha=lambda: "", run=tools.run,
+                                  max_tries=max_tries, parallel=False)
+    return entries, reports, asked, tools
+
+
+def test_git_only_stable_versions_get_hashes_by_tag_lookup(monkeypatch):
+    git = "x\trefs/tags/9.1\nx\trefs/tags/8.1.2\nx\trefs/tags/6.1.1\n"
+    db = {"8.1.2": _api("8.1.2", B), "6.1.1": _api("6.1.1", "")}       # 6.1.1: 옛 파일, 해시 칸 빔
+    entries, reports, asked, _t = _phase2(monkeypatch, git=git, api_page=[_api("9.1", A)],
+                                          tag_db=db)
+    assert asked == ["8.1.2", "6.1.1"]                                   # 해시 없는 것만, 9.1 은 안 물음
+    assert [(e.tag, e.trust) for e in entries] == [("9.1", 2), ("8.1.2", 2)]
+    assert "6.1.1 T1 해시 없음" in reports[-1].note
+
+
+def test_enrichment_only_for_the_first_max_tries(monkeypatch):
+    git = "".join(f"x\trefs/tags/9.{i}\n" for i in range(10))
+    _e, _r, asked, _t = _phase2(monkeypatch, git=git, tag_db={}, max_tries=3)
+    assert asked == ["9.9", "9.8", "9.7"]
+
+
+def test_enrichment_stops_when_api_quota_runs_low(monkeypatch):
+    git = "".join(f"x\trefs/tags/9.{i}\n" for i in range(6))
+    _e, reports, asked, _t = _phase2(monkeypatch, git=git, tag_db={}, remaining=11)
+    assert asked == ["9.5", "9.4"]                                       # 11 -> 10 -> 9 에서 멈춤
+    assert "보강 멈춤" in reports[-1].note
+
+
+def test_enrichment_stops_on_rate_limit(monkeypatch):
+    git = "x\trefs/tags/9.1\nx\trefs/tags/9.0\n"
+    _e, reports, asked, _t = _phase2(monkeypatch, git=git, tag_db=RS.ApiLimited("20:20"))
+    assert asked == ["9.1"] and "20:20에 풀림" in reports[-1].note
+
+
+def test_phase1_rate_limit_is_reported_and_no_tag_lookups(monkeypatch):
+    tools = Tools(gh=False, ls_remote="x\trefs/tags/9.1\n")
+    monkeypatch.setattr(RS, "which", tools.which)
+    asked = []
+
+    def limited():
+        raise RS.ApiLimited("20:20")
+    entries, reports = RS.collect(api=limited, api_tag=lambda t: asked.append(t),
+                                  gyan_sha=lambda: "", run=tools.run, parallel=False)
+    assert reports[0].note == "API 한도 초과 (20:20에 풀림)" and asked == [] and entries == []
+
+
+def test_gh_view_only_for_top_candidates_missing_gh(monkeypatch):
+    git = "".join(f"x\trefs/tags/9.{i}\n" for i in range(5))
+    _e, _r, _asked, tools = _phase2(
+        monkeypatch, git=git, gh=True, max_tries=2, tag_db={},
+        gh_list=[{"tagName": f"9.{i}"} for i in range(5)], gh_assets={"9.4": A, "9.3": A})
+    views = [c[3] for c in tools.calls if c[1:3] == ["release", "view"]]
+    assert views == ["9.4", "9.3"]
+
+
+def test_gh_rate_limit_is_named():
+    p = types.SimpleNamespace(returncode=1, stderr="HTTP 403: API rate limit exceeded")
+    assert RS._gh_why(p) == "gh 한도 초과"
