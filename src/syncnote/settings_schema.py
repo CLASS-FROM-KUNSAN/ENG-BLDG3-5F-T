@@ -47,6 +47,7 @@ class Field:
     doc: str = ""           # 위 주석 + 줄 끝 주석, 정리된 여러 줄
     group: str = ""         # 섹션 안 소분류("학습 목차")
     line: int = 0           # 예시 파일에서의 줄 번호(1부터)
+    raw: list[str] = field(default_factory=list)   # 설명 주석 원문('#' 뒤, 들여쓰기 그대로)
 
     @property
     def dotted(self) -> str:
@@ -96,6 +97,14 @@ def _clean_comment(line: str) -> str:
     if s.startswith("#"):
         s = s[1:]
     return s.strip()
+
+
+def _raw_comment(line: str) -> str:
+    """'#' 뒤 글자를 들여쓰기 그대로(켬/끔 설명의 이어지는 줄을 가리는 데 씀)."""
+    s = line.strip()
+    if s.startswith("#"):
+        s = s[1:]
+    return s.rstrip()
 
 
 def _split_inline(rest: str) -> tuple[str, str]:
@@ -182,6 +191,8 @@ def parse(text: str) -> list[Section]:
     current: Section | None = Section("", "기본", line=0)   # 첫 머리 앞 키(드묾)
     sections.append(current)
     buf: list[str] = []          # 지금 쌓이는 주석 블록
+    braw: list[str] = []         # 같은 블록의 원문(들여쓰기 그대로)
+    last_above_raw: list[str] = []
     group = ""
     last_above = ""            # 바로 앞 키의 '위 주석'(붙어 있는 다음 키가 물려받음)
     after_key = False            # 바로 앞 줄이 키 줄이었나(빈 줄 없이 이어진 키 묶음)
@@ -191,7 +202,7 @@ def parse(text: str) -> list[Section]:
         raw = lines[i]
         s = raw.strip()
         if not s:
-            buf = []
+            buf, braw = [], []
             after_key = False
             i += 1
             continue
@@ -201,20 +212,22 @@ def parse(text: str) -> list[Section]:
                 # 키 아래 들여쓴 이어지는 주석 → 그 키의 설명
                 prev = current.fields[-1]
                 prev.doc = (prev.doc + "\n" + _clean_comment(s)).strip()
+                prev.raw.append(_raw_comment(s))
                 i += 1
                 continue
             sub = _SUBGROUP.match(s)
             if sub and not _DECOR.match(s):
                 group = sub.group(1).strip()
-                buf = []
+                buf, braw = [], []
             elif not _DECOR.match(s):
                 buf.append(_clean_comment(s))
+                braw.append(_raw_comment(s))
             after_key = False
             i += 1
             continue
         if _ARRAY_HEADER.match(s):
             current = None           # [[표 배열]] 안의 키는 다루지 않음
-            buf = []
+            buf, braw = [], []
             i += 1
             continue
         h = _HEADER.match(s)
@@ -225,7 +238,7 @@ def parse(text: str) -> list[Section]:
                 untitled.add(id(current))
             sections.append(current)
             after_key = False
-            buf, group = [], ""
+            buf, braw, group = [], [], ""
             i += 1
             continue
         k = _KEY.match(raw)
@@ -238,26 +251,124 @@ def parse(text: str) -> list[Section]:
             if isinstance(node, dict) and key in node:
                 _val, inline = _split_inline(k.group(4)) if end == i else ("", "")
                 above = "\n".join(buf)
+                above_raw = list(braw)
                 if not above and after_key:
                     above = last_above       # owner/repo 처럼 붙어 쓴 키는 위 설명을 같이 씀
-                last_above = above
+                    above_raw = list(last_above_raw)
+                last_above, last_above_raw = above, above_raw
                 doc = above
                 if not doc and key == "enabled":
                     doc = f"{current.title} 켜기"   # 설명 없는 on/off 스위치에 읽을 이름
                 if inline:
                     doc = (doc + ("\n" if doc else "") + inline).strip()
-                current.fields.append(Field(current.path, key, node[key], doc, group, i + 1))
-            buf = []
+                    above_raw = above_raw + [inline]
+                current.fields.append(Field(current.path, key, node[key], doc, group, i + 1,
+                                            raw=above_raw))
+            buf, braw = [], []
             after_key = True
             i = end + 1
             continue
-        buf = []
+        buf, braw = [], []
         i += 1
     for s in sections:
         if id(s) in untitled and s.fields and s.fields[0].doc:
             first = s.fields[0].doc.splitlines()[0]
             s.title = first if len(first) <= 40 else first[:39] + "…"
     return [s for s in sections if s.fields]
+
+
+# ---------------------------------------------------------------------------
+# 켬/끔 설명 — 예시 파일의 '# true = 켬 — …' / '# false = 끔 — …' 를 그대로 읽음
+# ---------------------------------------------------------------------------
+# 예시 파일의 약속(이 모양이면 설정 창이 스위치 옆에 바로 보여 줍니다):
+#     #   true  = 켬 — 켜면 일어나는 일   [기본]
+#     #   false = 끔 — 끄면 일어나는 일
+#     #           (더 들여 쓴 줄은 바로 위 줄의 이어지는 설명)
+# 한 줄로 적어도 됩니다:  # true = 켬 — A / false = 끔 — B [기본]
+_ON = re.compile(r"^(\s*)true\s*=\s*켬(.*)$", re.I)
+_OFF = re.compile(r"^(\s*)false\s*=\s*끔(.*)$", re.I)
+_SPLIT_OFF = re.compile(r"\s*[/,]\s*(?=false\s*=\s*끔)", re.I)
+_DEFAULT = re.compile(r"\[\s*기본[^\]]*\]")
+
+
+@dataclass
+class Toggle:
+    on: str                  # 켜면 일어나는 일(없으면 "")
+    off: str                 # 끄면 일어나는 일
+    default: bool | None     # 예시 파일이 [기본] 으로 표시한 쪽(없으면 None)
+    used: set[int]           # 켬/끔 설명에 쓴 raw 줄 번호 — 나머지가 일반 설명
+
+    @property
+    def complete(self) -> bool:
+        return bool(self.on and self.off)
+
+
+def _clean_desc(text: str) -> tuple[str, bool]:
+    """'— 버림   [기본]' -> ('버림', True). 앞 구분 기호·괄호·여분 공백 정리."""
+    is_default = bool(_DEFAULT.search(text))
+    s = _DEFAULT.sub("", text)
+    s = re.sub(r"\s+", " ", s).strip()
+    s = s.lstrip("—–-:·").strip()
+    if s.startswith("(") and s.endswith(")") and s.count("(") == 1:
+        s = s[1:-1].strip()
+    s = re.sub(r"\s+([.,)])", r"\1", s).strip(" .")
+    return s, is_default
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def toggle(f: Field) -> Toggle:
+    """true/false 설정의 켬·끔 설명. 예시 파일 주석에서만 읽습니다(코드에 적어 두지 않음)."""
+    on_parts: list[str] = []
+    off_parts: list[str] = []
+    default: bool | None = None
+    used: set[int] = set()
+    lines = f.raw
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m_on, m_off = _ON.match(line), _OFF.match(line)
+        m = m_on or m_off
+        if not m:
+            i += 1
+            continue
+        used.add(i)
+        base = _indent(line)
+        body = m.group(2)
+        cont = []
+        j = i + 1
+        while j < len(lines) and lines[j].strip() and _indent(lines[j]) > base \
+                and not _ON.match(lines[j]) and not _OFF.match(lines[j]):
+            cont.append(lines[j].strip())
+            used.add(j)
+            j += 1
+        if m_on and _SPLIT_OFF.search(body):            # 한 줄에 둘 다
+            on_body, off_line = _SPLIT_OFF.split(body, maxsplit=1)
+            off_body = _OFF.match(off_line).group(2)
+            pieces = [(on_body, True), (" ".join([off_body, *cont]), False)]
+        else:
+            pieces = [(" ".join([body, *cont]), bool(m_on))]
+        for text, is_on in pieces:
+            desc, is_def = _clean_desc(text)
+            (on_parts if is_on else off_parts).append(desc)
+            if is_def:
+                default = is_on
+        i = j
+    return Toggle(" ".join(x for x in on_parts if x).strip(),
+                  " ".join(x for x in off_parts if x).strip(), default, used)
+
+
+def help_without_toggle(f: Field) -> str:
+    """켬/끔 줄을 뺀 나머지 설명(첫 줄 = 제목도 뺌)."""
+    if f.kind != "bool" or not f.raw:
+        return "\n".join(f.doc.splitlines()[1:]).strip()
+    tg = toggle(f)
+    rest = [ln.strip() for k, ln in enumerate(f.raw) if k not in tg.used and ln.strip()]
+    if rest and rest[0] == f.title:
+        rest = rest[1:]
+    return "\n".join(rest).strip()
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QFileSystemWatcher, Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -44,6 +44,12 @@ else:  # pragma: no cover
     import tomli as tomllib
 
 FIRST = "__first__"        # '먼저 확인할 항목' 트리 항목 표시
+# 켬/끔 설명이 없을 때 보여 줄 안내(예시 파일만 고치면 바로 반영됨을 알려 줌)
+TOGGLE_HOWTO = ("이 스위치는 {name} 에 켬/끔 설명이 없습니다. {name} 에서 <code>{key}</code> "
+                "바로 위에 아래 두 줄을 적고 <b>파일 → 디스크에서 다시 읽기</b> 를 누르면 "
+                "여기에 바로 나타납니다(이 창이 열려 있으면 위 알림의 <b>새 설명 불러오기</b>).<br>"
+                "<code>#   true  = 켬 — 켜면 일어나는 일</code><br>"
+                "<code>#   false = 끔 — 끄면 일어나는 일</code>")
 _BAD = object()            # 입력이 아직 값으로 안 읽힘(예: 잘못된 TOML)
 
 
@@ -83,7 +89,14 @@ class FieldRow(QFrame):
         row.addWidget(self.reset_btn)
         lay.addLayout(row)
 
-        rest = "\n".join(f.doc.splitlines()[1:]).strip()
+        self.toggle_label: QLabel | None = None
+        if f.kind == "bool":
+            self.tg = S.toggle(f)
+            self.toggle_label = QLabel()
+            self.toggle_label.setWordWrap(True)
+            self.toggle_label.setTextFormat(Qt.TextFormat.RichText)
+            lay.addWidget(self.toggle_label)
+        rest = S.help_without_toggle(f)
         if rest:
             help_ = QLabel(rest)
             help_.setWordWrap(True)
@@ -171,6 +184,27 @@ class FieldRow(QFrame):
         self.dlg.on_edit(self.field, self.value())
         self.restyle()
 
+    def _render_toggle(self) -> None:
+        """켬/끔 설명 두 줄. 지금 상태 쪽을 굵게·색으로, 예시 파일의 [기본] 을 (기본) 으로."""
+        if self.toggle_label is None:
+            return
+        tg = self.tg
+        if not tg.complete:
+            self.toggle_label.setStyleSheet("color: #92400E; background: #FEF3C7; padding: 4px;")
+            self.toggle_label.setText(TOGGLE_HOWTO.format(name=_esc(self.dlg.example_name),
+                                                          key=_esc(self.field.key)))
+            return
+        self.toggle_label.setStyleSheet("")
+        on_now = bool(self.editor.isChecked())
+
+        def line(word: str, desc: str, is_on: bool) -> str:
+            mark = " <span style='color:#6B7280'>(기본)</span>" if tg.default is is_on else ""
+            if is_on == on_now:
+                color = "#15803D" if is_on else "#B45309"
+                return (f"<div style='color:{color}'><b>● {word} — {_esc(desc)}</b>{mark}</div>")
+            return f"<div style='color:#6B7280'>○ {word} — {_esc(desc)}{mark}</div>"
+        self.toggle_label.setText(line("켬", tg.on, True) + line("끔", tg.off, False))
+
     def reset(self) -> None:
         self.set_value(self.field.value)
         self._changed()
@@ -187,6 +221,7 @@ class FieldRow(QFrame):
         color = "#C0392B" if (bad or issues) else ("#2F6FB5" if changed else "transparent")
         self.setStyleSheet(f"#fieldRow {{ border-left: 4px solid {color}; }}")
         self.reset_btn.setVisible(off_default or bad)
+        self._render_toggle()
         msgs = (["값을 읽을 수 없습니다(형식 확인)"] if bad else []) + issues
         self.note.setText("\n".join(f"⚠ {m}" for m in msgs))
         self.note.setVisible(bool(msgs))
@@ -215,7 +250,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent: QWidget | None, example_text: str, target: Path,
                  base_text: str | None = None,
                  example_name: str = "config.example.toml",
-                 fill_missing: bool = False) -> None:
+                 fill_missing: bool = False, example_path: Path | None = None) -> None:
         super().__init__(parent)
         from .gui import ScreenKeeper  # 순환 import 피함
 
@@ -263,6 +298,25 @@ class SettingsDialog(QDialog):
         intro.setWordWrap(True)
         lay.addWidget(intro)
 
+        # 예시 파일이 바뀌면(켬/끔 설명·항목 추가 등) 이 창에서 바로 반영할 수 있게 알림
+        self.example_path = Path(example_path) if example_path else None
+        self._pending_example: str | None = None
+        banner = QHBoxLayout()
+        self.example_banner = QLabel()
+        self.example_banner.setWordWrap(True)
+        self.example_banner.setStyleSheet("color: #1E3A8A; background: #DBEAFE; padding: 6px;")
+        banner.addWidget(self.example_banner, 1)
+        self.reload_btn = QPushButton("새 설명 불러오기")
+        self.reload_btn.clicked.connect(self.reload_example)
+        banner.addWidget(self.reload_btn)
+        lay.addLayout(banner)
+        self.example_banner.hide()
+        self.reload_btn.hide()
+        self._watch = None
+        if self.example_path is not None and self.example_path.exists():
+            self._watch = QFileSystemWatcher([str(self.example_path)], self)
+            self._watch.fileChanged.connect(self._example_changed)
+
         bar = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("설정 찾기 (이름·설명·키)")
@@ -309,6 +363,60 @@ class SettingsDialog(QDialog):
         self._build_tree()
         first = self.tree.topLevelItem(0)
         self.tree.setCurrentItem(first)
+
+    # -- 예시 파일이 바뀜 -------------------------------------------------
+    def _example_changed(self, *_a) -> None:
+        """예시 파일이 바뀌었으면 알림만 띄웁니다(입력 중인 값을 갑자기 바꾸지 않음)."""
+        if self._watch is not None and str(self.example_path) not in self._watch.files():
+            self._watch.addPath(str(self.example_path))   # 편집기는 지우고 새로 쓰기도 함
+        try:
+            new = self.example_path.read_text(encoding="utf-8-sig")
+        except OSError:
+            return
+        if new == self.text:
+            return
+        try:
+            n_new = sum(len(s.fields) for s in S.parse(new))
+        except S.SchemaError as exc:
+            self._pending_example = None
+            self.example_banner.setText(
+                f"<b>{_esc(self.example_name)}</b> 이 바뀌었는데 읽을 수 없습니다: {_esc(str(exc))}<br>"
+                "그 파일을 고쳐 저장하면 다시 알려 드립니다. 지금 화면은 그대로 쓸 수 있습니다.")
+            self.example_banner.show()
+            self.reload_btn.hide()
+            return
+        self._pending_example = new
+        self.example_banner.setText(
+            f"<b>{_esc(self.example_name)}</b> 이 바뀌었습니다(설정 {len(self.fields)}개 → {n_new}개). "
+            "<b>새 설명 불러오기</b> 를 누르면 바뀐 항목·켬/끔 설명을 이 창에 반영합니다. "
+            "지금까지 고친 값은 그대로 둡니다.")
+        self.example_banner.show()
+        self.reload_btn.show()
+
+    def reload_example(self) -> None:
+        """새 예시 본문으로 항목·설명을 다시 만듭니다. 사용자가 고친 값은 유지."""
+        new = self._pending_example
+        if new is None:
+            return
+        keep = dict(self.values)
+        self.text = new
+        if not self.edit_mode:
+            self.base = new
+        self.sections = S.parse(self.text)
+        self.cats = S.categories(self.sections)
+        self.fields = [f for s in self.sections for f in s.fields]
+        self.by_dotted = {f.dotted: f for f in self.fields}
+        self.missing = [f.dotted for f in self.fields
+                        if self.edit_mode and f.dotted not in self.base_vals]
+        self.values = {f.dotted: keep.get(f.dotted, self.base_value(f)) for f in self.fields}
+        self._pending_example = None
+        self._build_tree()
+        self.tree.setCurrentItem(self.tree.topLevelItem(0))
+        self.revalidate()
+        self.show_selected()
+        self.reload_btn.hide()
+        self.example_banner.setText(
+            f"새 설명을 불러왔습니다(설정 {len(self.fields)}개). 고친 값은 그대로입니다.")
 
     # -- 값 -------------------------------------------------------------
     def base_value(self, f: S.Field) -> Any:
@@ -498,5 +606,5 @@ class NewConfigDialog(SettingsDialog):
     def __init__(self, parent: QWidget | None, example: Path, target: Path) -> None:
         example = Path(example)
         super().__init__(parent, example.read_text(encoding="utf-8-sig"), target,
-                         example_name=example.name)
+                         example_name=example.name, example_path=example)
         self.example = example
