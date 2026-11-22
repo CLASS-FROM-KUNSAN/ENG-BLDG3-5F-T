@@ -143,11 +143,13 @@ jobs:
           # psutil 을 일부러 넣지 않습니다. 없을 때 쓰는 윈도우 ctypes
           # 폴백(recorder/lock.py)이 실제로 도는지 여기서 확인됩니다.
           # requirements.txt 에는 psutil 이 있으니 실사용에서는 그쪽을 씁니다.
-          python -m pip install --quiet pytest numpy requests
+          python -m pip install --quiet pytest numpy requests || exit /b 1
           set PYTHONPATH=src
           REM 바이트코드를 남기지 않습니다. mtime 이 초 단위라, 편집이
           REM 같은 초에 몰리면 묵은 .pyc 가 그대로 쓰입니다. 그러면
           REM 테스트가(변이 테스트까지) 거짓으로 통과합니다.
           set PYTHONDONTWRITEBYTECODE=1
-          python -m syncnote --help
+          REM cmd 는 중간 명령이 실패해도 다음 줄로 넘어가 이 단계가 통과해 버립니다.
+          REM (--help 가 cp1252 콘솔에서 UnicodeEncodeError 로 죽어도 녹색이었음)
+          python -m syncnote --help || exit /b 1
           python -m pytest -q
