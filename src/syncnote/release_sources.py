@@ -424,15 +424,20 @@ def collect(*, api: Callable[[], object], gyan_sha: Callable[[], str],
             run: Callable = _run, allow_unverified: bool = False, max_tries: int = 6,
             parallel: bool = True, cache: Cache | None = None,
             save: Callable[[dict[str, Entry]], None] | None = None,
-            now: datetime | None = None) -> tuple[list[Entry], list[SourceReport]]:
+            now: datetime | None = None,
+            skip: dict[str, str] | None = None) -> tuple[list[Entry], list[SourceReport]]:
     """세 출처를 함께 읽고(1단계) 앞쪽 후보만 보강해(2단계) 시도할 순서를 돌려줍니다.
 
     api      목록 1쪽 -> list 또는 ApiResult(남은 한도 포함)
     api_tag  태그 하나 -> release dict 또는 ApiResult. 없으면 API 보강 안 함
     cache    저장된 목록(나이와 상관없이 해시 비교에 씀, 7일 안이면 대신 쓰기도 함)
     save     출처를 하나라도 읽었으면 합친 목록을 넘겨 저장
+    skip     {"API"|"gh"|"git": 이유} — 이력으로 정한 '이번엔 부르지 않을' 출처
     """
+    skip = skip or {}
     def do_api():
+        if "API" in skip:
+            return None, f"건너뜀: {skip['API']}"
         try:
             return _as_api(api()), ""
         except ApiLimited as exc:
@@ -441,12 +446,16 @@ def collect(*, api: Callable[[], object], gyan_sha: Callable[[], str],
             return None, f"API 실패: {exc}"
 
     def do_gh():
+        if "gh" in skip:
+            return "", [], f"건너뜀: {skip['gh']}"
         try:
             return read_gh(run=run)
         except Exception as exc:  # noqa: BLE001
             return "", [], f"gh 실패: {exc}"
 
     def do_git():
+        if "git" in skip:
+            return "", f"건너뜀: {skip['git']}"
         try:
             return read_git(run=run)
         except Exception as exc:  # noqa: BLE001
