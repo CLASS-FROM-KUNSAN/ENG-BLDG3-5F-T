@@ -1904,7 +1904,40 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _safe_console() -> None:
+    """콘솔·로그 파일이 UTF 가 아닌 인코딩이어도 출력 때문에 죽지 않게.
+
+    영문 Windows(cp1252)나 작업 스케줄러가 출력을 파일로 돌릴 때, 한글 한 글자에
+    UnicodeEncodeError 로 프로그램이 끝났습니다(CI 의 `--help` 에서 재현).
+      - 파일·파이프로 돌린 출력이고 PYTHONIOENCODING 을 따로 정하지 않았으면 UTF-8
+      - 그 밖(진짜 콘솔, 사용자가 정한 인코딩)은 그대로 두고 못 쓰는 글자만 ? 로
+    """
+    import codecs
+
+    for stream in (sys.stdout, sys.stderr):
+        enc = getattr(stream, "encoding", None) or "ascii"
+        try:
+            if codecs.lookup(enc).name.startswith("utf"):
+                continue                              # UTF-8/16/32 은 무엇이든 씀
+        except LookupError:
+            pass
+        # cp949 도 한글은 되지만 '—' 같은 글자에서 죽습니다(한국어 Windows 에서 파일로
+        # 돌렸을 때 실제로 재현). 그래서 UTF 가 아니면 모두 보호합니다.
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            redirected = not stream.isatty()
+        except (AttributeError, ValueError, OSError):
+            redirected = True
+        if redirected and not os.environ.get("PYTHONIOENCODING"):
+            reconfigure(encoding="utf-8", errors="replace")
+        else:
+            reconfigure(errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _safe_console()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
