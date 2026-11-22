@@ -56,7 +56,10 @@ def test_real_example_docs_groups_and_shared_comments():
     assert cur.group == "학습 목차"                         # '# --- 학습 목차 ---'
     assert "좌우로" in cur.doc                             # 키 아래 들여쓴 이어지는 주석
     assert f["github.repo"].doc == f["github.owner"].doc    # 붙어 쓴 키는 위 설명 공유
-    assert f["eclass.enabled"].title.endswith("켜기")       # 설명 없는 스위치에도 이름
+    # 설명 없는 스위치에도 이름 — 예시 파일은 이제 모든 키에 설명이 있어서 작은 글로 봅니다.
+    bare = [x for s in S.parse("# [demo] 데모 기능\n[demo]\nenabled = true\n") for x in s.fields]
+    assert bare[0].title == "데모 기능 켜기"
+    assert all(x.doc.strip() for x in f.values())           # 예시 파일은 모든 키에 설명
     assert f["backup.home.exclude_names"].kind == "list"    # 여러 줄 목록
 
 
