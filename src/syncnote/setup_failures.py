@@ -40,9 +40,11 @@ CAUSES: tuple[Cause, ...] = (
           "Windows '긴 경로 사용'을 켜거나 레포를 짧은 경로(예: C:\\sync)로 옮기세요.",
           _p(r"WinError 206|filename or extension is too long|파일 이름이나 확장명이 너무 깁니다")),
     Cause("ssl", "user", "인증서 검사 실패(학교·회사망이 HTTPS 를 중간에서 검사)",
-          "그 망의 루트 인증서를 설치하거나(`pip install pip-system-certs`) 다른 망에서 설치하세요. "
+          "브라우저 받기는 Windows 인증서 저장소를 Playwright 에도 믿게 해 자동으로 다시 받습니다. "
+          "그래도 안 되면 그 망의 루트 인증서를 Windows 에 설치하거나(전산실) 다른 망에서 설치하세요. "
           "검증을 끄는 방법은 쓰지 않습니다.",
-          _p(r"CERTIFICATE_VERIFY_FAILED|SSLError|certificate verify failed")),
+          _p(r"CERTIFICATE_VERIFY_FAILED|SSLError|certificate verify failed|"
+             r"SELF_SIGNED_CERT_IN_CHAIN|self-signed certificate|UNABLE_TO_GET_ISSUER_CERT")),
     Cause("no_wheel", "fatal", "이 파이썬 버전용 패키지가 없음",
           "파이썬 3.11 또는 3.12 를 설치해 그 버전으로 다시 설치하세요(너무 새 버전은 휠이 늦게 나옴).",
           _p(r"No matching distribution found|Could not find a version that satisfies|"

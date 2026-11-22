@@ -35,7 +35,9 @@ echo       완료
 
 echo.
 echo [3/6] Playwright 브라우저 설치 중... (약 150MB)
-"%PY%" -m playwright install chromium
+REM 학교망이 HTTPS 를 중간에서 검사하면(self-signed certificate) Windows 인증서
+REM 저장소를 Playwright 에도 믿게 하고 다시 받습니다(검증은 끄지 않음).
+"%PY%" -m syncnote.playwright_setup
 if errorlevel 1 (
     echo     [!] 실패했습니다. Eclass 수집을 쓰지 않는다면 무시해도 됩니다.
 )
