@@ -119,9 +119,11 @@ def _ffmpeg(bad=()):
     def run(cmd, **_kw):
         marker = open(cmd[0], "rb").read()  # noqa: SIM115
         lacks = marker in bad
+        # 빠지는 기능은 libx264 — 모든 OS 에서 필요(gdigrab 은 Windows 에서만 필요해서
+        # 리눅스 CI 에선 빠져도 통과함)
         return types.SimpleNamespace(returncode=0, stderr="", stdout=(
-            (" D  x\n" if lacks else " D  gdigrab  x\n") if cmd[2] == "-devices"
-            else " V libx264 x\n A aac x\n"))
+            " D  gdigrab  x\n" if cmd[2] == "-devices"
+            else (" A aac x\n" if lacks else " V libx264 x\n A aac x\n")))
     return run
 
 
