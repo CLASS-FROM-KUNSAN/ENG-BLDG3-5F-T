@@ -125,7 +125,9 @@ def test_warnings_do_not_block(config_file):
 def test_old_monthly_tag_strategy_only_warns_and_is_ignored(config_file):
     """예전 config.toml 의 tag_strategy = "monthly" 는 막지 않고, 지워도 된다고 알립니다."""
     cfg = cfgmod.load(config_file([
-        ("tag_prefix_eclass", 'tag_strategy = "monthly"\nfixed_tag = "archive"\ntag_prefix_eclass'),
+        # 키 줄을 정확히 겨눔(주석에도 'tag_prefix_eclass' 가 나옴)
+        ('tag_prefix_eclass    = "eclass"',
+         'tag_strategy = "monthly"\nfixed_tag = "archive"\ntag_prefix_eclass    = "eclass"'),
     ]))
     notes = " ".join(cfgmod.warnings_for(cfg))
     assert "github.tag_strategy" in notes and "github.fixed_tag" in notes
