@@ -236,7 +236,8 @@ class RecordingSession:
     @staticmethod
     def _log_mic_choice(mic, probes) -> None:
         if not probes:
-            log.warning("마이크를 하나도 찾지 못했습니다. 영상만 녹화됩니다.")
+            log.warning("실제 마이크가 없습니다(스테레오 믹스 같은 장치는 마이크로 쓰지 않음). "
+                        "시스템 소리와 화면만 녹화합니다.")
             return
         if all(p.dead for p in probes):
             # 하나만 0 이면 장치 문제, 전부 0 이면 권한 문제입니다.
