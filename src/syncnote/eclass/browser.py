@@ -41,7 +41,42 @@ class PlaywrightMissing(Exception):
         )
 
 
-# 로그인 폼 선택자.
+class BrowserMissing(Exception):
+    """Chromium 이 아예 안 받아져 있음(headless shell 도, 일반 chromium 도)."""
+
+
+def _missing_executable(exc: BaseException) -> bool:
+    return "Executable doesn't exist" in str(exc)
+
+
+def launch_chromium(pw, *, headless: bool = True):
+    """Chromium 을 띄웁니다. 창 없이 띄울 때 쓰는 headless shell 이 없으면 일반 Chromium 으로.
+
+    강의실 PC 에서 `playwright install chromium` 이 학교망 인증서 문제로 일부만 받았습니다:
+    일반 Chromium(chromium-1248)은 받았는데 chrome-headless-shell 만 실패해,
+    수집이 'Executable doesn't exist …chromium_headless_shell-1248' 로 멈췄습니다.
+    channel="chromium" 은 일반 Chromium 을 새 headless 모드로 띄웁니다(playwright 1.49+).
+    """
+    try:
+        return pw.chromium.launch(headless=headless)
+    except Exception as exc:
+        if not (headless and _missing_executable(exc)):
+            raise
+        first = exc
+    log.warning("Chrome Headless Shell 이 없어 일반 Chromium 으로 창 없이 띄웁니다. "
+                "(scripts\\setup.bat 을 다시 실행하면 headless shell 도 받습니다)")
+    try:
+        return pw.chromium.launch(headless=True, channel="chromium")
+    except Exception as exc:
+        if _missing_executable(exc):
+            raise BrowserMissing(
+                "Playwright 용 Chromium 이 받아져 있지 않습니다.\n"
+                "  scripts\\setup.bat 을 다시 실행하거나\n"
+                "  <.venv 의 python> -m playwright install chromium\n"
+                "  을 실행하세요. 학교망에서 'self-signed certificate' 로 실패하면\n"
+                "  docs/TROUBLESHOOTING.md 의 'Playwright 브라우저 받기' 를 보세요."
+            ) from first
+        raise
 #
 # 실제 마크업(2026-11 기준, 개발자도구로 확인):
 #   <form id="loginForm" action="/User.do" method="post" onsubmit="return false;">
@@ -139,7 +174,7 @@ class EclassBrowser:
             raise PlaywrightMissing() from exc
 
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=self.headless)
+        self._browser = launch_chromium(self._pw, headless=self.headless)
 
         kwargs: dict[str, Any] = {
             "accept_downloads": True,
