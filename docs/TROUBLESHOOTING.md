@@ -42,6 +42,20 @@ scripts\record_now.bat -m 1 --no-upload
   [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) 을 설치하는
   경로가 있습니다. 설치가 필요해지므로 권하지는 않습니다.
 
+### 마이크가 없는 PC (`스테레오 믹스` 만 있음)
+
+`Get-PnpDevice -Class AudioEndpoint` 에 마이크는 없고 `스테레오 믹스(Realtek(R) Audio)` 만
+보이는 PC 가 있습니다. 스테레오 믹스는 입력 장치처럼 보이지만 **스피커로 나가는 소리를
+다시 녹음**합니다. 시스템 소리는 이미 루프백으로 따로 녹음하므로, 이것을 마이크로 쓰면 같은
+소리가 두 트랙에 들어갑니다.
+
+- 자동 선택은 `스테레오 믹스`·`Stereo Mix`·`What U Hear` 류를 마이크로 고르지 않습니다.
+  진짜 마이크가 없으면 마이크 트랙 없이 **시스템 소리와 화면만** 녹화하고 경고를 한 번 남깁니다.
+- `python -m syncnote devices` 에 그 장치는 "마이크로 자동 선택하지 않음" 으로 표시됩니다.
+- 그래도 쓰고 싶으면 `recording.audio.mic_device` 에 이름을 직접 적으세요(사람이 고른 것은 그대로).
+- 원격(Jump Desktop)으로 접속해 있으면 내 PC 의 마이크는 원격 PC 로 넘어가지 않습니다.
+  강의실 마이크를 녹음하려면 강의실 PC 에 마이크를 꽂아야 합니다.
+
 ### Playwright 브라우저 받기 (`self-signed certificate in certificate chain`)
 
 `playwright install chromium` 이 다음처럼 끝나면 학교·회사망 장비가 HTTPS 를 중간에서

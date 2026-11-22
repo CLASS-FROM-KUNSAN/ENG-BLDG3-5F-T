@@ -279,6 +279,9 @@ class AudioRecorder:
             else:
                 try:
                     source = resolver(device_name)
+                except devices.NoMicrophone as exc:
+                    log.warning("[%s] %s", name, exc)   # 고장이 아니라 그런 PC 임
+                    continue
                 except Exception as exc:
                     log.error("[%s] 장치를 열 수 없습니다: %s", name, exc)
                     continue
