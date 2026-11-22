@@ -159,7 +159,7 @@ def _doctor(args, rep: dict) -> int:
         ("soundcard", "시스템 소리 캡처", bool(cfg.get("recording.audio.enabled"))),
         ("playwright", "Eclass 수집", bool(cfg.get("eclass.enabled"))),
         ("faster_whisper", "음성 전사", bool(cfg.get("transcribe.enabled"))),
-        ("psutil", "프로그램 감지(선택)", bool(cfg.get("recording.triggers.watch_enabled"))),
+        ("psutil", "프로그램 감지(선택)", bool(cfg.get("recording.triggers.watch", True))),
     ]
     print("\n  파이썬 패키지")
     pkgs = section("파이썬 패키지")
@@ -771,8 +771,32 @@ def _resolve_course(cfg, *, course_id: str = "", label: str = "", when=None):
     )
 
 
+_TRIGGER_NAMES = {"manual": ("수동 녹화", "record start"),
+                  "schedule": ("시간표 자동 녹화", "record schedule"),
+                  "watch": ("프로그램 감지 녹화", "record watch")}
+
+
+def _trigger_off(cfg, key: str) -> bool:
+    """[recording.triggers] 의 스위치가 꺼져 있으면 알리고 True.
+
+    예전 schedule_enabled·watch_enabled 는 어디서도 읽지 않아 false 로 적어도 녹화가
+    돌았습니다. 기존 config.toml 들에 false 로 남아 있어 새 이름(schedule·watch)으로
+    진짜 스위치를 만들었고, 기본은 true(예전 동작 그대로)입니다.
+    """
+    if cfg.get(f"recording.triggers.{key}", True) is not False:
+        return False
+    what, cmd = _TRIGGER_NAMES[key]
+    msg = (f"{what}가 꺼져 있어 {cmd} 를 하지 않습니다 "
+           f"(config.toml [recording.triggers] {key} = false). 켜려면 true 로 바꾸세요.")
+    log.warning("%s", msg)
+    print(msg)
+    return True
+
+
 def cmd_record_start(args) -> int:
     cfg, layout = _load(args)
+    if _trigger_off(cfg, "manual"):
+        return 1                        # 사람이 누른 명령 — 안 됐다는 것을 알 수 있게
     label = args.label or f"수동_{datetime.now():%H%M}"
     course = _resolve_course(cfg, course_id=getattr(args, "course", "") or "",
                              label=label, when=datetime.now())
@@ -820,6 +844,8 @@ def cmd_record_schedule(args) -> int:
     from .recorder import schedule as sched
 
     cfg, layout = _load(args)
+    if not getattr(args, "show", False) and _trigger_off(cfg, "schedule"):
+        return 0                        # 작업 스케줄러가 띄움 — 실패로 보이지 않게
     slots = sched.parse(cfg.get("recording.timetable", []))
     off = sched.holidays(cfg.get("recording.holidays", []))
     if not slots:
@@ -946,6 +972,8 @@ def cmd_record_watch(args) -> int:
     from .recorder.watcher import Watcher
 
     cfg, layout = _load(args)
+    if _trigger_off(cfg, "watch"):
+        return 0                        # 작업 스케줄러가 띄움 — 실패로 보이지 않게
     watcher = Watcher(
         processes=cfg.get("recording.triggers.watch_processes", []),
         window_titles=cfg.get("recording.triggers.watch_window_titles", []),
@@ -1590,7 +1618,8 @@ def cmd_stream_link(args) -> int:
         if s.ts_mode != "direct":
             busy = tailnet.port_in_use(tailnet.serve_status(exe), s.ts_https_port)
             print(f"  serve 포트 : {s.ts_https_port} " + (
-                "[!] 이미 사용 중 (override_existing 이 꺼져 있으면 시작하지 않습니다)" if busy else "비어 있음"))
+                ("[!] 이미 사용 중 — override_existing 이 켜져 있으면(기본) 덮어쓰고, 꺼져 있으면 "
+                 "시작하지 않습니다") if busy else "비어 있음"))
     except (live.StreamError, tailnet.TailscaleError) as exc:
         print(f"  [X] {exc}")
         ok = False

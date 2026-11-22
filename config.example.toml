@@ -617,22 +617,23 @@ vad_model_path = ""
 # [recording.triggers] 언제 녹화를 시작할지
 # ---------------------------------------------------------------------
 [recording.triggers]
-# (A) 수동 실행 — 바탕화면 바로가기 / 터미널
-# 참고: 지금 코드는 이 값을 읽지 않습니다. true/false 와 상관없이 record start 는 동작합니다.
-# true = 켬 [기본] / false = 끔 — 지금은 어느 쪽이든 동작이 같습니다.
+# (A) 수동 실행 — 바탕화면 바로가기 / 터미널 (record start)
+#   true  = 켬 — record start 가 녹화합니다.   [기본]
+#   false = 끔 — record start 가 녹화하지 않고 이유를 알린 뒤 끝납니다(종료 코드 1).
 manual = true
 
-# (B) 시간표 기반 자동
-# 참고: 지금 코드는 이 값을 읽지 않습니다. record schedule 명령을 실행하면
-# 이 값과 상관없이 [[recording.timetable]] 대로 녹화합니다.
-# true = 켬 / false = 끔 [기본] — 지금은 어느 쪽이든 동작이 같습니다.
-schedule_enabled = false
+# (B) 시간표 기반 자동 (record schedule — register_tasks.ps1 이 로그온 때 띄움)
+#   true  = 켬 — [[recording.timetable]] 대로 기다렸다가 녹화합니다.   [기본]
+#   false = 끔 — 녹화하지 않고 이유를 남긴 뒤 끝납니다(종료 코드 0, 작업은 성공으로 보임).
+#                --show(시간표 보기)는 꺼져 있어도 됩니다.
+# (예전 이름 schedule_enabled 는 읽지 않습니다 — 기존 파일에 false 로 남아 있어서)
+schedule = true
 
-# (C) 특정 프로그램/창이 뜨면 자동 시작
-#   true  = 켬 — 설정 검사(doctor)가 psutil 패키지를 필수로 봅니다.
-#   false = 끔 — psutil 은 선택으로 표시됩니다.  [기본]
-# 참고: record watch 명령은 이 값과 상관없이 감시를 시작합니다.
-watch_enabled = false
+# (C) 특정 프로그램/창이 뜨면 자동 시작 (record watch — register_tasks.ps1 이 로그온 때 띄움)
+#   true  = 켬 — 아래 프로그램·창이 뜨면 녹화합니다. doctor 가 psutil 을 필수로 봅니다.  [기본]
+#   false = 끔 — 감시하지 않고 이유를 남긴 뒤 끝납니다(종료 코드 0). psutil 은 선택으로 표시.
+# (예전 이름 watch_enabled 는 읽지 않습니다 — 기존 파일에 false 로 남아 있어서)
+watch = true
 # 감지할 프로세스 이름 (확장자 포함, 대소문자 무시, 이름 전체가 같아야 함).
 # 문자열 목록. 예: ["Zoom.exe"]. 비우면 프로세스로는 감지하지 않습니다.
 # watch_processes 와 watch_window_titles 가 둘 다 비면 감시가 바로 끝납니다.
@@ -729,7 +730,8 @@ vad_stop_sec  = 3.0
 
 # ---------------------------------------------------------------------
 # [[recording.timetable]] 시간표
-#   record schedule · stream schedule 과 녹화 메타데이터가 씁니다(schedule_enabled 와 무관).
+#   record schedule([recording.triggers] schedule 이 켜져 있을 때) · stream schedule 과
+#   녹화 메타데이터가 씁니다.
 #   day: mon tue wed thu fri sat sun
 #   시간은 24시간제 HH:MM, 로컬 시간 기준입니다.
 #
@@ -932,9 +934,11 @@ link_check_sec = 60
 # false = 끔 — 기다리지 않고 지금 상태로 바로 링크를 만듦
 require_online = true
 # 이 HTTPS 포트를 이미 다른 serve/funnel 이 쓰고 있을 때
-# true  = 켬 — 덮어씀
-# false = 끔 — 덮어쓰지 않고 시작을 거부(오류)   [기본]
-override_existing = false
+# true  = 켬 — 덮어씀. 강제 종료로 남은 지난 송출의 serve 가 새 송출을 막지 않고,
+#              한 포트에 송출 하나만 남습니다(중복 실행 방지).   [기본]
+#              같은 포트를 쓰던 다른 프로그램의 serve/funnel 도 덮어쓰고, 끝날 때(teardown) 끕니다.
+# false = 끔 — 덮어쓰지 않고 시작을 거부(오류). 그럴 때는 https_port 를 바꾸세요.
+override_existing = true
 # 끝날 때 이 프로그램이 켠 serve/funnel 을 끌지
 # true  = 켬 — 송출이 끝나면 serve/funnel 을 끔   [기본]
 # false = 끔 — 켜 둔 채로 둠
