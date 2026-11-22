@@ -199,3 +199,21 @@ def test_install_ffmpeg_uses_winget_without_prompts_then_falls_back_to_zip():
     assert "errorlevel 9009" in text
     # setup.bat 은 ffmpeg 가 없으면 이 스크립트를 부릅니다(그래서 winget 도 같이 탐)
     assert "install_ffmpeg.bat" in read("setup.bat")
+
+
+# ---------------------------------------------------------------------------
+# 9) chcp 뒤의 한글 — 예전 cmd(강의실 PC)는 배치 파일을 읽는 도중 코드 페이지가 바뀌면
+#    그 뒤 줄의 UTF-8 을 엉뚱한 곳에서 잘라, 주석 조각을 명령으로 실행했습니다:
+#      '바이트코드가' is not recognized as an internal or external command
+#    (_common.bat 9·33번째 줄, 둘 다 chcp 65001 뒤의 한글 REM). 최신 Windows 11 의 cmd
+#    에서는 재현되지 않아 글자로 막습니다: chcp 줄 뒤에는 ASCII 만.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("path", BATS, ids=lambda p: p.name)
+def test_nothing_but_ascii_after_chcp(path: Path):
+    lines = path.read_bytes().split(b"\r\n")
+    at = next((i for i, ln in enumerate(lines)
+               if re.match(rb"\s*@?chcp\b", ln, re.I)), None)
+    if at is None:
+        return
+    bad = [i + 1 for i, ln in enumerate(lines[at + 1:], start=at + 1) if any(b > 127 for b in ln)]
+    assert not bad, f"{path.name}: chcp(줄 {at + 1}) 뒤에 한글이 있는 줄 {bad} — chcp 를 맨 끝으로"
