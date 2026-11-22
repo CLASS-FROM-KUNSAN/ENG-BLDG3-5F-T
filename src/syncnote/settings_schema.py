@@ -278,6 +278,195 @@ def parse(text: str) -> list[Section]:
 
 
 # ---------------------------------------------------------------------------
+# 깨진 TOML 도 읽기 — 깨진 곳만 빼고 나머지는 그대로
+# ---------------------------------------------------------------------------
+# 한 줄만 틀려도 파일 전체를 '읽을 수 없습니다' 로 버리면, 241개 설정 중 하나 때문에
+# 설정 창도 못 엽니다. 대신 TOML 오류가 가리키는 줄(그 키의 값 전체, 섹션 머리가 깨졌으면
+# 그 섹션의 키들)만 '# ⚠ 읽지 못한 줄: <원문>' 주석으로 바꿔 다시 읽고, 무엇을 왜 뺐는지
+# 사람 말로 알려 줍니다. 줄 번호는 그대로라 원본과 바로 대조할 수 있습니다.
+BROKEN_MARK = "# ⚠ 읽지 못한 줄: "
+_POS = re.compile(r"at line (\d+), column (\d+)")
+_WHY = (
+    ("illegal character '\\n'", "따옴표가 닫히지 않았습니다(줄 끝까지 닫는 따옴표가 없음)"),
+    ("illegal character \"\\n\"", "따옴표가 닫히지 않았습니다(줄 끝까지 닫는 따옴표가 없음)"),
+    ("table declaration", "섹션 이름 [ ] 의 닫는 ']' 가 없습니다"),
+    ("table header", "섹션 이름 [ ] 의 닫는 ']' 가 없습니다"),
+    ("unterminated string", "따옴표가 닫히지 않았습니다"),
+    ("unclosed", "따옴표나 괄호가 닫히지 않았습니다"),
+    ("expected '=' after a key", "키 이름 뒤에 '=' 가 없습니다"),
+    ("invalid value", "값을 읽을 수 없습니다 — 글자는 \"따옴표\" 로 감싸고, 켬/끔은 true/false 로 적으세요"),
+    ("cannot overwrite", "같은 키가 이미 위에 있습니다(중복) — 하나만 남기세요"),
+    ("cannot declare", "같은 섹션이 이미 위에 있습니다(중복)"),
+    ("unclosed array", "목록 [ ] 이 닫히지 않았습니다"),
+    ("expected ',' or ']'", "목록 [ ] 이 닫히지 않았거나 쉼표가 빠졌습니다"),
+    ("expected newline or end of document", "값 뒤에 다른 글자가 더 있습니다(설명은 # 뒤에 적으세요)"),
+    ("illegal character", "TOML 에 쓸 수 없는 글자가 있습니다"),
+    ("invalid initial character for a key", "키 이름을 읽을 수 없습니다(영문·숫자·_- 만)"),
+)
+
+
+@dataclass
+class Broken:
+    line: int                # 1부터
+    text: str                # 그 줄 원문
+    why: str                 # 사람 말로
+    dropped: list[str]       # 빼고 읽은 설정(점 표기 또는 섹션)
+
+    def describe(self) -> str:
+        what = f" — 빠진 설정: {', '.join(self.dropped)}" if self.dropped else ""
+        return f"{self.line}번째 줄 `{self.text.strip()[:60]}`: {self.why}{what}"
+
+
+def _friendly(msg: str) -> str:
+    low = msg.lower()
+    for needle, why in _WHY:
+        if needle in low:
+            return why
+    return f"TOML 형식이 맞지 않습니다({_POS.sub('', msg).strip(' ()')})"
+
+
+def _err_line(exc: Exception, lines: list[str]) -> int:
+    """오류가 가리키는 줄(0부터). 위치를 모르면(문서 끝) 마지막 내용 줄."""
+    m = _POS.search(str(exc))
+    if m:
+        return max(0, min(int(m.group(1)) - 1, len(lines) - 1))
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].strip() and not lines[i].strip().startswith("#"):
+            return i
+    return 0
+
+
+def _is_head(s: str) -> bool:
+    return s.startswith("[")
+
+
+def _is_key(raw: str) -> bool:
+    s = raw.strip()
+    return bool(s) and not s.startswith("#") and not _is_head(s) and "=" in s \
+        and bool(re.match(r"^[A-Za-z0-9_\-\"'. ]+=", s))
+
+
+def _continuation(raw: str) -> bool:
+    """여러 줄 목록·글자의 중간 줄처럼 보이나(따옴표·괄호·숫자·쉼표로 시작)."""
+    s = raw.strip()
+    if re.match(r"^\[\[?\s*[A-Za-z_]", s):         # [섹션 이름 — 머리 줄(닫는 괄호가 없어도)
+        return False
+    return bool(s) and s[0] in "\"'[]{},-+0123456789" and not _is_key(raw)
+
+
+def _unclosed_owner(lines: list[str], idx: int) -> int | None:
+    """idx 앞에서, 값의 괄호가 닫히지 않은 채 시작한 키 줄(목록이 안 닫힌 범인)."""
+    depth = 0
+    for k in range(idx - 1, -1, -1):
+        s = lines[k].strip()
+        if _is_head(s) and not _continuation(lines[k]):
+            return None
+        if not s or s.startswith("#"):
+            continue
+        depth += _balance(lines[k] if not _is_key(lines[k]) else lines[k].split("=", 1)[1])
+        if _is_key(lines[k]):
+            return k if depth > 0 else None
+    return None
+
+
+def _block(lines: list[str], idx: int, why: str = "") -> tuple[int, int]:
+    """idx 가 가리키는 '키 하나의 값' 또는 '섹션' 의 줄 범위 [a, b]."""
+    s = lines[idx].strip()
+    if "닫히지 않았" in why or "쉼표가 빠졌" in why:
+        owner = _unclosed_owner(lines, idx + 1 if _continuation(lines[idx]) else idx)
+        if owner is not None:                     # 오류는 다음 줄에서 나지만 범인은 앞 키
+            end = idx if _continuation(lines[idx]) else idx - 1
+            return owner, max(owner, end)
+    if _is_head(s) and not _continuation(lines[idx]):
+        b = idx
+        while b + 1 < len(lines) and not _is_head(lines[b + 1].strip()):
+            b += 1
+        return idx, b
+    a = idx
+    if _continuation(lines[idx]):                 # 여러 줄 값의 중간이면 그 키 줄까지
+        while a > 0 and _continuation(lines[a]):
+            a -= 1
+        if not _is_key(lines[a]):
+            a = idx                               # 섹션 머리까지 거슬러 가지 않음
+    b = idx
+    while b + 1 < len(lines) and _continuation(lines[b + 1]):
+        b += 1
+    return a, b
+
+
+def _dropped_names(lines: list[str], a: int, b: int, section: str) -> list[str]:
+    head = lines[a].strip()
+    if _is_head(head):
+        return [f"[{head.strip('[] ')}] 섹션 전체"]
+    names = []
+    for raw in lines[a:b + 1]:
+        if _is_key(raw):
+            key = raw.split("=", 1)[0].strip().strip("\"'")
+        else:                                     # 'x 1' 처럼 = 가 빠진 줄
+            m = re.match(r"^\s*([A-Za-z0-9_\-]+)\s", raw)
+            if not m or _continuation(raw):
+                continue
+            key = m.group(1)
+        names.append(f"{section}.{key}" if section else key)
+    return names
+
+
+def _section_at(lines: list[str], idx: int) -> str:
+    for i in range(idx, -1, -1):
+        m = _HEADER.match(lines[i].strip())
+        if m:
+            return m.group(1)
+    return ""
+
+
+def salvage(text: str, *, limit: int = 100) -> tuple[str, list[Broken]]:
+    """깨진 곳만 주석으로 바꾼 본문과 무엇을 뺐는지. 깨진 곳이 없으면 (text, [])."""
+    lines = text.split("\n")
+    broken: list[Broken] = []
+    for _ in range(limit):
+        try:
+            tomllib.loads("\n".join(lines))
+            return "\n".join(lines), broken
+        except tomllib.TOMLDecodeError as exc:
+            idx = _err_line(exc, lines)
+            why = _friendly(str(exc))
+        a, b = _block(lines, idx, why)
+        broken.append(Broken(a + 1, lines[a], why,
+                             _dropped_names(lines, a, b, _section_at(lines, a))))
+        for i in range(a, b + 1):
+            if not lines[i].startswith(BROKEN_MARK):
+                lines[i] = BROKEN_MARK + lines[i]
+    raise SchemaError("깨진 곳이 너무 많아 읽을 수 없습니다(100곳 넘음).")
+
+
+def parse_lenient(text: str) -> tuple[list[Section], list[Broken]]:
+    """깨진 곳은 빼고 읽은 설정 목록 + 뺀 곳."""
+    fixed, broken = salvage(text)
+    return parse(fixed), broken
+
+
+def current_values_lenient(text: str) -> tuple[dict[str, Any], list[Broken], str]:
+    """(읽은 값, 뺀 곳, 깨진 곳을 주석으로 바꾼 본문) — 저장하면 그 본문으로 고쳐짐."""
+    fixed, broken = salvage(text)
+    return current_values(fixed), broken, fixed
+
+
+def decode(raw: bytes) -> tuple[str, str]:
+    """설정 파일 바이트 -> (글, 알림). UTF-8 이 아니면(메모장의 ANSI=cp949 저장 등) cp949 로."""
+    try:
+        return raw.decode("utf-8-sig").replace("\r\n", "\n"), ""
+    except UnicodeDecodeError:
+        pass
+    try:
+        return (raw.decode("cp949").replace("\r\n", "\n"),
+                "UTF-8 이 아니라 cp949(ANSI)로 저장된 파일이라 cp949 로 읽었습니다. "
+                "저장하면 UTF-8 로 씁니다.")
+    except UnicodeDecodeError:
+        return (raw.decode("utf-8", errors="replace").replace("\r\n", "\n"),
+                "글자 인코딩을 알 수 없어 읽지 못한 글자를 '\ufffd' 로 바꿨습니다. 그 줄을 확인하세요.")
+
+
+# ---------------------------------------------------------------------------
 # 켬/끔 설명 — 예시 파일의 '# true = 켬 — …' / '# false = 끔 — …' 를 그대로 읽음
 # ---------------------------------------------------------------------------
 # 예시 파일의 약속(이 모양이면 설정 창이 스위치 옆에 바로 보여 줍니다):
