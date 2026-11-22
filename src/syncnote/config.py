@@ -167,8 +167,11 @@ DEFAULTS: dict[str, Any] = {
         },
         "triggers": {
             "manual": True,
-            "schedule_enabled": False,
-            "watch_enabled": False,
+            # 진짜 스위치(기본 true). 예전 schedule_enabled·watch_enabled 는 어디서도
+            # 읽지 않았고 기존 config.toml 들에 false 로 남아 있어, 그 이름을 살리면
+            # 업데이트하는 순간 자동 녹화가 멈춥니다. 그래서 새 이름으로 바꿨습니다.
+            "schedule": True,
+            "watch": True,
             # 예시 파일(config.example.toml)과 같은 값이어야 합니다.
             # 다르면 사용자가 이 줄을 지웠을 때 감시가 조용히 아무것도
             # 하지 않게 됩니다. tests/test_config.py 가 둘을 대조합니다.
@@ -244,7 +247,7 @@ DEFAULTS: dict[str, Any] = {
             "exe": "",
             "link_check_sec": 60,
             "require_online": True,
-            "override_existing": False,
+            "override_existing": True,
             "teardown": True,
         },
         "icecast": {
@@ -785,6 +788,15 @@ def problems(cfg: Config) -> list[str]:
 def warnings_for(cfg: Config) -> list[str]:
     """막지는 않지만 알려줘야 할 것들."""
     notes: list[str] = []
+
+    gone = [k for k in ("recording.triggers.schedule_enabled", "recording.triggers.watch_enabled")
+            if cfg.get(k) is not None]
+    if gone:
+        notes.append(
+            f"{', '.join(gone)} 는 더 이상 쓰지 않습니다(예전에도 동작에 영향이 없었음). "
+            "이제 [recording.triggers] schedule · watch 가 자동 녹화를 켜고 끕니다(기본 true). "
+            "config.toml 에서 지워도 됩니다."
+        )
 
     old = [k for k in _RETIRED_TAG_KEYS if cfg.get(k) not in (None, "daily")]
     if old:

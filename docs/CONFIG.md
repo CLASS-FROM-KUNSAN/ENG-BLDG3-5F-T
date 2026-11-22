@@ -86,9 +86,9 @@ track_layout = "separate"
 
 ```toml
 [recording.triggers]
-manual           = true    # 항상 쓸 수 있음
-schedule_enabled = false   # 시간표
-watch_enabled    = false   # 프로그램 감지
+manual           = true    # record start   (false 면 녹화하지 않고 알림)
+schedule         = true    # record schedule (시간표)
+watch            = true    # record watch   (프로그램 감지)
 ```
 
 시간표는 이렇게 씁니다.

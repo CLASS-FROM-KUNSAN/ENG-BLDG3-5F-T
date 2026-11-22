@@ -85,10 +85,11 @@ Windows 는 `scripts\stream_now.bat`, macOS·Linux 는 `scripts/stream_now.sh`.
 `funnel` 에서는 링크의 토큰이 유일한 열쇠라서, 토큰을 끄거나(`require_token = false`)
 토큰을 지원하지 않는 Icecast 와 함께 쓰면 시작하지 않습니다.
 
-**이미 쓰고 있는 serve/funnel 은 건드리지 않습니다.** `https_port` 에 다른
-serve 가 걸려 있으면 시작하지 않고 알려 줍니다(`override_existing = true`
-로 덮어쓸 수 있음). 그럴 때는 `https_port = 10000` 처럼 다른 포트를 쓰세요.
-끝날 때는 자기가 켠 포트만 끕니다(`teardown`).
+**같은 포트의 serve/funnel 은 덮어씁니다(`override_existing = true`, 기본).**
+강제 종료로 남은 지난 송출의 serve 가 새 송출을 막지 않고, 한 포트에는 송출 하나만
+남습니다. 같은 포트를 다른 프로그램이 쓰고 있었다면 그것도 덮어쓰고 끝날 때 끕니다
+(`teardown = true`, 기본). 다른 프로그램의 serve 를 지켜야 하면 `override_existing = false`
+로 두거나 `https_port = 10000` 처럼 다른 포트를 쓰세요. 끝날 때는 자기가 켠 포트만 끕니다.
 
 `link_check_sec` 마다 tailnet 상태를 다시 읽어, 기기 이름·IP 가 바뀌어
 **링크가 바뀌면** 새 링크를 다시 올립니다. Tailscale 이 잠깐 끊기면

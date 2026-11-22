@@ -75,7 +75,7 @@ class StreamSettings:
     ts_exe: str = ""
     ts_link_check_sec: float = 60
     ts_require_online: bool = True
-    ts_override_existing: bool = False
+    ts_override_existing: bool = True
     ts_teardown: bool = True
     # icecast
     ic_host: str = "127.0.0.1"
