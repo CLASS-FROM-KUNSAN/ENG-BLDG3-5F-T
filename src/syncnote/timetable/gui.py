@@ -1913,7 +1913,8 @@ class TimetableWindow(QMainWindow):
             QMessageBox.warning(self, "설정 목록 없음", why)
             return None
         return SettingsDialog(self, self.example_text, self.path, base_text,
-                              example_name=self.example_path.name)
+                              example_name=self.example_path.name,
+                              example_path=self.example_path)
 
     def _create_config(self) -> bool:
         """config.toml 이 없으면 예시 파일로 설정을 고르게 한 뒤 만듭니다.
@@ -2005,7 +2006,8 @@ class TimetableWindow(QMainWindow):
             from .config_wizard import SettingsDialog
 
             dlg = SettingsDialog(self, self.example_text, self.path, base,
-                                 example_name=self.example_path.name, fill_missing=True)
+                                 example_name=self.example_path.name, fill_missing=True,
+                                 example_path=self.example_path)
         except (OSError, UnicodeDecodeError, settings_schema.SchemaError) as exc:
             QMessageBox.critical(self, "설정 파일을 읽을 수 없습니다", f"{self.path}\n{exc}")
             return False
