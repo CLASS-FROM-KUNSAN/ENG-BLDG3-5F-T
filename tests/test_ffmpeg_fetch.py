@@ -174,7 +174,7 @@ def test_rolls_back_to_older_release_until_one_works(tmp_path):
     assert "SHA-256" in r.tried[0][1] and "libx264" in r.tried[1][1]
     assert (tmp_path / "ffmpeg" / "bin" / "ffmpeg.exe").read_bytes() == b"v90"
     assert any("롤백: 9.0.2" in m for m in logs) and any("롤백: 9.0" in m for m in logs)
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["ffmpeg"]      # 임시 폴더 정리
+    assert sorted(p.name for p in tmp_path.iterdir()) == [F.CACHE_NAME, "ffmpeg"]  # 임시 폴더 정리, 목록은 남김
 
 
 def test_existing_good_ffmpeg_is_kept_without_downloading(tmp_path):

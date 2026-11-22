@@ -31,6 +31,12 @@
   2단계(보강)  시도할 앞쪽 후보 중 해시가 없거나 한 출처뿐인 것만 다시:
                gh 가 로그인돼 있으면 gh release view(gh 확인 추가),
                해시가 아예 없으면 API 로 태그 하나 조회 — API 남은 한도가 10 미만이면 멈춤
+저장된 목록(tools\\.ffmpeg_releases.json)
+  읽을 때마다 합친 목록(태그·파일·크기·해시·확인한 출처)을 저장합니다.
+  - 세 출처가 모두 막히면 7일 안에 저장한 목록으로 후보를 정함
+  - 같은 태그의 해시가 저장된 것과 다르면 '릴리스 파일이 바뀜' -> T0(안 씀).
+    저장된 해시는 덮어쓰지 않습니다(바뀐 파일을 다음 실행에서 조용히 믿지 않게)
+  - USB 로 가져온 zip 을 파일 이름으로 찾아 해시를 확인(ffmpeg_fetch)
 한도·막힘
   API 403/429 + 남은 한도 0 -> 한도 초과(다시 안 함, 풀리는 시각 표시)
   API 403 + 한도 남음       -> 막힘(학교망 등)
@@ -50,7 +56,8 @@ import subprocess
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
 REPO = "GyanD/codexffmpeg"
 GIT_URL = f"https://github.com/{REPO}.git"
@@ -285,7 +292,13 @@ def gh_ready(run: Callable = _run) -> tuple[str, str]:
     if not exe:
         return "", "gh 없음"
     try:
-        if run([exe, "auth", "status"], timeout=20).returncode != 0:
+        p = run([exe, "auth", "status"], timeout=20)
+        if p.returncode != 0:
+            # 망이 막혀도 gh 는 'token is invalid' 라고만 합니다. 토큰은 읽지 않고, 계정이
+            # 설정돼 있다는 말만 보고 둘(망·만료)을 함께 알립니다.
+            out = (p.stdout or "") + (p.stderr or "")
+            if "Active account: true" in out or "Logged in to" in out:
+                return "", "gh 계정은 있으나 확인 실패 (망이 막혔거나 토큰 만료)"
             return "", "gh 로그인 안 됨"
     except (OSError, subprocess.SubprocessError) as exc:
         return "", f"gh 실행 실패: {exc}"
@@ -335,6 +348,71 @@ def ordered_all(book: dict[str, Entry]) -> list[Entry]:
 
 
 MIN_API_LEFT = 10           # 이보다 적게 남으면 2단계에서 API 를 더 부르지 않음
+CACHE_DAYS = 7              # 세 출처가 다 막혔을 때 이만큼 지난 목록까지만 씀
+CHANGED = "릴리스 파일이 바뀜 (저장된 해시와 다름)"
+
+
+@dataclass
+class Cache:
+    entries: dict[str, Entry]
+    saved_at: datetime
+
+    def fresh(self, now: datetime | None = None) -> bool:
+        return (now or datetime.now()) - self.saved_at <= timedelta(days=CACHE_DAYS)
+
+    def sha_for_name(self, name: str) -> tuple[str, str]:
+        """파일 이름 -> (해시, 태그). 없으면 ('', '')."""
+        for e in self.entries.values():
+            if asset_name(e.tag) == name and e.sha256:
+                return e.sha256, e.tag
+        return "", ""
+
+
+def _entry_json(e: Entry) -> dict:
+    return {"tag": e.tag, "kind": e.kind, "key": list(e.key), "url": e.url, "size": e.size,
+            "published": e.published, "sha": dict(e.sha), "sources": sorted(e.sources),
+            "synthesized": e.synthesized}
+
+
+def load_cache(path: Path) -> Cache | None:
+    try:
+        d = json.loads(Path(path).read_text(encoding="utf-8"))
+        entries = {}
+        for x in d.get("entries", []):
+            e = Entry(x["tag"], x["kind"], tuple(x["key"]), url=x.get("url", ""),
+                      size=int(x.get("size") or 0), published=x.get("published", ""),
+                      sha={k: norm_sha(v) for k, v in (x.get("sha") or {}).items()},
+                      sources=set(x.get("sources") or []),
+                      synthesized=bool(x.get("synthesized")))
+            entries[e.tag] = e
+        return Cache(entries, datetime.fromisoformat(d["saved_at"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None                     # 없거나 깨졌으면 없는 것으로
+
+
+def save_cache(path: Path, book: dict[str, Entry], prev: Cache | None = None,
+               now: datetime | None = None) -> None:
+    """이번 결과를 저장. 지난 것과 합치되, 해시가 바뀐 태그는 지난 해시를 그대로 둠."""
+    merged = dict(prev.entries) if prev else {}
+    for tag, e in book.items():
+        if e.draft:
+            continue
+        if e.conflict == CHANGED and tag in merged:
+            continue
+        if e.conflict:
+            continue
+        old = merged.get(tag)
+        if old is not None and old.sha256 and not e.sha256:
+            continue                    # 이번엔 해시를 못 얻었으면 지난 해시를 지킴
+        merged[tag] = e
+    data = {"version": 1, "saved_at": (now or datetime.now()).isoformat(timespec="seconds"),
+            "entries": [_entry_json(e) for e in sorted(merged.values(),
+                                                        key=lambda x: (x.kind, x.key))]}
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass                            # 저장 실패로 설치를 멈추지 않음
 
 
 def _as_api(res) -> ApiResult:
@@ -344,11 +422,15 @@ def _as_api(res) -> ApiResult:
 def collect(*, api: Callable[[], object], gyan_sha: Callable[[], str],
             api_tag: Callable[[str], object] | None = None,
             run: Callable = _run, allow_unverified: bool = False, max_tries: int = 6,
-            parallel: bool = True) -> tuple[list[Entry], list[SourceReport]]:
+            parallel: bool = True, cache: Cache | None = None,
+            save: Callable[[dict[str, Entry]], None] | None = None,
+            now: datetime | None = None) -> tuple[list[Entry], list[SourceReport]]:
     """세 출처를 함께 읽고(1단계) 앞쪽 후보만 보강해(2단계) 시도할 순서를 돌려줍니다.
 
     api      목록 1쪽 -> list 또는 ApiResult(남은 한도 포함)
     api_tag  태그 하나 -> release dict 또는 ApiResult. 없으면 API 보강 안 함
+    cache    저장된 목록(나이와 상관없이 해시 비교에 씀, 7일 안이면 대신 쓰기도 함)
+    save     출처를 하나라도 읽었으면 합친 목록을 넘겨 저장
     """
     def do_api():
         try:
@@ -406,6 +488,19 @@ def collect(*, api: Callable[[], object], gyan_sha: Callable[[], str],
                                     f"태그 {len(text.splitlines())}개 (릴리스 버전 {n}개)"))
     cross_check(book)                                       # 주소 채우기 + 1차 불일치
 
+    if not any(r.ok for r in reports):                      # 세 출처가 모두 막힘
+        if cache is not None and cache.fresh(now):
+            import copy
+
+            book = copy.deepcopy(cache.entries)
+            reports.append(SourceReport(
+                "저장된 목록", True, f"{cache.saved_at:%Y-%m-%d %H:%M} 저장, {len(book)}개 "
+                "(세 출처가 모두 막혀 대신 씀)"))
+            return ordered(book, allow_unverified=allow_unverified), reports
+        if cache is not None:
+            reports.append(SourceReport(
+                "저장된 목록", False, f"{cache.saved_at:%Y-%m-%d} 저장 — {CACHE_DAYS}일이 지나 안 씀"))
+
     # -- 2단계: 시도할 앞쪽 후보만 보강 ------------------------------------------
     top = [e for e in ordered_all(book) if not e.conflict][:max_tries]
     notes: list[str] = []
@@ -443,6 +538,13 @@ def collect(*, api: Callable[[], object], gyan_sha: Callable[[], str],
         if isinstance(got.data, dict):
             add_api(book, [got.data])
     cross_check(book, gyan_sha() if any(not e.sha256 for e in top) else "")
+    if cache is not None:                                   # 같은 태그인데 해시가 바뀜
+        for tag, e in book.items():
+            old = cache.entries.get(tag)
+            if old and old.sha256 and e.sha256 and old.sha256 != e.sha256 and not e.conflict:
+                e.conflict = CHANGED
+    if save is not None:
+        save(book)
     for e in top:
         if e.conflict:
             continue

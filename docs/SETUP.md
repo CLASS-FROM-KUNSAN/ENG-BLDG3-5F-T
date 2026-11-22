@@ -115,7 +115,14 @@ scripts\install_ffmpeg.bat
        - 크기가 릴리스에 적힌 값과 다르면 해시를 셈하기 전에 버립니다.
        - `github.com`·`api.github.com`·`release-assets.githubusercontent.com`·
          `objects.githubusercontent.com`·`www.gyan.dev` 의 HTTPS 만 받습니다. 리다이렉트
-         한 걸음마다, 그리고 끝 주소도 봅니다.     - **한도**: API 한도를 다 쓰면(시간당 60회) 다시 시도하지 않고 "HH:MM 에 풀림" 을
+         한 걸음마다, 그리고 끝 주소도 봅니다.     - **저장된 목록** (`tools\.ffmpeg_releases.json`)
+       - 읽을 때마다 합친 목록(태그·파일 이름·크기·해시·확인한 출처)을 저장합니다.
+       - API·gh·git 이 **모두 막히면** 7일 안에 저장한 목록으로 후보를 정합니다
+         ("저장된 목록 — 날짜" 로 표시). 7일이 지난 목록은 쓰지 않습니다.
+       - 같은 버전의 해시가 저장된 것과 다르면 "릴리스 파일이 바뀜" 으로 그 버전을 쓰지
+         않습니다. 저장된 해시는 덮어쓰지 않으니, 정말 바뀐 것이 맞으면 이 파일을 지우세요.
+       - USB 로 가져온 zip(`tools` 에 넣거나 `--from-zip`)은 **파일 이름으로** 저장된 해시를
+         찾아 확인합니다. 이름이 목록에 없으면 기능 확인으로만 판단합니다.     - **한도**: API 한도를 다 쓰면(시간당 60회) 다시 시도하지 않고 "HH:MM 에 풀림" 을
        보여 준 뒤 gh·git 으로 진행합니다. 한도가 남았는데 403 이면 막힌 망으로 봅니다.
    - `python -m syncnote.ffmpeg_fetch --dry-run` 으로 출처별 결과와 시도할 순서만 볼 수 있습니다.
 4. 다운로드 폴더(`%USERPROFILE%\Downloads`)의 `ffmpeg*.zip`.

@@ -359,6 +359,7 @@ def _sha256_file(p: Path) -> str:
     return h.hexdigest()
 
 
+CACHE_NAME = ".ffmpeg_releases.json"   # 합친 릴리스 목록(tools 안)
 DISK_FACTOR = 2.5             # zip + 압축 푼 것 + 바꿔 끼우는 동안의 옛것
 
 
@@ -462,14 +463,17 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
         shas.setdefault("gyan", gyan_sha(opener))
         return shas["gyan"]
 
+    cache_path = dest / CACHE_NAME
+    cache = RS.load_cache(cache_path)
     entries, reports = RS.collect(api=lambda: fetch_releases(opener), gyan_sha=borrowed,
                                   api_tag=lambda tag: fetch_release_tag(tag, opener),
                                   run=tool_run or RS._run, allow_unverified=allow_unverified,
-                                  max_tries=max_tries)
+                                  max_tries=max_tries, cache=cache,
+                                  save=lambda book: RS.save_cache(cache_path, book, cache))
     lines = [f"{r.name} {'됨' if r.ok else '안 됨'} — {r.note}" for r in reports]
     for ln in lines:
         say("출처: " + ln)
-    listing_failed = not any(r.ok for r in reports if r.name in ("API", "gh", "git"))
+    listing_failed = not any(r.ok for r in reports if r.name in ("API", "gh", "git", "저장된 목록"))
     cands = [to_candidate(e) for e in entries][:max_tries]
     if cands:
         say(f"후보 {len(cands)}개: " + ", ".join(
@@ -550,11 +554,22 @@ def install_from_zip(z: Path, dest: Path, *, sha256: str = "", run: Callable = s
     say = say or _say
     dest = Path(dest)
     say(f"가져온 zip 으로 설치합니다: {z}")
+    where = "적어 준 값"
+    if not sha256:                      # 저장된 목록에서 파일 이름으로 찾기
+        from .release_sources import load_cache
+
+        cache = load_cache(dest / CACHE_NAME)
+        found, tag = cache.sha_for_name(Path(z).name) if cache else ("", "")
+        if found:
+            sha256, where = found, f"저장된 목록의 {tag}"
+        else:
+            say("      해시를 모릅니다(저장된 목록에 없는 이름) — 기능 확인으로만 판단")
     if sha256:
-        h = hashlib.sha256(Path(z).read_bytes()).hexdigest()
+        h = _sha256_file(Path(z))
         if h != sha256.lower():
-            say("      [X] SHA-256 이 적어 준 값과 다릅니다")
+            say(f"      [X] SHA-256 이 {where}과 다릅니다")
             return ""
+        say(f"      해시 확인 통과 ({where})")
     dest.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="_ffmpeg_", dir=dest))
     try:
@@ -845,9 +860,12 @@ def main(argv: list[str] | None = None) -> int:
         from . import release_sources as RS
 
         sha = gyan_sha()
+        cache_path = Path(a.dest) / CACHE_NAME
+        cache = RS.load_cache(cache_path)
         entries, reports = RS.collect(api=fetch_releases, gyan_sha=lambda: sha,
                                       api_tag=fetch_release_tag, max_tries=a.max,
-                                      allow_unverified=a.allow_unverified)
+                                      allow_unverified=a.allow_unverified, cache=cache,
+                                      save=lambda book: RS.save_cache(cache_path, book, cache))
         for rep in reports:
             print(f"출처: {rep.name} {'됨' if rep.ok else '안 됨'} — {rep.note}")
         cands = [to_candidate(e) for e in entries][:a.max] + [gyan_candidate(sha=sha)]
