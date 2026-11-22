@@ -55,6 +55,28 @@ scripts\record_now.bat -m 1 --no-upload
 - 그래도 쓰고 싶으면 `recording.audio.mic_device` 에 이름을 직접 적으세요(사람이 고른 것은 그대로).
 - 원격(Jump Desktop)으로 접속해 있으면 내 PC 의 마이크는 원격 PC 로 넘어가지 않습니다.
   강의실 마이크를 녹음하려면 강의실 PC 에 마이크를 꽂아야 합니다.
+
+### Playwright 브라우저 받기 (`self-signed certificate in certificate chain`)
+
+`playwright install chromium` 이 다음처럼 끝나면 학교·회사망 장비가 HTTPS 를 중간에서
+풀어 보고 자기 인증서로 다시 감싸는 경우입니다.
+
+```
+Error: self-signed certificate in certificate chain   { code: 'SELF_SIGNED_CERT_IN_CHAIN' }
+```
+
+그 인증서는 보통 Windows 인증서 저장소에 들어 있어 브라우저는 괜찮은데, Playwright 의
+다운로더(Node.js)는 Windows 저장소를 보지 않아 거부합니다.
+
+- `scripts\setup.bat`(과 설치·점검 창)은 `python -m syncnote.playwright_setup` 으로 받습니다.
+  이 오류가 나면 **Windows 인증서 저장소(ROOT·CA)를 PEM 으로 꺼내 `NODE_EXTRA_CA_CERTS` 로
+  넘겨 한 번 더** 받습니다. 검증을 끄지는 않습니다(`NODE_TLS_REJECT_UNAUTHORIZED=0` 은 쓰지 않음).
+- 직접 하려면: `.venv\Scripts\python.exe -m syncnote.playwright_setup`
+- 그래도 안 되면 그 망의 검사용 루트 인증서가 Windows 에 없는 것입니다. 전산실에서 받아
+  '신뢰할 수 있는 루트 인증 기관' 에 설치하거나, 다른 망(테더링 등)에서 다시 실행하세요.
+- 일반 Chromium 만 받아지고 `chrome-headless-shell` 만 실패했어도 수집은 됩니다.
+  headless shell 이 없으면 일반 Chromium 을 창 없이 띄웁니다(로그에 경고 한 줄).
+
 ### ffmpeg 를 찾지 못합니다
 
 ```bat

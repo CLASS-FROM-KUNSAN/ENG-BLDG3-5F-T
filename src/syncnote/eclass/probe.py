@@ -20,6 +20,7 @@ from typing import Any
 
 from ..logging_setup import get as get_logger
 from .browser import EclassBrowser
+from .crawler import _eval_json
 from .urls import MENU_LINK_TEXTS, Site, parse_course_option
 
 log = get_logger("eclass.probe")
@@ -44,20 +45,27 @@ def _write(path: Path, text: str, do_redact: bool) -> None:
 
 
 def _menu_inventory(page) -> list[dict[str, str]]:
-    """현재 페이지의 모든 .do 링크를 텍스트와 함께 모읍니다."""
-    return page.evaluate(
-        """() => Array.from(document.querySelectorAll('a[href*=".do"]')).map(a => ({
+    """현재 페이지의 모든 .do 링크를 텍스트와 함께 모읍니다.
+
+    객체 배열을 evaluate 로 바로 받으면 이 playwright(1.61)에서 None 이 와서
+    'NoneType' object is not iterable 로 탐색이 멈췄습니다(강의실 PC 와 이 PC 의
+    03-*-links.json 이 null). 수집기처럼 JSON 문자열로만 주고받습니다.
+    """
+    return _eval_json(
+        page,
+        """() => JSON.stringify(Array.from(document.querySelectorAll('a[href*=".do"]')).map(a => ({
               text: (a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim(),
               href: a.href,
               onclick: a.getAttribute('onclick') || ''
-           })).filter(x => x.text && x.text.length < 40)"""
-    )
+           })).filter(x => x.text && x.text.length < 40))"""
+    ) or []
 
 
 def _form_inventory(page) -> list[dict[str, Any]]:
     """숨은 form 의 필드 이름을 모읍니다. 이게 POST 역설계의 핵심 단서입니다."""
-    return page.evaluate(
-        """() => Array.from(document.querySelectorAll('form')).map(f => ({
+    return _eval_json(
+        page,
+        """() => JSON.stringify(Array.from(document.querySelectorAll('form')).map(f => ({
               name: f.getAttribute('name') || '',
               id: f.id || '',
               action: f.getAttribute('action') || '',
@@ -65,8 +73,8 @@ def _form_inventory(page) -> list[dict[str, Any]]:
               fields: Array.from(f.elements).map(e => ({
                   name: e.name || '', type: e.type || '', tag: e.tagName.toLowerCase()
               })).filter(e => e.name)
-           }))"""
-    )
+           })))"""
+    ) or []
 
 
 def _remember_catalog(state_dir: Path, term: str, courses: list[dict]) -> None:
@@ -137,11 +145,12 @@ def run(    site: Site,
         _write(out_dir / "02-home-links.json", json.dumps(anchors, ensure_ascii=False, indent=2), do_redact)
 
         # --- 3. 내 강의실 목록 ---
-        options = br.page.evaluate(
-            """() => Array.from(
+        options = _eval_json(
+            br.page,
+            """() => JSON.stringify(Array.from(
                    document.querySelectorAll("select[name='courseDTO.courseId'] option")
-               ).map(o => ({value: o.value, text: o.textContent.trim()}))"""
-        )
+               ).map(o => ({value: o.value, text: o.textContent.trim()})))"""
+        ) or []
         courses = []
         for opt in options:
             parsed = parse_course_option(opt.get("value", ""))

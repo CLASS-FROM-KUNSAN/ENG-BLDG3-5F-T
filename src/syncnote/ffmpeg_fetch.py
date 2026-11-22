@@ -39,6 +39,7 @@ import urllib.request
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -360,6 +361,7 @@ def _sha256_file(p: Path) -> str:
 
 
 CACHE_NAME = ".ffmpeg_releases.json"   # 합친 릴리스 목록(tools 안)
+STATE_NAME = ".ffmpeg_install.json"    # 시도 이력·winget 건너뜀(tools 안)
 DISK_FACTOR = 2.5             # zip + 압축 푼 것 + 바꿔 끼우는 동안의 옛것
 
 
@@ -447,7 +449,8 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
             sleep: Callable[[float], None] = time.sleep,
             say: Callable[[str], None] = None, allow_unverified: bool = False,
             tool_run: Callable | None = None,
-            disk_free: Callable[[Path], int] | None = None) -> Result:
+            disk_free: Callable[[Path], int] | None = None,
+            retry_skipped: bool = False, now: Callable[[], datetime] = None) -> Result:
     say = say or _say
     dest = Path(dest)
     current = dest / "ffmpeg" / "bin" / "ffmpeg.exe"
@@ -455,7 +458,41 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
         say(f"이미 쓸 수 있는 ffmpeg 가 있습니다: {current}")
         return Result(True, str(current))
 
+    from . import ffmpeg_history as H
     from . import release_sources as RS
+
+    now = now or datetime.now
+    state_path = dest / STATE_NAME
+    hist = H.load(state_path)
+    skip = {} if retry_skipped else H.skips(hist, now())
+    if {"API", "gh", "git"} <= set(skip):
+        # 셋 다 건너뛰면 할 수 있는 게 없습니다(망이 잠깐 끊겼던 것일 수도). 풀리는 시각이
+        # 정확한 API 한도만 지키고 나머지는 다시 해 봅니다.
+        say("[!] 세 출처를 모두 건너뛰게 돼 있어, 한도가 아닌 것은 다시 시도합니다.")
+        skip = {k: v for k, v in skip.items() if k == "API" and "한도 초과" in v}
+    bad = {} if retry_skipped else H.bad_builds(hist)
+    for name, why in skip.items():
+        say(f"[!] {name} 은 이번에 건너뜁니다: {why} (--retry-skipped 로 다시)")
+    tried_sha: list[str] = []
+    result = Result(False)
+    reports: list = []
+    try:
+        return _install_body(dest, result, reports, tried_sha, skip=skip, bad=bad, RS=RS,
+                             max_tries=max_tries, opener=opener, run=run, sleep=sleep, say=say,
+                             allow_unverified=allow_unverified, tool_run=tool_run,
+                             disk_free=disk_free)
+    finally:
+        H.record(state_path, H.make_run(
+            at=now(), reports=reports, ok=result.ok, skipped=skip,
+            used=result.used.version if result.used else "",
+            tried=[(v, why, k, s) for (v, why), k, s in zip(
+                result.tried, result.kinds, tried_sha, strict=False)]))
+
+
+def _install_body(dest: Path, result: Result, reports: list, tried_sha: list[str], *,
+                  skip: dict, bad: dict, RS, max_tries: int, opener: Callable, run: Callable,
+                  sleep: Callable, say: Callable, allow_unverified: bool,
+                  tool_run: Callable | None, disk_free: Callable | None) -> Result:
 
     shas: dict[str, str] = {}
 
@@ -465,16 +502,23 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
 
     cache_path = dest / CACHE_NAME
     cache = RS.load_cache(cache_path)
-    entries, reports = RS.collect(api=lambda: fetch_releases(opener), gyan_sha=borrowed,
-                                  api_tag=lambda tag: fetch_release_tag(tag, opener),
-                                  run=tool_run or RS._run, allow_unverified=allow_unverified,
-                                  max_tries=max_tries, cache=cache,
-                                  save=lambda book: RS.save_cache(cache_path, book, cache))
+    entries, got = RS.collect(api=lambda: fetch_releases(opener), gyan_sha=borrowed,
+                              api_tag=lambda tag: fetch_release_tag(tag, opener),
+                              run=tool_run or RS._run, allow_unverified=allow_unverified,
+                              max_tries=max_tries, cache=cache, skip=skip,
+                              save=lambda book: RS.save_cache(cache_path, book, cache))
+    reports[:] = got
     lines = [f"{r.name} {'됨' if r.ok else '안 됨'} — {r.note}" for r in reports]
     for ln in lines:
         say("출처: " + ln)
     listing_failed = not any(r.ok for r in reports if r.name in ("API", "gh", "git", "저장된 목록"))
-    cands = [to_candidate(e) for e in entries][:max_tries]
+    cands = []
+    for e in entries:
+        if e.sha256 and e.sha256 in bad:
+            say(f"  {e.tag} 건너뜀: 지난번 녹화에 필요한 기능이 없던 빌드 ({bad[e.sha256]})")
+            continue
+        cands.append(to_candidate(e))
+    cands = cands[:max_tries]
     if cands:
         say(f"후보 {len(cands)}개: " + ", ".join(
             c.version + ("" if c.sha256 else "(해시 없음)") for c in cands))
@@ -482,7 +526,7 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
         say("[!] 쓸 수 있는 릴리스 후보가 없습니다. gyan.dev 로 시도합니다.")
     cands.append(gyan_candidate(opener, sha=borrowed()))
 
-    result = Result(False, list_failed=listing_failed, sources=lines)
+    result.list_failed, result.sources = listing_failed, lines
     dest.mkdir(parents=True, exist_ok=True)
     for i, c in enumerate(cands):
         if i:
@@ -526,6 +570,7 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
             say(f"      [X] {exc}")
             result.tried.append((c.version, str(exc)))
             result.kinds.append(exc.kind)
+            tried_sha.append(c.sha256)
             if exc.kind != "net" and c.sha256:           # 다시 써도 같은 실패 -> 받은 것 지움
                 for left in (dest / "_downloads").glob(f"{c.sha256[:12]}-*"):
                     left.unlink(missing_ok=True)
@@ -533,6 +578,7 @@ def install(dest: Path, *, max_tries: int = 6, force: bool = False,
             say(f"[X] {exc}")
             result.tried.append((c.version, str(exc)))
             result.kinds.append("fatal")
+            tried_sha.append(c.sha256)
             return result
         finally:
             shutil.rmtree(work, ignore_errors=True)
@@ -704,7 +750,8 @@ def auto(dest: Path, *, state_path: Path | None = None, retry_skipped: bool = Fa
     find = find or (lambda: find_usable(say=say))
     pip = pip or (lambda: pip_install(say=say))
     winget = winget or (lambda: winget_install(say=say))
-    release = release or (lambda: install(dest, say=say, allow_unverified=allow_unverified))
+    release = release or (lambda: install(dest, say=say, allow_unverified=allow_unverified,
+                                          retry_skipped=retry_skipped))
     from_zip = from_zip or (lambda z: install_from_zip(z, dest, say=say))
     r = AutoResult(False)
     state = _state(state_path)
@@ -741,9 +788,10 @@ def auto(dest: Path, *, state_path: Path | None = None, retry_skipped: bool = Fa
             return done("winget", w.ffmpeg)
         r.steps.append(Step("winget", "fail", w.reason))
         if w.permanent:
-            state["winget"] = {"skip": True, "reason": w.reason,
-                               "at": time.strftime("%Y-%m-%d %H:%M:%S")}
-            _save_state(state_path, state)
+            from . import ffmpeg_history as H
+
+            H.update(state_path, "winget", {"skip": True, "reason": w.reason,
+                                            "at": time.strftime("%Y-%m-%d %H:%M:%S")})
 
     rel = release()
     r.sources = list(getattr(rel, "sources", []) or [])
@@ -836,12 +884,31 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--allow-unverified", action="store_true",
                     help="해시가 없는 후보(git 에서만 찾은 버전)도 시도 — 기본은 안 함")
     ap.add_argument("--from-zip", help="가져온 zip 으로 설치(오프라인)")
+    ap.add_argument("--history", action="store_true", help="최근 설치 시도와 지금 건너뛰는 것")
     ap.add_argument("--sha256", default="", help="--from-zip 의 SHA-256 (있으면 확인)")
     ap.add_argument("--dest", default=str(REPO_ROOT / "tools"))
     ap.add_argument("--max", type=int, default=6, help="롤백해 볼 릴리스 수 (기본 6)")
     ap.add_argument("--force", action="store_true", help="쓸 수 있는 ffmpeg 가 있어도 새로 받기")
     ap.add_argument("--dry-run", action="store_true", help="받지 않고 시도할 순서만 출력")
     a = ap.parse_args(argv)
+    if a.history:
+        from . import ffmpeg_history as H
+
+        data = H.load(Path(a.dest) / STATE_NAME)
+        lines = H.describe(data) or ["기록이 없습니다."]
+        for ln in lines:
+            print(ln)
+        sk = H.skips(data)
+        bad = H.bad_builds(data)
+        if sk or bad or (data.get("winget") or {}).get("skip"):
+            print("\n지금 건너뛰는 것 (--retry-skipped 로 다시):")
+            for n, why in sk.items():
+                print(f"  - {n}: {why}")
+            for sha, why in bad.items():
+                print(f"  - 빌드 {sha[:12]}: {why}")
+            if (data.get("winget") or {}).get("skip"):
+                print(f"  - winget: {data['winget'].get('reason')}")
+        return 0
     if a.from_zip:
         return 0 if install_from_zip(Path(a.from_zip), Path(a.dest), sha256=a.sha256) else 1
     if a.auto:
@@ -876,7 +943,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{i}. {c.version:<28} {tier} 출처 {'·'.join(c.sources):<14} 해시 {mark}{made}")
         return 0
     r = install(Path(a.dest), max_tries=a.max, force=a.force,
-                allow_unverified=a.allow_unverified)
+                allow_unverified=a.allow_unverified, retry_skipped=a.retry_skipped)
     if not r.ok and r.tried:
         print("\n시도한 순서와 실패 이유:")
         for v, why in r.tried:

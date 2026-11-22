@@ -193,7 +193,8 @@ class SetupFlow(QDialog):
         return [sys.executable, "-m", "venv", str(REPO_ROOT / ".venv")]
 
     def playwright_command(self) -> list[str]:
-        return [self.venv_python(), "-m", "playwright", "install", "chromium"]
+        # 학교망 인증서 검사(self-signed certificate)면 Windows 인증서 저장소로 다시 받음
+        return [self.venv_python(), "-m", "syncnote.playwright_setup"]
 
     def ffmpeg_command(self) -> list[str] | None:
         if os.name != "nt":
