@@ -294,14 +294,14 @@ _WHY = (
     ("unterminated string", "따옴표가 닫히지 않았습니다"),
     ("unclosed", "따옴표나 괄호가 닫히지 않았습니다"),
     ("expected '=' after a key", "키 이름 뒤에 '=' 가 없습니다"),
-    ("invalid value", "값을 읽을 수 없습니다 — 글자는 \"따옴표\" 로 감싸고, 켬/끔은 true/false 로 적으세요"),
+    ("invalid value", "값의 모양이 TOML 규칙과 달라요 — 글자는 \"따옴표\" 로 감싸고, 켬/끔은 true/false 로 적어요"),
     ("cannot overwrite", "같은 키가 이미 위에 있습니다(중복) — 하나만 남기세요"),
     ("cannot declare", "같은 섹션이 이미 위에 있습니다(중복)"),
     ("unclosed array", "목록 [ ] 이 닫히지 않았습니다"),
     ("expected ',' or ']'", "목록 [ ] 이 닫히지 않았거나 쉼표가 빠졌습니다"),
     ("expected newline or end of document", "값 뒤에 다른 글자가 더 있습니다(설명은 # 뒤에 적으세요)"),
     ("illegal character", "TOML 에 쓸 수 없는 글자가 있습니다"),
-    ("invalid initial character for a key", "키 이름을 읽을 수 없습니다(영문·숫자·_- 만)"),
+    ("invalid initial character for a key", "키 이름에 쓸 수 없는 글자가 있어요(영문·숫자·_- 만)"),
 )
 
 
@@ -311,6 +311,7 @@ class Broken:
     text: str                # 그 줄 원문
     why: str                 # 사람 말로
     dropped: list[str]       # 빼고 읽은 설정(점 표기 또는 섹션)
+    end: int = 0             # 뺀 범위의 마지막 줄(1부터, 0이면 line 과 같음)
 
     def describe(self) -> str:
         what = f" — 빠진 설정: {', '.join(self.dropped)}" if self.dropped else ""
@@ -432,11 +433,11 @@ def salvage(text: str, *, limit: int = 100) -> tuple[str, list[Broken]]:
             why = _friendly(str(exc))
         a, b = _block(lines, idx, why)
         broken.append(Broken(a + 1, lines[a], why,
-                             _dropped_names(lines, a, b, _section_at(lines, a))))
+                             _dropped_names(lines, a, b, _section_at(lines, a)), end=b + 1))
         for i in range(a, b + 1):
             if not lines[i].startswith(BROKEN_MARK):
                 lines[i] = BROKEN_MARK + lines[i]
-    raise SchemaError("깨진 곳이 너무 많아 읽을 수 없습니다(100곳 넘음).")
+    raise SchemaError("깨진 곳이 100곳을 넘어 하나씩 빼고 읽기를 멈췄습니다 — TOML 설정 파일이 아닌 것 같습니다.")
 
 
 def parse_lenient(text: str) -> tuple[list[Section], list[Broken]]:

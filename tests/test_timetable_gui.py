@@ -625,7 +625,10 @@ def test_wizard_bad_list_value_is_flagged_not_written(app, tmp_path):
     d.revalidate()
     assert d.changes()["recording.video.monitors"] == ["하나", 2]    # 2 는 숫자로 읽음
     assert any("recording.video.monitors" in p for p in d.problem_list)   # 실제 검증이 잡음
-    assert d.rows["recording.video.monitors"].note.isVisibleTo(d)
+    # 경고는 '원문 · 코드 근거 · 추측 · 교차검증' 설명 칸에 나옴(빨간 한 줄 note 대신)
+    panel = d.rows["recording.video.monitors"].mismatch
+    assert panel.isVisibleTo(d)
+    assert "recording.video.monitors" in panel.text() and "교차검증" in panel.text()
     d.close()
 
 
