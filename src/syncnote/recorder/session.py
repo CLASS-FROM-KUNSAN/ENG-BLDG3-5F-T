@@ -380,6 +380,30 @@ class RecordingSession:
         log.info("=" * 58)
         return result
 
+    def _journal(self, work: Path, stem: str, index: int, container: str, started: datetime,
+                 audio_rec, video_recs) -> None:
+        from .recover import write_journal
+
+        # 일지는 복구를 돕는 것일 뿐 — 무슨 일이 있어도 녹화를 멈추게 하지 않습니다.
+        try:
+            meta = getattr(self, "meta", None)
+            tracks = getattr(audio_rec, "tracks", None)
+            data = {
+                "version": 1, "stem": stem, "index": index, "container": container,
+                "layout": str(self.cfg.get("recording.audio.track_layout", "separate")),
+                "label": self.label, "course_id": str(getattr(self.course, "id", "") or ""),
+                "started": started.isoformat(),
+                "audio": {str(t.track_name): float(t.result.started_at or 0)
+                          for t in (tracks if isinstance(tracks, list) else [])},
+                "video": {sfx: float(vr.started_at or 0) for vr, sfx in video_recs
+                          if vr is not None},
+                "meta": meta.to_state() if meta is not None else None,
+            }
+        except Exception as exc:
+            log.warning("녹화 일지 내용을 만들지 못했습니다(녹화는 계속): %s", exc)
+            return
+        write_journal(work, stem, data)
+
     # -- 세그먼트 하나 -----------------------------------------------
     def _record_segment(self, index: int, out_dir: Path, minutes: float, container: str,
                         video_on: bool, audio_on: bool, result: SessionResult) -> Segment | None:
@@ -443,6 +467,8 @@ class RecordingSession:
                 vad_detector=self._vad_detector,
             )
             audio_rec.start(stem)
+        # 녹화 일지: 컴퓨터가 녹화 중에 꺼지면 다음 시작 때 이것으로 조각을 합쳐 올립니다.
+        self._journal(work, stem, index, container, now, audio_rec, [])
 
         # 화면은 소리보다 늦게 켭니다(pre-roll 프라이버시).
         video_paths: list[tuple[Path | None, str]] = []  # (path, suffix)
@@ -487,10 +513,15 @@ class RecordingSession:
                     video_recs = []
 
         # --- 대기 ---
+        self._journal(work, stem, index, container, now, audio_rec, video_recs)
+        journal_again = time.time() + 5      # 소리 트랙 시작 시각은 첫 소리가 들어온 뒤 정해짐
         end_at = time.time() + minutes * 60
         log.info("세그먼트 %d 녹화 중 (%.1f분)", index, minutes)
         while time.time() < end_at and not self._stop_event.is_set():
             time.sleep(0.5)
+            if journal_again and time.time() >= journal_again:
+                self._journal(work, stem, index, container, now, audio_rec, video_recs)
+                journal_again = 0.0
             # 실행 중인 VideoRecorder 중 하나라도 죽으면 중단합니다.
             for vr, sfx in video_recs:
                 if vr is not None and not vr.is_running:
@@ -596,6 +627,10 @@ class RecordingSession:
                 except OSError:
                     moved[name] = path
             wav_copies = moved
+
+        # 정상으로 마무리됨 — 일지가 남아 있으면 다음 시작 때 '꺼진 녹화' 로 봅니다
+        from .recover import clear_journal
+        clear_journal(work, stem)
 
         # 작업 폴더 정리
         try:
