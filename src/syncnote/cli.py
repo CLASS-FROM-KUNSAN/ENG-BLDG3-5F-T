@@ -203,6 +203,31 @@ def _doctor(args, rep: dict) -> int:
         if cfg.get("recording.enabled"):
             ok = False
 
+    # SoX(모든 OS) · arecord(리눅스) — 녹음 방법 사슬(soundcard → ffmpeg → SoX → arecord)의
+    # 대체 경로이자 소리 감지 녹음(--vad)의 도구. 필수입니다.
+    from . import sox_fetch
+
+    sox = sox_fetch.find_sox(check=False)
+    if sox:
+        print(f"    [O] sox              {sox}")
+        tools.append({"mark": "O", "name": "sox", "detail": sox})
+    else:
+        fix = ("scripts\\setup.bat 을 다시 실행하거나 python -m syncnote.sox_fetch"
+               if sys.platform == "win32" else
+               (sox_fetch.MAC_HINT if sys.platform == "darwin" else sox_fetch.LINUX_HINT))
+        print(f"    [X] sox              없음 -> {fix}")
+        tools.append({"mark": "X", "name": "sox", "detail": f"없음 — {fix}"})
+        ok = False
+    if sys.platform.startswith("linux"):
+        import shutil as _sh
+
+        ar = _sh.which("arecord")
+        print(f"    {'[O]' if ar else '[X]'} arecord          {ar or '없음 -> ' + sox_fetch.LINUX_HINT}")
+        tools.append({"mark": "O" if ar else "X", "name": "arecord",
+                      "detail": ar or f"없음 — {sox_fetch.LINUX_HINT}"})
+        if not ar:
+            ok = False
+
     # 비밀값
     print("\n  자격증명")
     creds = section("자격증명")

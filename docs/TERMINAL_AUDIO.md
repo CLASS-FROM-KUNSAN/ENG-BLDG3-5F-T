@@ -87,9 +87,12 @@ seconds       = 3600     # vad 일 때는 '최대' 길이 (trim 0 3600)
 |---|---|
 | macOS | `brew install sox` |
 | Debian/Ubuntu | `sudo apt install sox libsox-fmt-pulse` |
-| Windows | <https://sourceforge.net/projects/sox/> 설치 후 PATH 에 추가 (또는 환경변수 `SOX` 에 sox.exe 경로) |
+| Windows | **`scripts\setup.bat` 이 설치합니다**(필수 도구). 직접: `python -m syncnote.sox_fetch` — winget `ChrisBagwell.SoX` → 안 되면 SourceForge 공식 zip(SHA-256 대조) 을 `tools\sox` 에. 환경변수 `SOX` 에 sox.exe 경로를 적어도 됩니다 |
 
 SoX 는 배포판에 따라 mp3 를 못 써서 **wav / flac 만** 받습니다.
+
+ffmpeg · SoX · arecord(리눅스)는 **필수 도구**입니다. `doctor` 가 없으면 [X] 로 알리고,
+녹화의 마이크도 soundcard 가 안 되면 ffmpeg → SoX → arecord 순으로 이 도구들로 엽니다.
 
 ### 3. arecord (Linux 전용)
 

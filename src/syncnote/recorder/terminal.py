@@ -241,6 +241,11 @@ def find_tool(name: str) -> str | None:
             return find_ffmpeg()
         except FFmpegMissing:
             return None
+    if name == "sox":
+        # PATH 말고도 setup 이 둔 tools\sox · winget 이 둔 곳까지(창을 다시 열지 않아도 찾게)
+        from ..sox_fetch import find_sox
+
+        return find_sox(check=False)
     env = os.environ.get(name.upper())
     if env and (shutil.which(env) or Path(env).exists()):
         return shutil.which(env) or env
