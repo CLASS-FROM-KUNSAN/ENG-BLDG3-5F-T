@@ -304,7 +304,10 @@ def test_segment_writes_a_journal_while_recording_and_clears_it_after(tmp_path):
     from syncnote.recorder.session import RecordingSession, SessionResult
 
     out = tmp_path / "rec"
-    s = RecordingSession(_cfg({"transcribe": {"enabled": False}}), Layout(tmp_path), "자료구조")
+    # 마이크를 끄지 않으면 마이크를 찾느라 soundcard 를 부름(CI 에는 없음) — test_audio_only 와 같게
+    s = RecordingSession(_cfg({"transcribe": {"enabled": False},
+                               "recording": {"audio": {"mic_enabled": False}}}),
+                         Layout(tmp_path), "자료구조")
     s.audio_only = True
     seen = []
     real_write = RV.write_journal
