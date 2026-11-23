@@ -217,3 +217,66 @@ def test_nothing_but_ascii_after_chcp(path: Path):
         return
     bad = [i + 1 for i, ln in enumerate(lines[at + 1:], start=at + 1) if any(b > 127 for b in ln)]
     assert not bad, f"{path.name}: chcp(줄 {at + 1}) 뒤에 한글이 있는 줄 {bad} — chcp 를 맨 끝으로"
+
+
+# ---------------------------------------------------------------------------
+# 파이썬 실행 규칙(docs/SETUP.md '파이썬 실행 규칙'): 파이썬은 _find_python 한 곳에서만 고릅니다.
+#   강의실 PC: setup.bat 이 `where python` 으로 확인하고 `python -m venv` 를 불렀는데,
+#   잡힌 것은 Microsoft Store 의 가짜 python.exe 라 'Python' 만 찍고 실패했습니다.
+#   기기마다 python / py / python3 가 다르므로 직접 부르지 말고 %PY% / $PY 만 씁니다.
+# ---------------------------------------------------------------------------
+# 명령 자리(줄 처음·( & | 뒤) · where/command -v · 'PY=python' 처럼 이름을 넣는 것까지
+_DIRECT_PY = re.compile(r"(?:^|[(&|]\s*|\bwhere\s+|command\s+-v\s+|=\s*)(python3?|py)(?:\.exe)?"
+                        r"(?=\s|$|\)|\")",
+                        re.I | re.M)
+FINDERS = {"_find_python.bat", "_find_python.sh"}
+
+
+@pytest.mark.parametrize("path", sorted(SCRIPTS.glob("*.bat")) + sorted(SCRIPTS.glob("*.sh"))
+                         + sorted(SCRIPTS.glob("*.ps1")), ids=lambda p: p.name)
+def test_scripts_do_not_launch_python_directly(path: Path):
+    if path.name in FINDERS:
+        return
+    text = path.read_text(encoding="utf-8-sig")
+    if path.suffix == ".bat":
+        text = code_lines(text)
+    else:
+        text = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+    bad = [m.group(0).strip() for m in _DIRECT_PY.finditer(text)]
+    assert not bad, (f"{path.name}: 파이썬을 직접 부릅니다 {bad} — %PY%/$PY 를 쓰세요"
+                     "(파이썬은 _find_python 에서만 고름. docs/SETUP.md '파이썬 실행 규칙')")
+
+
+def test_find_python_tries_every_way_and_is_ascii():
+    raw = (SCRIPTS / "_find_python.bat").read_bytes()
+    assert all(b < 128 for b in raw), "_find_python.bat 은 ASCII 만(chcp 앞뒤 어디서 읽혀도 안전)"
+    text = raw.decode("ascii")
+    order = [text.index(f"call :try {c}") for c in
+             ('"SYNCNOTE_PYTHON"', '"python" python', '"py -3" py -3', '"python3" python3',
+              '"py" py')]
+    assert order == sorted(order), "후보 순서: SYNCNOTE_PYTHON -> python -> py -3 -> python3 -> py"
+    assert "sys.executable" in text and "(3,10)" in text      # '실제로 실행되고 3.10 이상'
+    sh = (SCRIPTS / "_find_python.sh").read_text(encoding="utf-8")
+    assert '"${SYNCNOTE_PYTHON:-}" python3 python py' in sh
+
+
+def test_every_launcher_uses_the_finder():
+    assert 'call "%~dp0_find_python.bat"' in read("_common.bat")
+    assert 'call "%~dp0_find_python.bat"' in read("activity_host.bat")
+    for sh in SCRIPTS.glob("*.sh"):
+        if sh.name in FINDERS:
+            continue
+        t = sh.read_text(encoding="utf-8")
+        if "$PY" in t:
+            assert "_find_python.sh" in t, f"{sh.name}: $PY 를 쓰면 _find_python.sh 로 고르세요"
+    setup = read("setup.bat")
+    assert "where python" not in setup and '"%PYBASE%" -m venv' in setup
+
+
+def test_python_code_launches_its_own_interpreter():
+    """파이썬 코드가 다른 파이썬을 띄울 때는 sys.executable — "python" 이라는 이름이 아니라."""
+    src = Path(__file__).resolve().parents[1] / "src" / "syncnote"
+    pat = re.compile(r"""\[\s*["'](python3?|py)(?:\.exe)?["']\s*,""")
+    bad = [f"{p.relative_to(src)}:{i}" for p in src.rglob("*.py")
+           for i, ln in enumerate(p.read_text(encoding="utf-8").splitlines(), 1) if pat.search(ln)]
+    assert not bad, f"이름으로 파이썬을 띄움: {bad} — sys.executable 을 쓰세요"

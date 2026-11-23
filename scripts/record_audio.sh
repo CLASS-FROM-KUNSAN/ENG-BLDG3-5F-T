@@ -29,10 +29,7 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
 export XDG_RUNTIME_DIR
 
-if [ -x "$REPO/.venv/bin/python" ]; then
-    PY="$REPO/.venv/bin/python"
-else
-    PY=$(command -v python3 || command -v python)
-fi
+# 파이썬은 _find_python.sh 한 곳에서(SYNCNOTE_PYTHON -> python3 -> python -> py, 실제 실행 확인)
+. "$REPO/scripts/_find_python.sh"
 
 exec "$PY" -m syncnote audio record "$@"

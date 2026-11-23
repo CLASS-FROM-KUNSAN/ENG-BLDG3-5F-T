@@ -10,20 +10,35 @@ echo  Sync Note 설치
 echo ======================================================
 echo.
 
-where python >nul 2>&1
-if errorlevel 1 (
-    echo [X] Python 이 설치돼 있지 않습니다.
-    echo     https://www.python.org/downloads/ 에서 3.11 이상을 받으세요.
-    echo     설치할 때 "Add python.exe to PATH" 를 반드시 체크하세요.
+REM 파이썬은 _common.bat(_find_python.bat)이 '실제로 실행되는지' 로 골라 둡니다.
+REM PATH 에 '있는지' 만 보지 않습니다 — Microsoft Store 의 가짜 python.exe(앱 실행 별칭)도 그 검사를 통과합니다.
+if not defined PYBASE (
+    call "%~dp0_no_python.bat"
     pause & exit /b 1
 )
+echo 파이썬: %PYBASE%  [%PYFROM% 으로 찾음]
 
 echo [1/6] 가상환경 만드는 중...
+REM 있는데 실행되지 않는 .venv(다른 PC 에서 복사됨, 만든 파이썬을 지움 등)는 옆으로 치우고
+REM 새로 만듭니다. 지우지 않고 옮기기만 하므로 필요하면 되돌릴 수 있습니다.
+set "BROKEN=.venv.broken-%RANDOM%"
+set "VENV_OK=0"
+if exist "%REPO%\.venv\Scripts\python.exe" "%REPO%\.venv\Scripts\python.exe" -c "import sys" >nul 2>&1 && set "VENV_OK=1"
+if exist "%REPO%\.venv" if "%VENV_OK%"=="0" (
+    echo       기존 .venv 가 실행되지 않아 %BROKEN% 로 옮기고 새로 만듭니다.
+    move "%REPO%\.venv" "%REPO%\%BROKEN%" >nul
+)
 if not exist "%REPO%\.venv" (
-    python -m venv "%REPO%\.venv"
-    if errorlevel 1 (echo     실패 & pause & exit /b 1)
+    "%PYBASE%" -m venv "%REPO%\.venv"
+    if errorlevel 1 (
+        echo     실패: "%PYBASE%" -m venv
+        echo     다른 파이썬을 쓰려면 환경 변수 SYNCNOTE_PYTHON 에 그 경로를 적고 다시 실행하세요.
+        pause & exit /b 1
+    )
 )
 set "PY=%REPO%\.venv\Scripts\python.exe"
+"%PY%" -c "import sys" >nul 2>&1
+if errorlevel 1 (echo     실패: 만든 가상환경의 파이썬이 실행되지 않습니다 & pause & exit /b 1)
 echo       완료
 
 echo.

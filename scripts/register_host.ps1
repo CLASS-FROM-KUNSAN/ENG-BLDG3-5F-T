@@ -10,7 +10,7 @@
 
     하는 일:
       1) 호스트 매니페스트(com.syncnote.activity.json)를 extension\host\ 에 생성.
-         path  = scripts\activity_host.bat (python -m syncnote.activity.native_host)
+         path  = scripts\activity_host.bat (_find_python.bat 가 고른 %PY% 로 native_host 를 띄움)
          allowed_origins = [ chrome-extension://<ID>/ ]
       2) HKCU\...\NativeMessagingHosts\com.syncnote.activity = 그 매니페스트 경로.
 

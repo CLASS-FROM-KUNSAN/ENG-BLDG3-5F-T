@@ -11,9 +11,7 @@ set "PYTHONDONTWRITEBYTECODE=1"
 set "REPO=%~dp0.."
 set "PYTHONPATH=%REPO%\src"
 if exist "%REPO%\config.toml" set "SYNCNOTE_CONFIG=%REPO%\config.toml"
-if exist "%REPO%\.venv\Scripts\python.exe" (
-    set "PY=%REPO%\.venv\Scripts\python.exe"
-) else (
-    set "PY=python"
-)
+REM 파이썬은 _find_python.bat 한 곳에서(아무것도 출력하지 않음). 규칙: docs/SETUP.md
+call "%~dp0_find_python.bat"
+if not defined PY exit /b 9009
 "%PY%" -m syncnote.activity.native_host

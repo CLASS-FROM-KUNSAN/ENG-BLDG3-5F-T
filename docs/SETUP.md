@@ -25,6 +25,47 @@ python --version
 > 그 경우 아래의 `python` 을 전부 `py` 로 읽으세요. venv 를 만든
 > 뒤로는 `.venv\Scripts\python` 을 쓰므로 이 문제가 없습니다.
 
+### 파이썬 실행 규칙 (모든 스크립트가 지킵니다)
+
+기기마다 파이썬 명령이 다릅니다 — `python`, `py`(Windows 파이썬 런처), `python3`.
+사용자가 고른 설치를 존중하고, 하나가 안 되면 다른 방법으로 실행해 봅니다.
+
+1. **스크립트는 `python` / `py` / `python3` 를 직접 부르지 않습니다.** 파이썬은 한 곳에서만
+   고릅니다 — Windows `scripts\_find_python.bat`(`_common.bat` 이 부름), macOS·Linux
+   `scripts/_find_python.sh`. 다른 스크립트는 그 결과(`%PY%` / `$PY`, 전체 경로)만 씁니다.
+2. **'있는지' 가 아니라 '실제로 실행되고 3.10 이상인지' 로 고릅니다.** `where python` 은
+   Microsoft Store 의 가짜 `python.exe`(앱 실행 별칭)도 찾는데, 그것은 실행하면 `Python` 만
+   찍고 실패합니다(강의실 PC: `[1/6] 가상환경 만드는 중... Python 실패`).
+3. **후보 순서**(앞에서 통과한 것을 씀):
+
+   | 순서 | Windows | macOS·Linux |
+   |---|---|---|
+   | 1 | `SYNCNOTE_PYTHON`(사용자 지정 경로·명령) | `SYNCNOTE_PYTHON` |
+   | 2 | `python` | `python3` |
+   | 3 | `py -3` | `python` |
+   | 4 | `python3` | `py` |
+   | 5 | `py` | |
+
+   가상환경(`.venv`)의 파이썬이 실행되면 그것을 먼저 씁니다.
+4. **아무것도 안 되면** 같은 안내(설치 · 앱 실행 별칭 끄기 · `SYNCNOTE_PYTHON`)를 보여 주고
+   멈춥니다. Windows 에서는 `%PY%` 가 `_no_python.bat` 을 가리켜, `"%PY%"` 를 부르는 모든
+   스크립트가 같은 안내를 냅니다.
+5. **`setup.bat`** 은 찾은 시스템 파이썬(`%PYBASE%`)으로 가상환경을 만듭니다. 이미 있는
+   `.venv` 가 실행되지 않으면(다른 PC 에서 복사 등) 지우지 않고 `.venv.broken-<번호>` 로
+   옮긴 뒤 새로 만듭니다.
+6. **파이썬 코드**가 다른 파이썬 프로세스를 띄울 때는 `sys.executable`(지금 도는 그
+   인터프리터)을 씁니다 — `"python"` 같은 이름을 쓰지 않습니다.
+7. 화면에 보이는 안내(`python -m syncnote ...`)는 사람에게 보여 주는 예시입니다. 그 PC 에서
+   `python` 이 안 되면 `py` 로 바꿔 입력하세요.
+
+특정 파이썬을 쓰게 하려면:
+
+```bat
+setx SYNCNOTE_PYTHON "C:\Python312\python.exe"
+```
+
+`tests/test_scripts.py` 가 1·6 을 검사합니다(스크립트·코드에서 직접 부르면 테스트 실패).
+
 
 ---
 

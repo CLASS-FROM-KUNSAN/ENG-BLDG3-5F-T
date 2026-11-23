@@ -17,12 +17,17 @@ popd >nul
 
 set "PYTHONPATH=%REPO%\src"
 
-REM 가상환경이 있으면 그걸 씁니다.
-if exist "%REPO%\.venv\Scripts\python.exe" (
-    set "PY=%REPO%\.venv\Scripts\python.exe"
-) else (
-    set "PY=python"
-)
+REM 파이썬은 _find_python.bat 한 곳에서만 고릅니다(규칙: docs/SETUP.md '파이썬 실행 규칙').
+REM 기기마다 명령이 다릅니다(python / py 런처 / python3). '있는지' 가 아니라 '실제로
+REM 실행되고 3.10 이상인지' 로 고르고, 하나가 안 되면 다음 방법으로 갑니다:
+REM   SYNCNOTE_PYTHON(사용자 지정) -> python -> py -3 -> python3 -> py
+REM Microsoft Store 의 가짜 python.exe(앱 실행 별칭)는 실행하면 'Python' 만 찍고 실패해
+REM 여기서 걸러집니다. 가상환경(.venv)의 파이썬이 실행되면 그것을 씁니다.
+REM   PY     = 쓸 파이썬(.venv 또는 시스템)의 전체 경로
+REM   PYBASE = 시스템 파이썬(가상환경을 만들 때), PYFROM = 어느 방법으로 찾았는지
+call "%~dp0_find_python.bat"
+REM 어디에도 없으면 "%PY%" 를 부르는 모든 스크립트가 같은 안내를 보게 합니다.
+if not defined PY set "PY=%~dp0_no_python.bat"
 
 REM 동봉 ffmpeg 가 있으면 PATH 에 추가
 if exist "%REPO%\tools\ffmpeg\bin\ffmpeg.exe" set "PATH=%REPO%\tools\ffmpeg\bin;%PATH%"
