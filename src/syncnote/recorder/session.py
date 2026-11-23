@@ -224,11 +224,24 @@ class RecordingSession:
             self._mic_source = None
             return None
 
-        mic, probes = devices.select_working_mic(
-            duration_sec=float(cfg.get("recording.audio.mic_probe_sec", 1.5)),
-            samplerate=int(cfg.get("recording.audio.samplerate", 48000)),
-            channels=int(cfg.get("recording.audio.channels", 2)),
-        )
+        def pick():
+            return devices.select_working_mic(
+                duration_sec=float(cfg.get("recording.audio.mic_probe_sec", 1.5)),
+                samplerate=int(cfg.get("recording.audio.samplerate", 48000)),
+                channels=int(cfg.get("recording.audio.channels", 2)),
+            )
+
+        mic, probes = pick()
+        # 전부 죽었고 Windows 마이크 권한이 실제로 꺼져 있으면: 알리고, 켜고, 다시 시험
+        if probes and all(p.dead for p in probes) and devices.mic_permission_denied():
+            log.warning("Windows 마이크 권한이 꺼져 있어 마이크가 녹음되지 않습니다. 켭니다.")
+            changed, problems = devices.enable_mic_permission()
+            for c in changed:
+                log.warning("  켰습니다: %s", c)
+            for p in problems:
+                log.error("  %s", p)
+            if changed:
+                mic, probes = pick()
         self._log_mic_choice(mic, probes)
         self._mic_source = mic
         return mic

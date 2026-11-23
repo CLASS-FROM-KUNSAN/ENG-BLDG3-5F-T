@@ -219,6 +219,60 @@ def probe_mic(mic, *, duration_sec: float = 1.5,
     return ProbeResult(name, peak, None, "".join(via))
 
 
+_CONSENT = ("Software", "Microsoft", "Windows", "CurrentVersion", "CapabilityAccessManager",
+            "ConsentStore", "microphone")
+
+
+def enable_mic_permission(*, winreg_mod=None) -> tuple[list[str], list[str]]:
+    """꺼져 있는 Windows 마이크 권한을 켭니다. (켠 곳, 못 켠 곳과 이유).
+
+    세 곳이 있습니다. 하나라도 Deny 면 데스크톱 앱(이 프로그램)은 마이크를 못 씁니다.
+      - 이 PC 전체 '마이크 액세스'      HKLM — 관리자 권한이 있어야 바꿈
+      - 이 사용자의 '앱이 마이크에 액세스' HKCU
+      - '데스크톱 앱이 마이크에 액세스'    HKCU\\NonPackaged
+    그룹 정책(AppPrivacy LetAppsAccessMicrophone = 2, 강제 거부)이 걸려 있으면 바꿔도
+    소용없으므로 바꾸지 않고 알립니다. Allow 인 곳은 건드리지 않습니다.
+    """
+    if winreg_mod is None:
+        if sys.platform != "win32":
+            return [], []
+        import winreg as winreg_mod  # noqa: N813
+    w = winreg_mod
+    base = "\\".join(_CONSENT)
+    changed: list[str] = []
+    problems: list[str] = []
+    try:
+        with w.OpenKey(w.HKEY_LOCAL_MACHINE,
+                       "SOFTWARE\\Policies\\Microsoft\\Windows\\AppPrivacy") as k:
+            forced, _ = w.QueryValueEx(k, "LetAppsAccessMicrophone")
+        if int(forced) == 2:
+            return [], ["그룹 정책이 마이크를 강제로 막고 있습니다(LetAppsAccessMicrophone = 2). "
+                        "학교 전산 담당자에게 해제를 요청해야 합니다."]
+    except OSError:
+        pass
+    for root, sub, label in ((w.HKEY_LOCAL_MACHINE, base, "이 PC 전체의 마이크 액세스"),
+                             (w.HKEY_CURRENT_USER, base, "이 사용자의 앱 마이크 액세스"),
+                             (w.HKEY_CURRENT_USER, base + "\\NonPackaged",
+                              "데스크톱 앱의 마이크 액세스")):
+        try:
+            with w.OpenKey(root, sub) as k:
+                value, _ = w.QueryValueEx(k, "Value")
+        except OSError:
+            continue
+        if str(value).lower() != "deny":
+            continue
+        try:
+            with w.OpenKey(root, sub, 0, w.KEY_SET_VALUE) as k:
+                w.SetValueEx(k, "Value", 0, w.REG_SZ, "Allow")
+            changed.append(label)
+        except PermissionError:
+            problems.append(f"{label}: 관리자 권한이 있어야 켤 수 있습니다 — 관리자로 "
+                            "scripts\\setup.bat 을 실행하거나 설정 > 개인 정보 및 보안 > 마이크 에서 켜세요")
+        except OSError as exc:
+            problems.append(f"{label}: 켜지 못했습니다({exc})")
+    return changed, problems
+
+
 def mic_permission_denied() -> bool | None:
     """Windows 마이크 권한이 꺼져 있나(데스크톱 앱 포함). 모르면 None.
 

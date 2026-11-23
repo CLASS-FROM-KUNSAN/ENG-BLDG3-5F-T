@@ -19,6 +19,12 @@
 
 - **ffmpeg 가 있으면 저절로 같은 장치를 ffmpeg DirectShow 로 엽니다.** 로그에
   `→ 같은 장치를 ffmpeg(DirectShow)로 엽니다` 가 찍힙니다.
+- ffmpeg 도 안 되면 SoX(Windows `waveaudio`), 리눅스는 arecord 까지 차례로 시도합니다.
+  녹음 중 끊겨도 다음 방법으로 이어 받고 끊긴 시간은 무음으로 채웁니다(화면과 안 어긋남).
+  녹음이 끝나면 로그에 `녹음 중 방법을 바꿨습니다 … soundcard 끊김 → ffmpeg DirectShow 로 엶`
+  처럼 무엇이 있었는지 남습니다.
+- 마이크 권한이 꺼져 있으면 녹화가 알리고 켭니다(이 사용자 항목). 이 PC 전체 항목은
+  관리자 권한이 필요합니다. 직접: `python -m syncnote devices --allow-mic`
 - 처음부터 ffmpeg 로 열게 고정하려면 `[recording.audio] backend = "dshow"`.
 - 마이크 권한은 짐작하지 않고 Windows 설정을 실제로 읽어, 꺼져 있을 때만 권한을 안내합니다.
 - 최대레벨이 -60 dB(0.001) 아래면 "아주 작음" 경고가 나옵니다 — 단자에 아무것도 안

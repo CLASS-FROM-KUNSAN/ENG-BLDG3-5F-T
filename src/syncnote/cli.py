@@ -242,10 +242,34 @@ def _doctor(args, rep: dict) -> int:
 
 
 # ---------------------------------------------------------------------------
+def _allow_mic() -> int:
+    """Windows 마이크 권한을 확인하고 꺼져 있으면 켭니다(devices --allow-mic, setup 에서 부름)."""
+    from .recorder import devices
+
+    denied = devices.mic_permission_denied()
+    if denied is None:
+        print("마이크 권한: 확인할 수 없습니다(Windows 가 아니거나 설정이 없음).")
+        return 0
+    if not denied:
+        print("마이크 권한: 켜져 있습니다.")
+        return 0
+    print("마이크 권한: 꺼져 있습니다 — 켭니다.")
+    changed, problems = devices.enable_mic_permission()
+    for c in changed:
+        print(f"  [OK] {c} 를 켰습니다.")
+    for p in problems:
+        print(f"  [X] {p}")
+    still = devices.mic_permission_denied()
+    print("마이크 권한: " + ("아직 꺼진 곳이 있습니다." if still else "이제 켜져 있습니다."))
+    return 1 if still else 0
+
+
 def cmd_devices(args) -> int:
     from .recorder.devices import describe
     from .recorder.monitors import enumerate_monitors
 
+    if getattr(args, "allow_mic", False):
+        return _allow_mic()
     if getattr(args, "json", False):
         print(_devices_json(enumerate_monitors, probe=getattr(args, "probe", False)))
         return 0
@@ -2088,6 +2112,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="결과를 JSON 한 줄로(시간표 편집기용)")
     p.add_argument("--probe", action="store_true",
                    help="--json 과 함께: 마이크를 1초씩 열어 소리가 들어오는지 잼(저장 안 함)")
+    p.add_argument("--allow-mic", action="store_true",
+                   help="Windows 마이크 권한이 꺼져 있으면 켬(이 PC 전체 항목은 관리자 권한 필요)")
     p.set_defaults(func=cmd_devices)
 
     p = sub.add_parser("secrets", help="비밀번호/토큰 관리")

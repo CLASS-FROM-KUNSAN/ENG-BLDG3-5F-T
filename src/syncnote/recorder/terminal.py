@@ -497,8 +497,41 @@ def record_once(plan: Plan, out_dir: Path, *, pattern: str = "record_%Y%m%d_%H%M
         except Exception as exc:
             log.warning("[silero-vad] 녹음 중 오류(%s), CLI 백엔드로 폴백합니다.", exc)
 
-    backend, cmd = build(plan, out, found=found)
+    found = available() if found is None else found
+    for backend, cmd, path in _attempts(plan, out, found):
+        got = _run_one(backend, cmd, path, plan)
+        if got is not None:
+            return got
+        path.unlink(missing_ok=True)                 # 빈 파일·반쪽 파일은 지우고 다음 도구로
+    log.error("녹음 도구를 모두 시도했지만 파일을 만들지 못했습니다. 장치 이름과 도구 설치를 확인하세요"
+              "(python -m syncnote audio tools).")
+    return None
 
+
+def _attempts(plan: Plan, out: Path, found: dict[str, str | None]):
+    """(도구, 명령, 파일) 을 시도할 순서대로. 고른 도구가 먼저, 안 되면 나머지 중 이 녹음을
+    만들 수 있는 도구(설치돼 있고 이 OS·형식·소리 감지를 지원)로 — 정규화 롤백.
+
+    사용자가 도구를 직접 골랐으면(backend 가 auto 가 아님) 그 도구만 씁니다.
+    """
+    first, cmd = build(plan, out, found=found)
+    yield first, cmd, out
+    if plan.backend != "auto":
+        return
+    for name in ("ffmpeg", "sox", "arecord"):
+        if name == first or not found.get(name):
+            continue
+        alt_out = unique_path(out)
+        try:
+            alt_cmd = BUILDERS[name](plan, alt_out, exe=found[name])
+        except TerminalAudioError as exc:
+            log.debug("[%s] 이 녹음에는 못 씀: %s", name, exc)
+            continue
+        log.warning("[%s] 로 다시 녹음합니다(앞 도구가 파일을 만들지 못함).", name)
+        yield name, alt_cmd, alt_out
+
+
+def _run_one(backend: str, cmd: list[str], out: Path, plan: Plan) -> Path | None:
     log.info("[%s] 녹음 시작 -> %s", backend, out)
     log.debug("실행: %s", subprocess.list2cmdline(cmd))
     # 소리 감지 녹음은 첫 소리가 언제 날지 모릅니다. 상한(trim)이 걸려
@@ -511,16 +544,20 @@ def record_once(plan: Plan, out_dir: Path, *, pattern: str = "record_%Y%m%d_%H%M
     except subprocess.TimeoutExpired:
         log.error("[%s] %.0f초가 지나도 끝나지 않아 멈췄습니다.", backend, timeout or 0)
         code = -1
+    except FileNotFoundError as exc:
+        log.error("[%s] 실행 파일을 찾지 못했습니다: %s", backend, exc)
+        return None
     except KeyboardInterrupt:
-        # 같은 콘솔의 자식도 Ctrl+C 를 받아 파일을 닫고 끝납니다.
+        # 같은 콘솔의 자식도 Ctrl+C 를 받아 파일을 닫고 끝납니다. 사람이 멈춘 것이라
+        # 다른 도구로 다시 녹음하지 않습니다.
         log.info("[%s] 사용자가 멈췄습니다. 받은 데까지 저장합니다.", backend)
-        code = 0
         if not out.exists() or out.stat().st_size == 0:
             raise
+        code = 0
     elapsed = time.monotonic() - started
 
     if not out.exists() or out.stat().st_size == 0:
-        log.error("[%s] 파일이 만들어지지 않았습니다(code %s). 장치 이름을 확인하세요.", backend, code)
+        log.error("[%s] 파일이 만들어지지 않았습니다(code %s).", backend, code)
         return None
     if code not in (0, None):
         log.warning("[%s] 종료 코드 %s. 받은 파일은 남겨 둡니다: %s", backend, code, out)
