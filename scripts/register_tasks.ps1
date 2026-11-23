@@ -11,6 +11,8 @@
       EclassSync      - 지정한 간격마다 Eclass 자료 수집
       RecordSchedule  - 로그온 시 시작해 시간표대로 녹화
       RecordWatch     - 로그온 시 시작해 지정 프로그램 감지
+      RecordGuard     - 로그온 시 시작해(15분마다 다시 확인) 녹화 중이 아닐 때 녹화 파일을
+                        확인하고 못 올린 것을 올림 (config.toml 의 [recording.guard])
       TranscribeQueue - 밤마다 밀린 전사 처리
       HomeBackup      - 매일 홈 폴더를 GitHub 릴리스에 백업 (config.toml 의 backup.home.enabled)
       HomePrune       - 매일 백업이 확인된 홈 파일 정리 (config.toml 의 backup.home.prune.enabled)
@@ -71,7 +73,7 @@ function Assert-Admin {
 }
 
 function Remove-All {
-    foreach ($name in @("EclassSync","RecordSchedule","RecordWatch","TranscribeQueue","HomeBackup","HomePrune","TerminalAudio","StreamSchedule")) {
+    foreach ($name in @("EclassSync","RecordSchedule","RecordWatch","RecordGuard","TranscribeQueue","HomeBackup","HomePrune","TerminalAudio","StreamSchedule")) {
         if (Get-ScheduledTask -TaskPath "$Folder\" -TaskName $name -ErrorAction SilentlyContinue) {
             Unregister-ScheduledTask -TaskPath "$Folder\" -TaskName $name -Confirm:$false
             Write-Host "  삭제: $Folder\$name"
@@ -143,6 +145,16 @@ if (-not $SkipWatch) {
     Register-One "RecordWatch" (New-HiddenAction "record_watch.bat" @()) $t `
         "Zoom 등 지정한 프로그램이 실행되면 자동으로 녹화합니다."
 }
+
+# --- 녹화 지킴이 ---
+# 로그온 때 띄우고, 15분마다 다시 띄웁니다(이미 돌고 있으면 IgnoreNew 로 새로 안 띄움).
+# 꺼졌다 켜진 뒤·작업이 12시간 제한으로 끝난 뒤에도 다시 살아나게 하려는 것입니다.
+$t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$t.Delay = "PT4M"
+$t.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+        -RepetitionInterval (New-TimeSpan -Minutes 15)).Repetition
+Register-One "RecordGuard" (New-HiddenAction "record_guard.bat" @()) $t `
+    "녹화 중이 아닐 때 녹화 파일을 확인하고(꺼진 녹화 합치기·망가진 파일 다시 만들기) 못 올린 것을 올립니다."
 
 # --- 야간 전사 ---
 $t = New-ScheduledTaskTrigger -Daily -At $TranscribeTime

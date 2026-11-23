@@ -180,6 +180,19 @@ DEFAULTS: dict[str, Any] = {
             "watch_interval_sec": 15,
             "watch_stop_grace_sec": 60,
         },
+        "upload": {
+            # 녹화를 public 저장소에 올리지 않는 안전장치. 기본은 끔(올림) —
+            # 강의실 PC 의 녹화 저장소가 public 으로 운영되기 때문입니다.
+            "block_public": False,
+        },
+        # record guard: 녹화 중이 아닐 때 늘 '정상 파일 → 업로드 → 원격 확인' 으로 모음
+        "guard": {
+            "enabled": True,
+            "interval_minutes": 5,
+            "quiet_before_class_minutes": 10,
+            "max_attempts": 6,
+            "verify_remote": True,
+        },
         "timetable": [],
         # 시간이 겹치는 수업: merge(하나로 이어서, 기본) / first(앞 수업 우선) / last(뒤 수업 우선)
         "overlap": "merge",
@@ -672,6 +685,7 @@ def problems(cfg: Config) -> list[str]:
     _positive(cfg, "github.split_size_mb", errors)
     _positive(cfg, "recording.video.fps", errors)
     _positive(cfg, "recording.max_duration_minutes", errors)
+    _positive(cfg, "recording.guard.interval_minutes", errors)
     _positive(cfg, "recording.segment_minutes", errors, allow_zero=True)
     _positive(cfg, "eclass.request_delay_sec", errors, allow_zero=True)
     _positive(cfg, "transcribe.realtime.chunk_sec", errors)
