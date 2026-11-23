@@ -393,3 +393,47 @@ def test_record_once_falls_back_when_vad_unavailable(tmp_path, monkeypatch):
     assert res is not None
     assert recorded_with_cmd, "Silero VAD 가 없을 때 SoX CLI 백엔드로 정상 폴백되어야 합니다"
 
+
+
+# -- 도구가 실패하면 다음 도구로(정규화 롤백) ------------------------------------------
+class _Run:
+    def __init__(self, works: set[str]):
+        self.works, self.calls = works, []
+
+    def __call__(self, cmd, **_kw):
+        import types
+
+        tool = Path(cmd[0]).stem
+        self.calls.append(tool)
+        out = next(Path(a) for a in cmd if str(a).endswith(".wav"))   # sox 는 끝에 trim 0 5
+        if tool in self.works:
+            out.write_bytes(b"RIFF....data")
+            return types.SimpleNamespace(returncode=0)
+        out.write_bytes(b"")                       # ffmpeg 가 빈 파일만 남기고 실패
+        return types.SimpleNamespace(returncode=1)
+
+
+def test_failed_tool_rolls_back_to_the_next(tmp_path, monkeypatch):
+    run = _Run({"sox"})
+    monkeypatch.setattr(t.subprocess, "run", run)
+    found = {"ffmpeg": "ffmpeg", "sox": "sox", "arecord": None}
+    got = t.record_once(plan(backend="auto", seconds=5, fmt="wav", device="마이크"),
+                        tmp_path, found=found)
+    assert run.calls == ["ffmpeg", "sox"] and got is not None and got.stat().st_size > 0
+    assert [p.name for p in tmp_path.iterdir()] == [got.name]      # 빈 파일은 지움
+
+
+def test_chosen_tool_is_not_replaced(tmp_path, monkeypatch):
+    run = _Run(set())
+    monkeypatch.setattr(t.subprocess, "run", run)
+    got = t.record_once(plan(backend="ffmpeg", seconds=5, fmt="wav", device="마이크"),
+                        tmp_path, found={"ffmpeg": "ffmpeg", "sox": "sox", "arecord": None})
+    assert got is None and run.calls == ["ffmpeg"]                 # 사람이 고른 도구만
+
+
+def test_all_tools_fail_returns_none(tmp_path, monkeypatch):
+    run = _Run(set())
+    monkeypatch.setattr(t.subprocess, "run", run)
+    got = t.record_once(plan(backend="auto", seconds=5, fmt="wav", device="마이크"),
+                        tmp_path, found={"ffmpeg": "ffmpeg", "sox": "sox", "arecord": None})
+    assert got is None and run.calls == ["ffmpeg", "sox"] and list(tmp_path.iterdir()) == []

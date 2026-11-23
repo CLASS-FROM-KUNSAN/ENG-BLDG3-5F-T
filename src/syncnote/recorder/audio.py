@@ -62,6 +62,9 @@ class TrackResult:
     # '모두 동시에 무음인가' 를 판단하는 데 씁니다. 트랙 하나만 보면
     # 안 됩니다 — 마이크만 조용한 것은 아주 흔한 일입니다.
     silent_for: float = 0.0
+    # 녹음 중 방법을 바꾼 기록(soundcard → ffmpeg → SoX …)과 끊긴 동안 채운 무음(초)
+    events: list = field(default_factory=list)
+    filled_sec: float = 0.0
 
     @property
     def seconds(self) -> float:
@@ -153,7 +156,8 @@ class AudioTrack(threading.Thread):
             with open_recording(self.source, samplerate=self.samplerate,
                                 channels=self.channels, blocksize=BLOCK_FRAMES,
                                 prefer_dshow=self.prefer_dshow,
-                                on_fallback=switched) as rec:
+                                on_fallback=switched, resilient=True) as rec:
+                self._rr = rec
                 self.result.started_at = time.time()
                 log.info("[%s] 녹음 시작: %s -> %s",
                          self.track_name, self.device_label, self.out_path.name)
@@ -203,9 +207,16 @@ class AudioTrack(threading.Thread):
                             pass  # 실시간 전사가 밀리면 버립니다. 녹음이 우선입니다.
 
         except Exception as exc:
-            self.result.error = str(exc)
+            self.result.error = str(exc) or type(exc).__name__
             log.exception("[%s] 녹음 중 오류", self.track_name)
         finally:
+            rr = getattr(self, "_rr", None)
+            if rr is not None:
+                self.result.events = list(rr.events)
+                self.result.filled_sec = float(rr.filled_sec)
+                if rr.filled_sec > 0 or len(rr.events) > 1:
+                    log.warning("[%s] 녹음 중 방법을 바꿨습니다(끊긴 %.1f초는 무음으로 채워 시간을 "
+                                "맞춤): %s", self.track_name, rr.filled_sec, " → ".join(rr.events))
             try:
                 wav.close()
             except Exception:
