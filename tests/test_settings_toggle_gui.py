@@ -1,5 +1,7 @@
 """설정 창: 스위치 옆 켬/끔 설명 + 예시 파일이 바뀌면 바로 반영."""
 
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("PySide6")
@@ -105,3 +107,44 @@ def test_cp949_config_is_read_and_flagged():
     text, note = S.decode('[a]\nname = "강의실"\n'.encode("cp949"))
     assert 'name = "강의실"' in text and "cp949" in note
     assert S.decode(b"[a]\nx = 1\n") == ("[a]\nx = 1\n", "")
+
+
+# -- 값이 어긋날 때: '읽을 수 없습니다' 대신 원문 · 코드 근거 · 추측 · 교차검증 ------------
+_REAL = Path(__file__).resolve().parents[1] / "config.example.toml"
+
+
+def _real(tmp_path, example=None, base=None):
+    text = example if example is not None else _REAL.read_text(encoding="utf-8")
+    return W.SettingsDialog(None, text, tmp_path / "config.toml", base)
+
+
+def test_wrong_kind_in_config_opens_and_explains_instead_of_crashing(app, tmp_path):
+    ex = _REAL.read_text(encoding="utf-8")
+    base = ex.replace("\nfps = 10", '\nfps = "10"', 1)          # 예전엔 여기서 TypeError 로 꺼짐
+    dlg = _real(tmp_path, base=base)
+    row = _row(dlg, "recording.video.fps")
+    text = row.mismatch.text()
+    assert not row.mismatch.isHidden()
+    assert "① 원문" in text and 'fps = "10"' in text
+    assert "config.py:" in text and "교차검증" in text
+    assert "읽을 수 없" not in text
+    assert row.editor.value() == 10                              # 숫자 칸에는 10 으로 보임
+    assert dlg.changes() == {}                                   # 손대기 전에는 파일 그대로
+    assert not row.fix_btn.isHidden()
+    row.fix_btn.click()
+    assert dlg.changes() == {"recording.video.fps": 10}
+
+
+def test_key_lost_to_a_broken_example_line_still_has_a_page(app, tmp_path):
+    ex = _REAL.read_text(encoding="utf-8").replace("\nfps = 10", "\nfps = 열", 1)
+    dlg = _real(tmp_path, example=ex)
+    assert "recording.video.fps" in dlg.ghost
+    assert "recording.video.fps" in [f.dotted for f in dlg._first_fields()]
+    row = _row(dlg, "recording.video.fps")
+    assert "fps = 열" in row.mismatch.text()
+    assert "<code>10</code> 인 것 같아요" in row.mismatch.text()
+
+
+def test_matching_example_and_code_flag_nothing(app, tmp_path):
+    dlg = _real(tmp_path)        # 설정 검사(빈 토큰 등)에 걸리는 것 말고, 코드와 어긋난 것은 없음
+    assert [f.dotted for f in dlg.fields if dlg.report_for(f) and not dlg.issues_for(f)] == []

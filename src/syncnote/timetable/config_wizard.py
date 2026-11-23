@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import settings_knowledge as K
 from .. import settings_schema as S
 
 if sys.version_info >= (3, 11):
@@ -107,6 +108,19 @@ class FieldRow(QFrame):
         self.note.setStyleSheet("color: #C0392B;")
         self.note.hide()
         lay.addWidget(self.note)
+        # 값이 어긋나면 '읽을 수 없습니다' 대신: 원문 · 코드가 아는 설정 · 추측 · 교차검증 부탁
+        self.mismatch = QLabel()
+        self.mismatch.setWordWrap(True)
+        self.mismatch.setTextFormat(Qt.TextFormat.RichText)
+        self.mismatch.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.mismatch.setStyleSheet("color: #7C2D12; background: #FFF7ED; padding: 6px;")
+        self.mismatch.hide()
+        lay.addWidget(self.mismatch)
+        self.fix_btn = QPushButton()
+        self.fix_btn.hide()
+        self.fix_btn.clicked.connect(self._apply_suggestion)
+        lay.addWidget(self.fix_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self._suggestion: Any = K.MISSING
         self.set_value(dlg.values[f.dotted], silent=True)
         self.restyle()
 
@@ -163,16 +177,26 @@ class FieldRow(QFrame):
         except tomllib.TOMLDecodeError:
             return _BAD
 
+    def _fit(self, v: Any) -> Any:
+        """입력 칸 종류와 다른 값(예: 숫자 칸에 "10")은 그 종류로 읽어 보이고, 안 되면 예시 값."""
+        like = self.field.value
+        if K.kind_ko(v) == K.kind_ko(like):
+            return v
+        c = K.coerce(v, like)
+        return like if c is K.MISSING else c
+
     def set_value(self, v: Any, silent: bool = False) -> None:
         k, w = self.field.kind, self.editor
         w.blockSignals(silent)
         try:
             if k == "bool":
-                w.setChecked(bool(v))
-            elif k in ("int", "float"):
-                w.setValue(v)
+                w.setChecked(bool(self._fit(v)))
+            elif k == "int":
+                w.setValue(int(self._fit(v)))
+            elif k == "float":
+                w.setValue(float(self._fit(v)))
             elif k == "list":
-                w.setPlainText("\n".join(str(x) for x in v))
+                w.setPlainText("\n".join(str(x) for x in self._fit(v)))
             elif k == "str":
                 w.setText(str(v))
             else:
@@ -209,6 +233,18 @@ class FieldRow(QFrame):
         self.set_value(self.field.value)
         self._changed()
 
+    def _apply_suggestion(self) -> None:
+        if self._suggestion is K.MISSING:
+            return
+        self.set_value(self._suggestion)
+        self._changed()
+
+    def typed_text(self) -> str:
+        w = self.editor
+        if isinstance(w, QPlainTextEdit):
+            return w.toPlainText()
+        return w.text() if isinstance(w, QLineEdit) else ""
+
     # -- 표시 -----------------------------------------------------------
     def restyle(self) -> None:
         v = self.dlg.values.get(self.field.dotted)
@@ -218,13 +254,22 @@ class FieldRow(QFrame):
         bad = v is _BAD
         off_default = v is not _BAD and v != self.field.value
         issues = self.dlg.issues_for(self.field)
-        color = "#C0392B" if (bad or issues) else ("#2F6FB5" if changed else "transparent")
+        rep = self.dlg.report_for(self.field, self)
+        color = ("#C0392B" if (bad or issues) else "#EA580C" if rep
+                 else "#2F6FB5" if changed else "transparent")
         self.setStyleSheet(f"#fieldRow {{ border-left: 4px solid {color}; }}")
         self.reset_btn.setVisible(off_default or bad)
         self._render_toggle()
-        msgs = (["값을 읽을 수 없습니다(형식 확인)"] if bad else []) + issues
-        self.note.setText("\n".join(f"⚠ {m}" for m in msgs))
-        self.note.setVisible(bool(msgs))
+        self.note.hide()
+        self.mismatch.setVisible(bool(rep))
+        self._suggestion = rep.suggestion if rep else K.MISSING
+        if rep:
+            self.mismatch.setText(K.html(rep))
+        show_fix = self._suggestion is not K.MISSING and self._suggestion != v
+        self.fix_btn.setVisible(show_fix)
+        if show_fix:
+            self.fix_btn.setText(f"추측한 값 {K.show(self._suggestion)} 넣어 보기 "
+                                 f"({rep.suggestion_why} — 확인 후 저장)")
 
 
 def _scalar(text: str) -> Any:
@@ -259,11 +304,9 @@ class SettingsDialog(QDialog):
         self.example_name = example_name
         self.text = example_text
         self.edit_mode = base_text is not None
+        self.base_original = base_text
         # 깨진 곳이 있어도 '읽을 수 없습니다' 로 멈추지 않습니다 — 깨진 곳만 빼고 읽고 알림.
-        self.sections, self.example_broken = S.parse_lenient(self.text)
-        self.cats = S.categories(self.sections)
-        self.fields = [f for s in self.sections for f in s.fields]
-        self.by_dotted = {f.dotted: f for f in self.fields}
+        self._load_example()
         self.base_note = base_note
         self.base_broken: list[S.Broken] = []
         if self.edit_mode:
@@ -279,6 +322,7 @@ class SettingsDialog(QDialog):
         self.fill_missing = fill_missing and bool(self.missing)
         self.values: dict[str, Any] = {f.dotted: self.base_value(f) for f in self.fields}
         self.problem_list: list[str] = []
+        self.bad_msgs: list[str] = []
         self.rows: dict[str, FieldRow] = {}
 
         self.setWindowTitle(f"설정 편집 — {self.target.name}" if self.edit_mode
@@ -381,6 +425,74 @@ class SettingsDialog(QDialog):
         first = self.tree.topLevelItem(0)
         self.tree.setCurrentItem(first)
 
+    # -- 예시 읽기 + 코드와 어긋남 ----------------------------------------
+    def _load_example(self) -> None:
+        """예시 본문을 깨진 곳만 빼고 읽고, 깨진 줄 때문에 빠진 설정 중 코드가 아는 것은
+        코드 기본값으로 자리를 만들어 둡니다(그 상세 페이지에서 원문·근거·추측을 보여 줌)."""
+        self.sections, self.example_broken = S.parse_lenient(self.text)
+        self.example_keys = {f.dotted for s in self.sections for f in s.fields}
+        self.ghost: dict[str, S.Broken] = {}
+        known = K.code_keys()
+        by_path = {s.path: s for s in self.sections}
+        for b in self.example_broken:
+            names: list[str] = []
+            for d in b.dropped:
+                if d.endswith(" 섹션 전체") and d.startswith("["):
+                    sec = d[1:d.index("]")]
+                    names += [k for k in known if k.rpartition(".")[0] == sec]
+                else:
+                    names.append(d)
+            for d in names:
+                if d in self.example_keys or d in self.ghost or d not in known:
+                    continue
+                sec, _, key = d.rpartition(".")
+                section = by_path.get(sec)
+                if section is None:
+                    section = S.Section(sec, f"[{sec}] — 예시 파일에서 읽지 못함", line=b.line)
+                    self.sections.append(section)
+                    by_path[sec] = section
+                section.fields.append(S.Field(
+                    sec, key, K.knowledge(d).default,
+                    f"{key} — ⚠ {self.example_name} {b.line}번째 줄을 읽지 못해 코드 기본값으로 "
+                    "보여 줍니다", line=b.line))
+                section.fields.sort(key=lambda f: f.line)
+                self.ghost[d] = b
+        self.cats = S.categories(self.sections)
+        self.fields = [f for s in self.sections for f in s.fields]
+        self.by_dotted = {f.dotted: f for f in self.fields}
+
+    def report_for(self, f: S.Field, row: FieldRow | None = None) -> K.Report:
+        """이 설정이 예시·config.toml·코드 사이에서 어긋난 것(없으면 빈 보고 = False)."""
+        origs: list[K.Original] = []
+        broken: list[tuple[str, S.Broken]] = []
+        b = self.ghost.get(f.dotted)
+        o = (K.original(self.example_name, self.text, b.line, b.end) if b
+             else K.original(self.example_name, self.text, f.line) if f.line else None)
+        if o:
+            origs.append(o)
+        if b:
+            broken.append((self.example_name, b))
+        if self.edit_mode and self.base_original is not None:
+            cb = next((x for x in self.base_broken if f.dotted in x.dropped), None)
+            if cb is not None:
+                broken.append((self.target.name, cb))
+                o = K.original(self.target.name, self.base_original, cb.line, cb.end)
+            else:
+                ln = K.locate(self.base_original, f.dotted)
+                o = K.original(self.target.name, self.base_original, ln) if ln else None
+            if o:
+                origs.append(o)
+        v = self.values.get(f.dotted, K.MISSING)
+        typed = None
+        if v is _BAD:
+            typed = row.typed_text() if row is not None else ""
+            v = K.MISSING
+        cur = v if self.edit_mode else K.MISSING
+        issues = [p for p in self.issues_for(f) if p not in self.bad_msgs]
+        return K.analyze(f.dotted, example_value=K.MISSING if b else f.value,
+                         example_keys=self.example_keys, current_value=cur, typed=typed,
+                         issues=issues, broken=broken, shown=v, originals=origs)
+
     # -- 깨진 곳 알림 -----------------------------------------------------
     @staticmethod
     def _broken_list(items: list[S.Broken], limit: int = 6) -> str:
@@ -450,10 +562,7 @@ class SettingsDialog(QDialog):
         self.text = new
         if not self.edit_mode:
             self.base = S.salvage(new)[0]
-        self.sections, self.example_broken = S.parse_lenient(self.text)
-        self.cats = S.categories(self.sections)
-        self.fields = [f for s in self.sections for f in s.fields]
-        self.by_dotted = {f.dotted: f for f in self.fields}
+        self._load_example()
         self.missing = [f.dotted for f in self.fields
                         if self.edit_mode and f.dotted not in self.base_vals]
         self.values = {f.dotted: keep.get(f.dotted, self.base_value(f)) for f in self.fields}
@@ -491,7 +600,9 @@ class SettingsDialog(QDialog):
             self.problem_list = S.problems(self.result_text())
         except S.SchemaError as exc:
             self.problem_list = [str(exc)]
-        self.problem_list += [f"{d} 의 값을 읽을 수 없습니다" for d in bad]
+        self.bad_msgs = [f"{d} 에 넣은 값이 코드가 기다리는 형식과 어긋납니다 — 그 항목의 설명을 보세요"
+                         for d in bad]
+        self.problem_list += self.bad_msgs
         self.check_list.clear()
         for p in self.problem_list:
             it = QListWidgetItem(f"⚠ {p}")
@@ -521,6 +632,9 @@ class SettingsDialog(QDialog):
             for f in S.fields_in(p, self.fields):
                 if f not in seen:
                     seen.append(f)
+        for f in self.fields:                 # 예시·config.toml·코드가 서로 어긋난 것
+            if f not in seen and self.report_for(f, self.rows.get(f.dotted)):
+                seen.append(f)
         return seen
 
     # -- 왼쪽 트리 ------------------------------------------------------
@@ -577,7 +691,7 @@ class SettingsDialog(QDialog):
         tag = item.data(0, Qt.ItemDataRole.UserRole) if item else FIRST
         if tag == FIRST:
             fs = self._first_fields()
-            return [("먼저 확인할 항목 — 설정 검사에 걸린 것", fs)] if fs else []
+            return [("먼저 확인할 항목 — 설정 검사에 걸렸거나 코드와 어긋난 것", fs)] if fs else []
         kind, name = tag
         secs = [s for s in self.sections if (s.top == name if kind == "cat" else s.path == name)]
         return [(f"{s.title}  [{s.path}]", s.fields) for s in secs]
