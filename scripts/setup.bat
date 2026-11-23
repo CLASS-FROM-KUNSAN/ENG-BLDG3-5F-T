@@ -43,7 +43,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [4/6] ffmpeg 확인 중...
+echo [4/6] 녹음 도구(ffmpeg, SoX) 확인 중...
 where ffmpeg >nul 2>&1
 if errorlevel 1 (
     if not exist "%REPO%\tools\ffmpeg\bin\ffmpeg.exe" (
@@ -55,6 +55,10 @@ if errorlevel 1 (
 ) else (
     echo       이미 설치돼 있습니다.
 )
+REM SoX: 녹음 방법 사슬(soundcard - ffmpeg - SoX)의 대체 경로이자 소리 감지 녹음 도구(필수).
+REM 있으면 그대로, 없으면 winget -> SourceForge 공식 zip(SHA-256 확인) 순으로 설치합니다.
+"%PY%" -m syncnote.sox_fetch --dest "%REPO%\tools"
+if errorlevel 1 echo       [!] SoX 를 설치하지 못했습니다. 위 이유를 보고 python -m syncnote.sox_fetch 로 다시 하세요.
 
 echo.
 echo [5/6] Tailscale 확인 중... (실시간 송출 링크를 엽니다)
@@ -86,6 +90,8 @@ if not exist "%REPO%\config.toml" (
 ) else (
     echo       config.toml 이 이미 있습니다. 건드리지 않습니다.
 )
+REM 마이크 권한이 꺼져 있으면 켭니다(이 PC 전체 항목은 관리자 권한이 있을 때만).
+"%PY%" -m syncnote devices --allow-mic
 
 echo.
 echo ======================================================
