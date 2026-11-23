@@ -66,6 +66,9 @@ setx SYNCNOTE_PYTHON "C:\Python312\python.exe"
 
 `tests/test_scripts.py` 가 1·6 을 검사합니다(스크립트·코드에서 직접 부르면 테스트 실패).
 
+> `.bat` 에는 ASCII 글자만 씁니다(한글 안내는 `scripts\msg\*.txt`). 이유와 방법은
+> [scripts 폴더 안내](SCRIPTS.md) 의 '규칙 1'.
+
 
 ---
 

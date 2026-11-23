@@ -1,0 +1,22 @@
+======================================================
+ 설치 완료. 이제 다음 순서로 진행하세요.
+======================================================
+
+ 1) config.toml 을 열어 설정을 고치세요.
+      - github.owner / github.repo
+      - eclass.username  (학번)
+      - recording.timetable  (시간표)
+
+ 2) 비밀번호와 토큰을 저장하세요.
+      scripts\set_password.bat
+
+ 3) 환경을 점검하세요.
+      scripts\doctor.bat
+
+ 4) 오디오 장치 이름을 확인해 config.toml 에 적으세요.
+      scripts\devices.bat
+
+ 5) 실시간 송출을 쓰려면 Tailscale 에 한 번 로그인하세요.
+      tailscale up
+    듣는 사람은 Tailscale 이 없어도 링크(토큰 포함)만 있으면 됩니다.
+

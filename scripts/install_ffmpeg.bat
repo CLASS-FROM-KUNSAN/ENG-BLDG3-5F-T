@@ -1,20 +1,21 @@
 @echo off
 REM =====================================================================
-REM  ffmpeg 설치.  setup.bat 이 ffmpeg 가 없을 때 부릅니다.
-REM  python -m syncnote.ffmpeg_fetch --auto 가 원인을 보며 차례로 시도합니다.
-REM    0) 이미 쓸 수 있는 ffmpeg 가 있으면 끝 (PATH·tools·winget·pip, 필요 기능 확인)
-REM    1) tools 에 가져다 둔 ffmpeg*.zip (USB 등 오프라인)
-REM    2) pip 의 imageio-ffmpeg (ffmpeg 동봉, 관리자 권한·winget 불필요)
-REM    3) winget install Gyan.FFmpeg (동의 질문 자동 'Y'). winget 이 없거나 정책으로
-REM       막혔으면 기록해 두고 다음부터 건너뜀 (--retry-skipped 로 다시)
-REM    4) 실제 릴리스 목록(GyanD/codexffmpeg)에서 새 버전부터. 해시·필요 기능 확인에
-REM       실패하면 이전 릴리스로 롤백. 디스크 부족이면 바로 멈춤
-REM    5) 다운로드 폴더의 ffmpeg*.zip
-REM    전부 실패하면 시도한 순서·이유와 '다음 할 일' 하나를 출력합니다.
-REM  파이썬조차 없으면: winget -> gyan.dev zip 을 PowerShell 로 직접 내려받음
-REM  winget 은 PATH 를 바꾸지만 지금 열린 창에는 반영되지 않습니다. 그래서
-REM  설치 결과는 PATH 가 아니라 winget 이 만든 파일 위치로 확인합니다
-REM  (syncnote 도 같은 위치를 찾으므로 창을 다시 열지 않아도 됩니다).
+REM  Install ffmpeg. setup.bat calls this when ffmpeg is missing.
+REM  python -m syncnote.ffmpeg_fetch --auto tries, by cause, in order:
+REM    0) an ffmpeg that already works (PATH, tools, winget, pip; features checked)
+REM    1) ffmpeg*.zip placed in tools (offline, e.g. from USB)
+REM    2) pip imageio-ffmpeg (bundled ffmpeg; no admin rights, no winget)
+REM    3) winget install Gyan.FFmpeg (agreement prompts answered). If winget is
+REM       missing or blocked by policy, remember it and skip next time
+REM       (--retry-skipped to try again)
+REM    4) the real release list (GyanD/codexffmpeg), newest first; on a hash or
+REM       feature-check failure roll back to the previous release; stop at once
+REM       when the disk is full
+REM    5) ffmpeg*.zip in the Downloads folder
+REM    If all fail it prints the order tried, the reasons and one next step.
+REM  Without any Python: winget -> gyan.dev zip downloaded with PowerShell.
+REM  winget changes PATH, but not in this window, so the result is checked by
+REM  the file winget created (syncnote looks there too; no new window needed).
 REM =====================================================================
 call "%~dp0_common.bat"
 set "URL=https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
@@ -24,15 +25,16 @@ set "WG_LINK=%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe"
 
 "%PY%" -m syncnote.ffmpeg_fetch --auto --dest "%DEST%"
 if not errorlevel 1 exit /b 0
-REM 9009 = 파이썬 없음 -> 파이썬 없이 되는 길(winget, PowerShell zip)로
+REM 9009 = no Python -> the ways that need no Python (winget, PowerShell zip)
 if errorlevel 9009 goto :nopython
-REM 시도한 순서·이유·다음 할 일은 위에서 이미 출력했습니다.
+REM The order tried, reasons and next step were printed above.
 pause & exit /b 1
 
 :nopython
 call :winget_found
 if not errorlevel 1 (
-    echo 이미 winget 으로 설치돼 있습니다: %WG_FOUND%
+    call "%~dp0_say.bat" ff_winget_already
+    echo %WG_FOUND%
     exit /b 0
 )
 
@@ -40,37 +42,37 @@ if not errorlevel 1 (
 
 where winget >nul 2>&1
 if errorlevel 1 (
-    echo winget 이 없습니다. 릴리스 목록에서 받습니다.
+    call "%~dp0_say.bat" ff_no_winget
     goto :release
 )
-echo winget 으로 ffmpeg 를 설치합니다... (약 250MB, 몇 분 걸립니다)
-REM --accept-*-agreements : 'Do you agree ...? [Y]' 질문에 모두 Y
-REM --source winget       : msstore 소스의 지역 동의 질문이 아예 나오지 않게
-REM --disable-interactivity : 그래도 남은 질문이 있으면 기다리지 않고 끝냄
+call "%~dp0_say.bat" ff_winget_install
+REM --accept-*-agreements   : answer Y to every 'Do you agree ...?' prompt
+REM --source winget         : no regional-agreement prompt from the msstore source
+REM --disable-interactivity : if any prompt is left, end instead of waiting
 call winget install --id Gyan.FFmpeg -e --source winget --silent --disable-interactivity --accept-source-agreements --accept-package-agreements
 call :winget_found
 if not errorlevel 1 (
-    echo 완료: %WG_FOUND%
-    echo   ^(다른 창에서 ffmpeg 명령을 쓰려면 그 창을 새로 여세요^)
+    call "%~dp0_say.bat" ff_done_at
+    echo %WG_FOUND%
+    call "%~dp0_say.bat" ff_new_window
     exit /b 0
 )
-echo [!] winget 설치가 끝나지 않았습니다. 릴리스 목록에서 받습니다.
+call "%~dp0_say.bat" ff_winget_unfinished
 
 :release
 "%PY%" -m syncnote.ffmpeg_fetch --dest "%DEST%"
 if not errorlevel 1 exit /b 0
-REM 9009 = 파이썬을 찾지 못함 -> 파이썬 없이 받는 길로
+REM 9009 = no Python found -> download without Python
 if errorlevel 9009 goto :zip
 goto :fail
 
 :zip
-echo 파이썬이 없어 PowerShell 로 내려받습니다.
-echo ffmpeg 를 내려받습니다... (약 110MB)
+call "%~dp0_say.bat" ff_ps_download
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "try { [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%URL%' -OutFile '%ZIP%' -UseBasicParsing } catch { Write-Host $_.Exception.Message; exit 1 }"
 if errorlevel 1 goto :fail
 
-echo 압축을 푸는 중...
+call "%~dp0_say.bat" ff_unzip
 if not exist "%DEST%" mkdir "%DEST%"
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "Expand-Archive -Path '%ZIP%' -DestinationPath '%DEST%\_ffmpeg_tmp' -Force"
@@ -83,24 +85,22 @@ rmdir /s /q "%DEST%\_ffmpeg_tmp" 2>nul
 del "%ZIP%" 2>nul
 
 if exist "%DEST%\ffmpeg\bin\ffmpeg.exe" (
-    echo 완료: %DEST%\ffmpeg\bin\ffmpeg.exe
+    call "%~dp0_say.bat" ff_done_at
+    echo %DEST%\ffmpeg\bin\ffmpeg.exe
 ) else (
-    echo [X] 압축 해제 후 ffmpeg.exe 를 찾지 못했습니다.
+    call "%~dp0_say.bat" ff_no_exe
     exit /b 1
 )
 exit /b 0
 
 :fail
 echo.
-echo [X] ffmpeg 를 받지 못했습니다. 직접 설치하세요:
-echo     1^) https://github.com/GyanD/codexffmpeg/releases 에서 *-essentials_build.zip 을 받습니다
-echo        ^(또는 %URL%^)
-echo     2^) 압축을 풀어 bin\ffmpeg.exe 가
-echo        %DEST%\ffmpeg\bin\ffmpeg.exe 가 되도록 둡니다
-echo     또는 PowerShell 에서: winget install Gyan.FFmpeg
+call "%~dp0_say.bat" ff_fail
+echo        %DEST%\ffmpeg\bin\ffmpeg.exe
+call "%~dp0_say.bat" ff_fail_winget
 pause & exit /b 1
 
-REM winget 이 만든 ffmpeg.exe 가 있으면 WG_FOUND 에 넣고 errorlevel 0
+REM If winget created ffmpeg.exe, put it in WG_FOUND and return errorlevel 0
 :winget_found
 set "WG_FOUND="
 if exist "%WG_LINK%" set "WG_FOUND=%WG_LINK%"

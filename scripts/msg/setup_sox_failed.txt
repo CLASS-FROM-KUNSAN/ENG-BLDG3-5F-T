@@ -1,0 +1,1 @@
+      [!] SoX 를 설치하지 못했습니다. 위 이유를 보고 python -m syncnote.sox_fetch 로 다시 하세요.

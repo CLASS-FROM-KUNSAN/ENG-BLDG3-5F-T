@@ -1,13 +1,16 @@
 @echo off
-REM 녹화/자료가 저장된 폴더를 엽니다.
+REM Open the folder where recordings and materials are stored.
 call "%~dp0_common.bat"
-REM _common.bat 이 PYTHONPATH 를 이미 잡아 줍니다. 여기서 sys.path 를
-REM 또 건드리면 r%REPO%\src 가 rC:\repo\src 로 펼쳐져 SyntaxError 입니다
-REM (raw 문자열 접두사 r 뒤에는 따옴표가 와야 합니다).
+REM _common.bat already sets PYTHONPATH. Touching sys.path here again would expand
+REM r%REPO%\src into rC:\repo\src, a SyntaxError (a raw prefix r needs a quote).
 for /f "usebackq delims=" %%P in (`"%PY%" -c "from syncnote import config;print(config.load().data_dir)"`) do set "DATA=%%P"
 if not defined DATA (
-    echo 설정을 읽지 못했습니다. doctor.bat 을 먼저 돌려 보세요.
+    call "%~dp0_say.bat" odf_no_config
     pause
     exit /b 1
 )
-if exist "%DATA%" (start "" explorer "%DATA%") else (echo 폴더가 아직 없습니다: %DATA% & pause)
+if exist "%DATA%" (start "" explorer "%DATA%") else (
+    call "%~dp0_say.bat" odf_missing
+    echo %DATA%
+    pause
+)
