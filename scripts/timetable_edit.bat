@@ -3,6 +3,8 @@ call "%~dp0_common.bat"
 REM  시간표 편집기(GUI). 저장하면 config.toml 의 [[recording.timetable]] 이 바뀝니다.
 REM  PySide6 가 없으면 이유를 알려 주고, 원하면 그 자리에서 설치합니다.
 REM  주의: 아래 if 블록 안의 echo 에는 괄호를 쓰지 마세요. cmd 가 블록 끝으로 읽습니다.
+REM  파이썬이 어디에도 없으면 PySide6 를 묻기 전에 그 안내부터 — 설치해도 소용없습니다.
+if "%PY%"=="%~dp0_no_python.bat" (call "%PY%" & goto :done)
 "%PY%" -c "import PySide6.QtWidgets, PySide6.QtUiTools" >nul 2>&1
 if errorlevel 1 (
     echo.

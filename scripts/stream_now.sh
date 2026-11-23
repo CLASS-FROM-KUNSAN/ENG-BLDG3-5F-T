@@ -18,10 +18,7 @@ export PYTHONIOENCODING=utf-8
 export PYTHONDONTWRITEBYTECODE=1
 [ -f "$REPO/config.toml" ] && export SYNCNOTE_CONFIG="$REPO/config.toml"
 
-if [ -x "$REPO/.venv/bin/python" ]; then
-    PY="$REPO/.venv/bin/python"
-else
-    PY=$(command -v python3 || command -v python)
-fi
+# 파이썬은 _find_python.sh 한 곳에서(SYNCNOTE_PYTHON -> python3 -> python -> py, 실제 실행 확인)
+. "$REPO/scripts/_find_python.sh"
 
 exec "$PY" -m syncnote stream start "$@"
