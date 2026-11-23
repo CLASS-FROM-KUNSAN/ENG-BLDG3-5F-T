@@ -240,18 +240,30 @@ class RecordingSession:
                         "시스템 소리와 화면만 녹화합니다.")
             return
         if all(p.dead for p in probes):
-            # 하나만 0 이면 장치 문제, 전부 0 이면 권한 문제입니다.
-            # 이 둘을 한 문장에 섞으면 고칠 곳을 알 수 없습니다.
-            log.error(
-                "마이크 %d개가 전부 신호 0 입니다(%s). 장치 문제가 아니라 "
-                "Windows 설정 > 개인 정보 및 보안 > 마이크 > '데스크톱 앱이 "
-                "마이크에 액세스하도록 허용' 이 꺼져 있을 가능성이 큽니다. "
-                "그래도 '%s' 로 시도는 합니다.",
-                len(probes), ", ".join(p.name for p in probes[:3]),
-                getattr(mic, "name", "(없음)"),
-            )
+            # '열지 못함' 과 '열었는데 정확히 0' 은 고칠 곳이 다릅니다. 권한은 짐작하지 않고
+            # 실제 설정을 읽어서만 말합니다(강의실 PC: 권한은 Allow 인데 라이브러리가 장치
+            # 형식을 못 받아 열지 못한 것을 '권한이 꺼져 있을 가능성' 이라고 안내했음).
+            for p in probes:
+                log.error("마이크 '%s': %s", p.name,
+                          f"열지 못했습니다 — {p.error}" if p.error else "열었지만 신호가 정확히 0")
+            denied = devices.mic_permission_denied()
+            if denied:
+                log.error("Windows 설정 > 개인 정보 및 보안 > 마이크 > '데스크톱 앱이 마이크에 "
+                          "액세스하도록 허용' 이 꺼져 있습니다. 켜야 마이크가 녹음됩니다.")
+            elif any(p.peak == 0.0 and not p.error for p in probes):
+                log.error("마이크 권한은 켜져 있습니다%s. 정확히 0 이면 가상 장치·음소거·"
+                          "단자에 아무것도 연결되지 않은 경우입니다.",
+                          "" if denied is False else "(확인 못 함)")
+            log.error("그래도 '%s' 로 시도는 합니다.", getattr(mic, "name", "(없음)"))
             return
         chosen = probes[-1]
+        if chosen.via:
+            log.warning("마이크 '%s' 는 soundcard 가 열지 못해 %s 로 엽니다.",
+                        chosen.name, chosen.via)
+        if chosen.faint:
+            log.warning("마이크 '%s' 의 소리가 아주 작습니다(최대레벨 %.5f, -60 dB 아래) — "
+                        "단자에 마이크가 꽂혀 있지 않거나 입력 볼륨이 0 에 가깝습니다.",
+                        chosen.name, chosen.peak)
         if len(probes) == 1:
             log.info("마이크: '%s' (최대레벨 %.5f)", chosen.name, chosen.peak)
             return
@@ -465,6 +477,7 @@ class RecordingSession:
                 realtime_source=str(cfg.get("transcribe.source_track", "system")),
                 mic_source=self._resolve_mic(),
                 vad_detector=self._vad_detector,
+                backend=str(cfg.get("recording.audio.backend", "soundcard")),
             )
             audio_rec.start(stem)
         # 녹화 일지: 컴퓨터가 녹화 중에 꺼지면 다음 시작 때 이것으로 조각을 합쳐 올립니다.

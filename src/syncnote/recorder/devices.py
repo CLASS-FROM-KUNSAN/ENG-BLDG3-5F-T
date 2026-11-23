@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -167,6 +168,15 @@ class ProbeResult:
     name: str
     peak: float
     error: str | None = None
+    via: str = ""            # "ffmpeg DirectShow" — soundcard 가 못 열어 대체 경로로 잰 경우
+
+    # 이보다 작으면(-60 dBFS) 아무것도 꽂히지 않은 단자의 전기 잡음 수준입니다.
+    # 강의실 PC 메인보드 단자(비어 있음) 실측: 최대 -68.7 dB(0.00037).
+    FAINT = 1e-3
+
+    @property
+    def faint(self) -> bool:
+        return self.error is None and 0.0 < self.peak < self.FAINT
 
     @property
     def dead(self) -> bool:
@@ -189,11 +199,14 @@ def probe_mic(mic, *, duration_sec: float = 1.5,
     """
     import numpy as np
 
+    from .dshow_mic import open_recording
+
     name = str(getattr(mic, "name", "") or "(이름 없음)")
     peak = 0.0
+    via = []
     try:
-        with mic.recorder(samplerate=samplerate, channels=channels,
-                          blocksize=4096) as rec:
+        with open_recording(mic, samplerate=samplerate, channels=channels, blocksize=4096,
+                            on_fallback=lambda _alt, _why: via.append("ffmpeg DirectShow")) as rec:
             deadline = time.monotonic() + float(duration_sec)
             while time.monotonic() < deadline:
                 data = rec.record(numframes=4096)
@@ -201,8 +214,37 @@ def probe_mic(mic, *, duration_sec: float = 1.5,
                     continue
                 peak = max(peak, float(np.max(np.abs(data))))
     except Exception as exc:
-        return ProbeResult(name, 0.0, str(exc))
-    return ProbeResult(name, peak)
+        # 빈 AssertionError 는 str() 이 "" — 원인이 로그에서 사라져 '신호 0' 으로 오인됐음
+        return ProbeResult(name, 0.0, str(exc) or type(exc).__name__, "".join(via))
+    return ProbeResult(name, peak, None, "".join(via))
+
+
+def mic_permission_denied() -> bool | None:
+    """Windows 마이크 권한이 꺼져 있나(데스크톱 앱 포함). 모르면 None.
+
+    '전부 0 이면 권한' 이라고 짐작하던 것을, 실제 설정을 읽어 확인합니다
+    (강의실 PC 는 권한이 Allow 인데 '권한이 꺼져 있을 가능성' 이라고 안내했음).
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+    except ImportError:
+        return None
+    base = "\\".join(("Software", "Microsoft", "Windows", "CurrentVersion",
+                       "CapabilityAccessManager", "ConsentStore", "microphone"))
+    found = False
+    for root, sub in ((winreg.HKEY_LOCAL_MACHINE, base), (winreg.HKEY_CURRENT_USER, base),
+                      (winreg.HKEY_CURRENT_USER, base + "\\NonPackaged")):
+        try:
+            with winreg.OpenKey(root, sub) as k:
+                value, _ = winreg.QueryValueEx(k, "Value")
+        except OSError:
+            continue
+        found = True
+        if str(value).lower() == "deny":
+            return True
+    return False if found else None
 
 
 def select_working_mic(*, duration_sec: float = 1.5,

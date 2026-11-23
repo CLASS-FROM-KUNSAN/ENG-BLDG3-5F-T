@@ -88,6 +88,7 @@ class AudioTrack(threading.Thread):
         device_label: str = "",
         tap: queue.Queue | None = None,
         vad_detector=None,
+        prefer_dshow: bool = False,
     ) -> None:
         super().__init__(name=f"audio-{name}", daemon=True)
         # 주의: 이 필드 이름을 `_stop` 으로 바꾸지 마세요.
@@ -112,6 +113,8 @@ class AudioTrack(threading.Thread):
         self.device_label = str(device_label or "(이름 미상)")
         self.tap = tap  # 실시간 전사로 흘려보낼 큐 (없으면 None)
         self.vad_detector = vad_detector
+        # recording.audio.backend = "dshow": 녹음 장치를 처음부터 ffmpeg DirectShow 로
+        self.prefer_dshow = bool(prefer_dshow)
         self._stop_event = threading.Event()
         self.result = TrackResult(name=name, path=self.out_path, samplerate=self.samplerate)
 
@@ -139,9 +142,18 @@ class AudioTrack(threading.Thread):
             wav.setsampwidth(2)  # int16
             wav.setframerate(self.samplerate)
 
-            with self.source.recorder(samplerate=self.samplerate,
-                                      channels=self.channels,
-                                      blocksize=BLOCK_FRAMES) as rec:
+            from .dshow_mic import open_recording
+
+            def switched(alt, why: str) -> None:
+                log.warning("[%s] %s → 같은 장치를 ffmpeg(DirectShow)로 엽니다: %s",
+                            self.track_name, why, alt.name)
+                self.device_label = f"{alt.name} (ffmpeg DirectShow)"
+
+            # soundcard 가 형식 문제로 못 여는 마이크(메인보드 단자 등)는 같은 장치를 ffmpeg 로
+            with open_recording(self.source, samplerate=self.samplerate,
+                                channels=self.channels, blocksize=BLOCK_FRAMES,
+                                prefer_dshow=self.prefer_dshow,
+                                on_fallback=switched) as rec:
                 self.result.started_at = time.time()
                 log.info("[%s] 녹음 시작: %s -> %s",
                          self.track_name, self.device_label, self.out_path.name)
@@ -260,6 +272,8 @@ class AudioRecorder:
     # 세그먼트마다 다시 고르면 그때마다 소리가 1.5초 빕니다.
     mic_source: object | None = None
     vad_detector: object | None = None
+    # "soundcard"(기본) | "dshow"(마이크를 처음부터 ffmpeg DirectShow 로). 시스템 소리는 늘 soundcard.
+    backend: str = "soundcard"
 
     tracks: list[AudioTrack] = field(default_factory=list)
 
@@ -297,6 +311,7 @@ class AudioRecorder:
                 device_label=_source_name(source, device_name),
                 tap=tap,
                 vad_detector=self.vad_detector,
+                prefer_dshow=(name == "mic" and self.backend == "dshow"),
             )
             self.tracks.append(track)
             track.start()

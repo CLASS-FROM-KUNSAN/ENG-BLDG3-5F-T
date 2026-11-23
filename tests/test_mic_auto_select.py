@@ -265,15 +265,38 @@ def test_the_system_track_is_never_replaced(tmp_path, monkeypatch):
 
 
 # --- 로그 ----------------------------------------------------------------
-def test_all_dead_blames_permissions_not_the_device(tmp_path, caplog):
-    """하나만 0 이면 장치 문제, 전부 0 이면 권한 문제입니다."""
+def test_all_dead_blames_permissions_only_when_they_are_really_off(tmp_path, caplog, monkeypatch):
+    """전부 0 이어도 권한 탓은 실제 설정이 Deny 일 때만(예전에는 짐작으로 권한을 지목했음)."""
     from syncnote.recorder.session import RecordingSession
 
     probes = [devices.ProbeResult("가상1", 0.0),
               devices.ProbeResult("가상2", 0.0)]
+    monkeypatch.setattr(devices, "mic_permission_denied", lambda: True)
     with caplog.at_level("ERROR", logger="syncnote"):
         RecordingSession._log_mic_choice(FakeMic("가상1"), probes)
     assert "개인 정보" in caplog.text and "마이크에 액세스" in caplog.text
+
+
+def test_all_dead_with_permission_on_does_not_blame_permission(caplog, monkeypatch):
+    """강의실 PC: 권한은 Allow 인데 '권한이 꺼져 있을 가능성' 이라고 안내했던 것."""
+    from syncnote.recorder.session import RecordingSession
+
+    monkeypatch.setattr(devices, "mic_permission_denied", lambda: False)
+    with caplog.at_level("ERROR", logger="syncnote"):
+        RecordingSession._log_mic_choice(FakeMic("가상1"), [devices.ProbeResult("가상1", 0.0)])
+    assert "마이크에 액세스" not in caplog.text
+    assert "권한은 켜져 있습니다" in caplog.text and "아무것도 연결되지 않은" in caplog.text
+
+
+def test_unopenable_mic_shows_the_reason_not_signal_zero(caplog, monkeypatch):
+    from syncnote.recorder.session import RecordingSession
+
+    monkeypatch.setattr(devices, "mic_permission_denied", lambda: False)
+    with caplog.at_level("ERROR", logger="syncnote"):
+        RecordingSession._log_mic_choice(
+            FakeMic("마이크(HD)"), [devices.ProbeResult("마이크(HD)", 0.0, "형식을 받지 못함")])
+    assert "열지 못했습니다 — 형식을 받지 못함" in caplog.text
+    assert "마이크에 액세스" not in caplog.text
 
 
 def test_a_replacement_says_what_to_put_in_the_config(tmp_path, caplog):

@@ -11,6 +11,19 @@
 
 ## 녹화
 
+### 마이크가 '녹음 중 오류 AssertionError' 로 안 열립니다(메인보드 마이크 단자)
+
+메인보드 마이크 단자(`마이크(High Definition Audio Device)` 등) 드라이버 중에는 Windows 공유
+모드 형식을 `IEEE_FLOAT`(포장 없음)으로 알려 주는 것이 있습니다. 녹음 라이브러리 soundcard 는
+`WAVE_FORMAT_EXTENSIBLE` 만 받아들여 이 장치를 열지 못합니다(권한 문제가 아닙니다).
+
+- **ffmpeg 가 있으면 저절로 같은 장치를 ffmpeg DirectShow 로 엽니다.** 로그에
+  `→ 같은 장치를 ffmpeg(DirectShow)로 엽니다` 가 찍힙니다.
+- 처음부터 ffmpeg 로 열게 고정하려면 `[recording.audio] backend = "dshow"`.
+- 마이크 권한은 짐작하지 않고 Windows 설정을 실제로 읽어, 꺼져 있을 때만 권한을 안내합니다.
+- 최대레벨이 -60 dB(0.001) 아래면 "아주 작음" 경고가 나옵니다 — 단자에 아무것도 안
+  꽂혔거나 입력 볼륨이 0 에 가까운 경우입니다.
+
 ### 소리가 하나도 안 들어갑니다
 
 가장 흔한 사고입니다. 순서대로 확인하세요.
