@@ -770,7 +770,9 @@ def test_reload_rereads_the_example_too(app, tmp_path, monkeypatch):
         dlg.close()
         example.write_text("[깨짐", encoding="utf-8")
         w.reload_from_disk()
-        assert w.example_text is None and "읽을 수 없습니다" in w.example_error
+        # 깨져도 '읽을 수 없습니다' 로 멈추지 않음 — 깨진 곳만 빼고 읽고, 어디가 왜인지 남김
+        assert w.example_text == "[깨짐" and not w.example_error
+        assert len(w.example_broken) == 1 and w.example_broken[0].dropped == ["[깨짐] 섹션 전체"]
     finally:
         w.undo.setClean()
         w.close()

@@ -250,7 +250,8 @@ class SettingsDialog(QDialog):
     def __init__(self, parent: QWidget | None, example_text: str, target: Path,
                  base_text: str | None = None,
                  example_name: str = "config.example.toml",
-                 fill_missing: bool = False, example_path: Path | None = None) -> None:
+                 fill_missing: bool = False, example_path: Path | None = None,
+                 base_note: str = "") -> None:
         super().__init__(parent)
         from .gui import ScreenKeeper  # 순환 import 피함
 
@@ -258,12 +259,20 @@ class SettingsDialog(QDialog):
         self.example_name = example_name
         self.text = example_text
         self.edit_mode = base_text is not None
-        self.base = base_text if base_text is not None else example_text
-        self.sections = S.parse(self.text)
+        # 깨진 곳이 있어도 '읽을 수 없습니다' 로 멈추지 않습니다 — 깨진 곳만 빼고 읽고 알림.
+        self.sections, self.example_broken = S.parse_lenient(self.text)
         self.cats = S.categories(self.sections)
         self.fields = [f for s in self.sections for f in s.fields]
         self.by_dotted = {f.dotted: f for f in self.fields}
-        self.base_vals = S.current_values(self.base) if self.edit_mode else {}
+        self.base_note = base_note
+        self.base_broken: list[S.Broken] = []
+        if self.edit_mode:
+            self.base_vals, self.base_broken, self.base = S.current_values_lenient(base_text)
+        else:
+            self.base_vals = {}
+            self.base = S.salvage(example_text)[0]
+        # 깨진 config.toml·다른 인코딩은 바뀐 값이 없어도 저장해야 고쳐집니다
+        self.repaired = bool(self.base_broken or base_note)
         # 편집 모드에서 이 파일에 없는 설정. fill_missing 이면 안 건드려도 예시 값으로 넣음.
         self.missing = [f.dotted for f in self.fields
                         if self.edit_mode and f.dotted not in self.base_vals]
@@ -297,6 +306,14 @@ class SettingsDialog(QDialog):
                        "(<code>python -m syncnote secrets set</code>).")
         intro.setWordWrap(True)
         lay.addWidget(intro)
+
+        self.broken_banner = QLabel()
+        self.broken_banner.setWordWrap(True)
+        self.broken_banner.setTextFormat(Qt.TextFormat.RichText)
+        self.broken_banner.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.broken_banner.setStyleSheet("color: #92400E; background: #FEF3C7; padding: 6px;")
+        lay.addWidget(self.broken_banner)
+        self._show_broken()
 
         # 예시 파일이 바뀌면(켬/끔 설명·항목 추가 등) 이 창에서 바로 반영할 수 있게 알림
         self.example_path = Path(example_path) if example_path else None
@@ -364,6 +381,33 @@ class SettingsDialog(QDialog):
         first = self.tree.topLevelItem(0)
         self.tree.setCurrentItem(first)
 
+    # -- 깨진 곳 알림 -----------------------------------------------------
+    @staticmethod
+    def _broken_list(items: list[S.Broken], limit: int = 6) -> str:
+        rows = "".join(f"<li>{_esc(b.describe())}</li>" for b in items[:limit])
+        more = f"<li>… 외 {len(items) - limit}곳</li>" if len(items) > limit else ""
+        return f"<ul style='margin:2px 0 0 -20px'>{rows}{more}</ul>"
+
+    def _show_broken(self) -> None:
+        parts = []
+        if self.example_broken:
+            parts.append(
+                f"<b>{_esc(self.example_name)}</b> 에서 {len(self.example_broken)}곳을 읽지 못해 "
+                f"<b>그 부분만 빼고</b> 불러왔습니다(나머지 설정 {len(self.fields)}개는 정상)."
+                + self._broken_list(self.example_broken)
+                + "그 줄을 고쳐 저장하면 이 창 위에 '새 설명 불러오기' 가 뜹니다.")
+        if self.base_broken:
+            parts.append(
+                f"<b>{_esc(self.target.name)}</b> 에서 {len(self.base_broken)}곳을 읽지 못했습니다. "
+                "나머지 값은 그대로 보여 줍니다. <b>저장</b> 하면 이 줄들은 원문 그대로 "
+                f"<code>{_esc(S.BROKEN_MARK.strip())}</code> 주석으로 남기고 파일을 다시 읽을 수 "
+                f"있게 고칩니다(원래 파일은 {_esc(self.target.name)}.bak). 빠진 설정은 예시 값으로 "
+                "보이니, 필요하면 여기서 다시 정하세요." + self._broken_list(self.base_broken))
+        if self.base_note:
+            parts.append(_esc(self.base_note))
+        self.broken_banner.setText("<br>".join(parts))
+        self.broken_banner.setVisible(bool(parts))
+
     # -- 예시 파일이 바뀜 -------------------------------------------------
     def _example_changed(self, *_a) -> None:
         """예시 파일이 바뀌었으면 알림만 띄웁니다(입력 중인 값을 갑자기 바꾸지 않음)."""
@@ -376,20 +420,24 @@ class SettingsDialog(QDialog):
         if new == self.text:
             return
         try:
-            n_new = sum(len(s.fields) for s in S.parse(new))
-        except S.SchemaError as exc:
+            secs, broken = S.parse_lenient(new)
+        except S.SchemaError as exc:              # 깨진 곳이 너무 많을 때만
             self._pending_example = None
             self.example_banner.setText(
-                f"<b>{_esc(self.example_name)}</b> 이 바뀌었는데 읽을 수 없습니다: {_esc(str(exc))}<br>"
+                f"<b>{_esc(self.example_name)}</b> 이 바뀌었는데 {_esc(str(exc))}<br>"
                 "그 파일을 고쳐 저장하면 다시 알려 드립니다. 지금 화면은 그대로 쓸 수 있습니다.")
             self.example_banner.show()
             self.reload_btn.hide()
             return
+        n_new = sum(len(s.fields) for s in secs)
         self._pending_example = new
+        tail = ("" if not broken else
+                f"<br>⚠ {len(broken)}곳은 읽지 못해 <b>그 부분만 빼고</b> 불러옵니다."
+                + self._broken_list(broken, limit=3))
         self.example_banner.setText(
             f"<b>{_esc(self.example_name)}</b> 이 바뀌었습니다(설정 {len(self.fields)}개 → {n_new}개). "
             "<b>새 설명 불러오기</b> 를 누르면 바뀐 항목·켬/끔 설명을 이 창에 반영합니다. "
-            "지금까지 고친 값은 그대로 둡니다.")
+            "지금까지 고친 값은 그대로 둡니다." + tail)
         self.example_banner.show()
         self.reload_btn.show()
 
@@ -401,8 +449,8 @@ class SettingsDialog(QDialog):
         keep = dict(self.values)
         self.text = new
         if not self.edit_mode:
-            self.base = new
-        self.sections = S.parse(self.text)
+            self.base = S.salvage(new)[0]
+        self.sections, self.example_broken = S.parse_lenient(self.text)
         self.cats = S.categories(self.sections)
         self.fields = [f for s in self.sections for f in s.fields]
         self.by_dotted = {f.dotted: f for f in self.fields}
@@ -415,6 +463,7 @@ class SettingsDialog(QDialog):
         self.revalidate()
         self.show_selected()
         self.reload_btn.hide()
+        self._show_broken()
         self.example_banner.setText(
             f"새 설명을 불러왔습니다(설정 {len(self.fields)}개). 고친 값은 그대로입니다.")
 

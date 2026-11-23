@@ -1573,8 +1573,9 @@ class TimetableWindow(QMainWindow):
         vals: dict = {}
         if self.path.exists():
             try:
-                vals = settings_schema.current_values(M.read_text(self.path))
-            except (OSError, UnicodeDecodeError, settings_schema.SchemaError):
+                text, _note = settings_schema.decode(self.path.read_bytes())
+                vals = settings_schema.current_values_lenient(text)[0]   # 깨진 곳만 빼고
+            except (OSError, settings_schema.SchemaError):
                 vals = {}
         rec = config_module.DEFAULTS["recording"]
 
@@ -1895,17 +1896,19 @@ class TimetableWindow(QMainWindow):
         self.example_path = self._example_path()
         self.example_text: str | None = None
         self.example_error = ""
+        self.example_broken: list = []
         self.example_count = 0
         if self.example_path is None:
             return
         try:
-            text = self.example_path.read_text(encoding="utf-8-sig")
-            self.example_count = sum(len(s.fields) for s in settings_schema.parse(text))
+            text, _note = settings_schema.decode(self.example_path.read_bytes())
+            secs, self.example_broken = settings_schema.parse_lenient(text)   # 깨진 곳만 빼고
+            self.example_count = sum(len(s.fields) for s in secs)
             self.example_text = text
-        except (OSError, UnicodeDecodeError, settings_schema.SchemaError) as exc:
+        except (OSError, settings_schema.SchemaError) as exc:
             self.example_error = f"{self.example_path.name} 을 읽을 수 없습니다: {exc}"
 
-    def _settings_dialog(self, base_text: str | None):
+    def _settings_dialog(self, base_text: str | None, base_note: str = ""):
         from .config_wizard import SettingsDialog
 
         if self.example_text is None:
@@ -1914,7 +1917,7 @@ class TimetableWindow(QMainWindow):
             return None
         return SettingsDialog(self, self.example_text, self.path, base_text,
                               example_name=self.example_path.name,
-                              example_path=self.example_path)
+                              example_path=self.example_path, base_note=base_note)
 
     def _create_config(self) -> bool:
         """config.toml 이 없으면 예시 파일로 설정을 고르게 한 뒤 만듭니다.
@@ -1946,9 +1949,9 @@ class TimetableWindow(QMainWindow):
             return True
         try:
             raw = self.path.read_bytes()
-            base = raw.decode("utf-8-sig").replace("\r\n", "\n")
-            dlg = self._settings_dialog(base)
-        except (OSError, UnicodeDecodeError, settings_schema.SchemaError) as exc:
+            base, note = settings_schema.decode(raw)       # cp949 로 저장된 파일도 읽음
+            dlg = self._settings_dialog(base, note)
+        except (OSError, settings_schema.SchemaError) as exc:
             QMessageBox.critical(self, "설정 파일을 읽을 수 없습니다", f"{self.path}\n{exc}")
             return False
         if dlg is None or dlg.exec() != QDialog.DialogCode.Accepted:
@@ -1957,7 +1960,7 @@ class TimetableWindow(QMainWindow):
 
     def _write_settings(self, dlg, raw: bytes) -> bool:
         """설정 창 결과를 config.toml 에 씀(창을 연 사이 바뀌었으면 거부)."""
-        if not dlg.changes():
+        if not dlg.changes() and not getattr(dlg, "repaired", False):
             self.statusBar().showMessage("바뀐 설정이 없습니다.", 4000)
             return True
         if self.path.read_bytes() != raw:
@@ -1971,8 +1974,9 @@ class TimetableWindow(QMainWindow):
         self.catalog = self._load_catalog()     # data_dir·course_repos 가 바뀌었을 수 있음
         self.rec_params = self.read_rec_params()   # 겹침 정책·여유 시간이 바뀌었을 수 있음
         self._refresh()
+        fixed = " · 읽지 못한 줄은 주석으로 남기고 고쳤습니다" if getattr(dlg, "repaired", False) else ""
         self.statusBar().showMessage(
-            f"설정 {len(dlg.changes())}개를 {self.path.name} 에 저장했습니다 "
+            f"설정 {len(dlg.changes())}개를 {self.path.name} 에 저장했습니다{fixed} "
             f"(원본은 {self.path.name}.bak).", 6000)
         return True
 
@@ -1982,9 +1986,10 @@ class TimetableWindow(QMainWindow):
         if self.example_text is None or not self.path.exists():
             return []
         try:
-            have = settings_schema.current_values(M.read_text(self.path))
-            fields = [f for s in settings_schema.parse(self.example_text) for f in s.fields]
-        except (OSError, UnicodeDecodeError, settings_schema.SchemaError):
+            text, _note = settings_schema.decode(self.path.read_bytes())
+            have = settings_schema.current_values_lenient(text)[0]     # 깨진 줄의 값은 '빠진' 것으로
+            fields = [f for s in settings_schema.parse_lenient(self.example_text)[0] for f in s.fields]
+        except (OSError, settings_schema.SchemaError):
             return []
         return [f.dotted for f in fields if f.dotted not in have]
 
@@ -2002,13 +2007,13 @@ class TimetableWindow(QMainWindow):
             "(안 고치면 예시 값)으로 채워 넣습니다.")
         try:
             raw = self.path.read_bytes()
-            base = raw.decode("utf-8-sig").replace("\r\n", "\n")
+            base, note = settings_schema.decode(raw)
             from .config_wizard import SettingsDialog
 
             dlg = SettingsDialog(self, self.example_text, self.path, base,
                                  example_name=self.example_path.name, fill_missing=True,
-                                 example_path=self.example_path)
-        except (OSError, UnicodeDecodeError, settings_schema.SchemaError) as exc:
+                                 example_path=self.example_path, base_note=note)
+        except (OSError, settings_schema.SchemaError) as exc:
             QMessageBox.critical(self, "설정 파일을 읽을 수 없습니다", f"{self.path}\n{exc}")
             return False
         if dlg.exec() != QDialog.DialogCode.Accepted:

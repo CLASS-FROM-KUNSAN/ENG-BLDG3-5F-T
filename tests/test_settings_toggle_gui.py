@@ -70,10 +70,38 @@ def test_example_change_is_offered_and_keeps_edited_values(app, tmp_path):
     dlg.close()
 
 
-def test_broken_example_change_is_reported_without_breaking_the_window(app, tmp_path):
+def test_broken_example_change_loads_everything_but_the_broken_part(app, tmp_path):
+    """깨진 예시도 '읽을 수 없습니다' 로 멈추지 않음 — 깨진 키만 빼고 불러오고 어디가 왜인지."""
     dlg, ex = _dlg(tmp_path)
-    ex.write_text("[demo\nrec = ", encoding="utf-8")
+    _row(dlg, "demo.rec").editor.setChecked(False)
+    ex.write_text(EX.replace("bare = false", "bare = 켬"), encoding="utf-8")   # 값만 깨짐
     dlg._example_changed()
-    assert "읽을 수 없습니다" in dlg.example_banner.text() and not dlg.reload_btn.isVisibleTo(dlg)
-    assert "demo.rec" in dlg.values
+    text = dlg.example_banner.text()
+    assert "그 부분만 빼고" in text and "bare = 켬" in text and "true/false" in text
+    assert dlg.reload_btn.isVisibleTo(dlg)
+    dlg.reload_example()
+    assert "demo.rec" in dlg.by_dotted and "demo.bare" not in dlg.by_dotted
+    assert dlg.values["demo.rec"] is False                      # 고친 값 그대로
+    assert "1곳을 읽지 못해" in dlg.broken_banner.text()
     dlg.close()
+
+
+def test_broken_config_toml_opens_and_saving_repairs_it(app, tmp_path):
+    """깨진 config.toml 도 설정 창이 열리고, 저장하면 깨진 줄은 원문 주석으로 남기고 고침."""
+    ex = tmp_path / "config.example.toml"
+    ex.write_text(EX, encoding="utf-8")
+    base = "[demo]\nrec = false\nbare = 켬\n"
+    dlg = W.SettingsDialog(None, EX, tmp_path / "config.toml", base, example_path=ex)
+    assert dlg.repaired and dlg.base_vals == {"demo.rec": False}
+    assert "읽지 못했습니다" in dlg.broken_banner.text() and ".bak" in dlg.broken_banner.text()
+    out = dlg.result_text()
+    assert "# ⚠ 읽지 못한 줄: bare = 켬" in out and "rec = false" in out
+    dlg.close()
+
+
+def test_cp949_config_is_read_and_flagged():
+    from syncnote import settings_schema as S
+
+    text, note = S.decode('[a]\nname = "강의실"\n'.encode("cp949"))
+    assert 'name = "강의실"' in text and "cp949" in note
+    assert S.decode(b"[a]\nx = 1\n") == ("[a]\nx = 1\n", "")
