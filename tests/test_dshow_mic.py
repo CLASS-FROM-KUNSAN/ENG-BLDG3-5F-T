@@ -106,8 +106,11 @@ def test_alternative_only_for_windows_recording_devices():
     alt = D.alternative(mic, ffmpeg="ffmpeg", devices=devs, platform="win32")
     assert isinstance(alt, D.DshowMic) and alt.name == mic.name
     # 리눅스는 ffmpeg PulseAudio 로(사양 변경: 녹음 방법 사슬에 리눅스도 넣음), macOS 는 없음
+    assert D.alternative(mic, ffmpeg="ffmpeg", devices=devs, platform="linux") is None  # id 없음
+    mic.id = "alsa_input.pci-0000_00_1f.3.analog-stereo"
     lin = D.alternative(mic, ffmpeg="ffmpeg", devices=devs, platform="linux")
     assert isinstance(lin, D.DshowMic) and "pulse" in lin._build(48000, 2)
+    assert mic.id in lin._build(48000, 2) and lin.label == "ffmpeg (pulse)"
     assert D.alternative(mic, ffmpeg="ffmpeg", devices=devs, platform="darwin") is None
     loop = SoundcardMic()
     loop.isloopback = True
@@ -135,13 +138,28 @@ def test_dshow_recorder_reads_float32_frames_and_stops_ffmpeg():
 
 
 def test_dshow_recorder_reports_why_ffmpeg_stopped():
+    """프로세스가 떴다고 열린 게 아님 — 첫 소리 없이 끝나면 '못 엶' 과 그 이유(사양 변경)."""
     mic = D.DshowMic("마이크(HD)", "ffmpeg",
-                     popen=lambda *a, **k: FakeProc(b"", b"Could not run graph\n"))
-    with mic.recorder(channels=2) as rec:
-        import time
-        time.sleep(0.05)                                        # stderr 읽는 스레드
-        with pytest.raises(RuntimeError, match="Could not run graph"):
-            rec.record(numframes=10)
+                     popen=lambda *a, **k: FakeProc(b"", b"Could not run graph" + bytes([10])))
+    with pytest.raises(RuntimeError, match="Could not run graph"), mic.recorder(channels=2):
+        pass
+
+
+def test_pipe_with_no_sound_times_out_as_open_failure():
+    class Never:
+        def read(self, n):
+            import time
+            time.sleep(3)
+            return b""
+
+    class Hang(FakeProc):
+        def __init__(self):
+            super().__init__(b"")
+            self.stdout = Never()
+    mic = D.DshowMic("마이크(HD)", "ffmpeg", popen=lambda *a, **k: Hang())
+    mic.start_timeout = 0.2
+    with pytest.raises(RuntimeError, match="소리가 오지 않았습니다"), mic.recorder(channels=2):
+        pass
 
 
 def _alt_factory(seen):

@@ -24,6 +24,7 @@ DirectShow·SoX·arecord 는 모두 ffmpeg/sox/arecord 프로세스의 표준출
 
 from __future__ import annotations
 
+import queue
 import subprocess
 import sys
 import threading
@@ -126,6 +127,8 @@ class PipeMic:
 
     isloopback = False
     tool = "pipe"
+    start_timeout = 5.0          # 이 안에 첫 소리가 없으면 '못 엶'
+    stall_timeout = 5.0          # 녹음 중 이만큼 소리가 끊기면 '끊김'
 
     def __init__(self, name: str, build: Callable[[int, int], list[str]], *,
                  popen: Callable = subprocess.Popen) -> None:
@@ -136,8 +139,7 @@ class PipeMic:
 
     @property
     def label(self) -> str:
-        return {"ffmpeg": "ffmpeg DirectShow" if sys.platform == "win32" else "ffmpeg",
-                "sox": "SoX", "arecord": "arecord"}.get(self.tool, self.tool)
+        return {"sox": "SoX", "arecord": "arecord"}.get(self.tool, self.tool)
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.name}>"
@@ -152,9 +154,14 @@ class DshowMic(PipeMic):
 
     tool = "ffmpeg"
 
+    @property
+    def label(self) -> str:
+        return "ffmpeg DirectShow" if self.fmt == "dshow" else f"ffmpeg ({self.fmt})"
+
     def __init__(self, name: str, ffmpeg: str, *, popen: Callable = subprocess.Popen,
                  fmt: str = "dshow", device: str | None = None) -> None:
         self.ffmpeg = ffmpeg
+        self.fmt = fmt
         dev = f"audio={name}" if fmt == "dshow" else (device or "default")
         extra = ["-audio_buffer_size", "50"] if fmt == "dshow" else []
 
@@ -192,39 +199,102 @@ class ArecordMic(PipeMic):
 
 
 class _PipeRecorder:
+    """프로세스 표준출력을 읽는 녹음기.
+
+    '열림' 은 프로세스가 떴을 때가 아니라 **첫 소리가 왔을 때** 입니다. 장치가 없으면 ffmpeg·SoX
+    는 뜨자마자 오류로 끝나는데, 뜬 것만 보고 열렸다고 하면 사슬이 다음 방법으로 넘어가지 못하고
+    빈 녹음이 됩니다(리눅스 CI 에서 재현). start_timeout 초 안에 소리가 없거나 프로세스가 끝나면
+    여는 데 실패한 것으로 보고 이유(표준오류 끝 줄)를 붙입니다. 녹음 중 stall_timeout 초 동안
+    소리가 끊겨도 실패로 보고 다음 방법으로 넘깁니다.
+    """
+
     def __init__(self, mic: PipeMic, cmd: list[str], channels: int) -> None:
         self.mic, self.cmd, self.channels = mic, cmd, channels
         self.proc = None
         self._err: list[str] = []
+        # 크기 제한: 읽는 쪽이 늦거나 멈추면 퍼 담기도 멈춥니다(무한히 쌓여 메모리를 먹지 않게)
+        self._q: queue.Queue = queue.Queue(maxsize=64)
+        self._closed = threading.Event()
+        self._buf = bytearray()
+        self._eof = False
+        self._err_thread: threading.Thread | None = None
+
+    def _why(self) -> str:
+        if self._err_thread is not None:
+            self._err_thread.join(timeout=1.0)          # 끝난 프로세스의 마지막 오류 줄까지
+        code = self.proc.poll() if self.proc is not None else None
+        return "; ".join(x for x in self._err if x) or f"종료 코드 {code}"
 
     def __enter__(self):
         self.proc = self.mic._popen(self.cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
-        threading.Thread(target=self._drain, daemon=True).start()
+        self._err_thread = threading.Thread(target=self._drain, daemon=True)
+        self._err_thread.start()
+        threading.Thread(target=self._pump, daemon=True).start()
+        try:
+            first = self._q.get(timeout=self.mic.start_timeout)
+        except queue.Empty:
+            self.__exit__()
+            raise RuntimeError(f"{self.mic.label}: {self.mic.start_timeout:.0f}초 동안 소리가 "
+                               f"오지 않았습니다({self._why()})") from None
+        if first is None:
+            why = self._why()
+            self.__exit__()
+            raise RuntimeError(f"{self.mic.label} 로 '{self.mic.name}' 를 열지 못했습니다: {why}")
+        self._buf.extend(first)
         return self
 
     def _drain(self) -> None:
         for raw in iter(self.proc.stderr.readline, b""):
             self._err = (self._err + [raw.decode("utf-8", "replace").strip()])[-5:]
 
+    def _pump(self) -> None:
+        out = self.proc.stdout
+        read = getattr(out, "read1", None) or out.read
+        try:
+            while True:
+                chunk = read(65536)
+                if not chunk:
+                    break
+                if not self._put(bytes(chunk)):
+                    return                              # 닫힘 — 더 담지 않음
+        except (OSError, ValueError):
+            pass
+        self._put(None)
+
+    def _put(self, item) -> bool:
+        while not self._closed.is_set():
+            try:
+                self._q.put(item, timeout=0.2)
+                return True
+            except queue.Full:
+                continue
+        return False
+
     def record(self, numframes: int = 4096):
         import numpy as np
 
         want = int(numframes) * self.channels * 4
-        buf = bytearray()
-        while len(buf) < want:
-            chunk = self.proc.stdout.read(want - len(buf))
-            if not chunk:
+        while len(self._buf) < want and not self._eof:
+            try:
+                chunk = self._q.get(timeout=self.mic.stall_timeout)
+            except queue.Empty:
+                raise RuntimeError(f"{self.mic.label}: {self.mic.stall_timeout:.0f}초 동안 소리가 "
+                                   "끊겼습니다") from None
+            if chunk is None:
+                self._eof = True
                 break
-            buf.extend(chunk)
-        if not buf:
-            code = self.proc.poll()
-            why = "; ".join(x for x in self._err if x) or f"종료 코드 {code}"
-            raise RuntimeError(f"{self.mic.label} 로 '{self.mic.name}' 녹음이 끊겼습니다: {why}")
-        usable = len(buf) - len(buf) % (self.channels * 4)
-        return np.frombuffer(bytes(buf[:usable]), dtype="<f4").reshape(-1, self.channels)
+            self._buf.extend(chunk)
+        take = min(len(self._buf), want)
+        take -= take % (self.channels * 4)
+        if take == 0:
+            raise RuntimeError(f"{self.mic.label} 로 '{self.mic.name}' 녹음이 끊겼습니다: {self._why()}")
+        data = bytes(self._buf[:take])
+        del self._buf[:take]
+        return np.frombuffer(data, dtype="<f4").reshape(-1, self.channels)
 
     def __exit__(self, *_exc) -> None:
+        self._closed.set()
         if self.proc is None:
             return
         try:
@@ -254,8 +324,10 @@ def alternative(source, *, ffmpeg: str | None = None,
     if not ff:
         return None
     if platform == "linux":
-        return DshowMic(str(getattr(source, "name", "default")), ff, fmt="pulse",
-                        device=str(getattr(source, "id", "") or "default"))
+        dev_id = str(getattr(source, "id", "") or "")
+        if not dev_id:                    # 이름·장치 번호가 없으면 엉뚱한 기본 장치를 열게 됨
+            return None
+        return DshowMic(str(getattr(source, "name", dev_id)), ff, fmt="pulse", device=dev_id)
     name = match_name(str(getattr(source, "name", "") or ""), devices(ff))
     return DshowMic(name, ff) if name else None
 

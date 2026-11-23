@@ -106,3 +106,17 @@ def _no_setup_flow_in_tests(monkeypatch):
     except ImportError:          # PySide6 없음(CI) — 해당 없음
         return
     monkeypatch.setattr(gui.TimetableWindow, "SETUP_AFTER_SAVE", False)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_capture_tools(monkeypatch):
+    """녹음 방법 사슬이 진짜 ffmpeg·SoX·arecord 를 부르지 않게(가짜 장치가 실제 마이크를 열었음).
+
+    이 PC 에서는 이름 없는 가짜 장치가 실제 마이크를 ffmpeg 로 열었고, 리눅스 CI 에서는
+    PulseAudio 'default' 를 열려다 실패해 엉뚱한 오류가 났습니다. 도구가 필요한 테스트는
+    ffmpeg=/tool=/chain= 으로 직접 넣습니다.
+    """
+    from syncnote.recorder import dshow_mic
+
+    monkeypatch.setattr(dshow_mic, "_ffmpeg", lambda: None)
+    monkeypatch.setattr(dshow_mic, "_tool", lambda _name: None)
