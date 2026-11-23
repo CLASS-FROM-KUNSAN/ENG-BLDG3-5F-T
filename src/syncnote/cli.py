@@ -144,6 +144,15 @@ def _doctor(args, rep: dict) -> int:
         info("설정 파일", cfg.path)
         info("데이터 폴더", cfg.data_dir)
         info("기기 이름", cfg.machine_label)
+        # 녹화 지킴이 장부: 아직 올라가 확인되지 않은 녹화가 있는지(알림만, 판정에는 안 씀)
+        from .recorder import guard as _guard
+        _c = _guard.Ledger(layout.state / _guard.LEDGER).counts()
+        _todo = sum(n for s, n in _c.items() if s not in (_guard.CONFIRMED, _guard.HELD))
+        _line = (f"올라가 확인되지 않은 녹화 {_todo}개 (격리 {_c.get(_guard.QUARANTINE, 0)}, "
+                 f"막힘 {_c.get(_guard.BLOCKED, 0)}) — record guard --status"
+                 if _todo else "못 올린 녹화 없음")
+        print(f"  녹화 지킴이      : {_line}")
+        info("녹화 지킴이", _line)
     except config_module.ConfigError as exc:
         print(f"  설정 파일        : 실패\n{exc}")
         rep["config_error"] = str(exc)
@@ -596,6 +605,7 @@ def _upload_recording_file(cfg, store: Store, uploader, path: Path, tag: str) ->
     digest = sha256_file(path)
     if store.is_uploaded(digest):
         return
+    _check_recording_public(cfg, uploader)
     result = uploader.upload(path, tag, prefix=f"{cfg.machine_label}_")
     store.mark_uploaded(
         digest, tag=tag,
@@ -606,6 +616,29 @@ def _upload_recording_file(cfg, store: Store, uploader, path: Path, tag: str) ->
     if cfg.get("github.delete_local_after_upload"):
         path.unlink(missing_ok=True)
         log.info("업로드 후 로컬 파일 삭제: %s", path.name)
+
+
+class PublicRepoBlocked(Exception):
+    """recording.upload.block_public 이 켜져 있고 대상 저장소가 public."""
+
+
+_PUBLIC_CACHE: dict[str, bool | None] = {}
+
+
+def _check_recording_public(cfg, uploader) -> None:
+    """녹화를 public 저장소에 올리지 않는 안전장치(기본 꺼짐). 막아야 하면 예외."""
+    if not bool(cfg.get("recording.upload.block_public", False)):
+        return
+    fn = getattr(uploader, "is_public", None)
+    if not callable(fn):
+        return
+    slug = str(getattr(uploader, "slug", "") or id(uploader))
+    if slug not in _PUBLIC_CACHE:
+        _PUBLIC_CACHE[slug] = fn()
+    if _PUBLIC_CACHE[slug] is True:
+        raise PublicRepoBlocked(
+            f"{slug} 는 public 저장소라 녹화를 올리지 않았습니다(PC 에는 남아 있음). 저장소를 "
+            "private 로 바꾸거나 config 의 recording.upload.block_public = false 로 끄세요.")
 
 
 def _recording_tag(cfg, day) -> str:
@@ -642,6 +675,9 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
             # 않습니다 — 소리 없는 영상이 백업된 것처럼 보이면 안 됩니다.
             log.warning("장치 무음으로 중단된 세그먼트는 올리지 않습니다: %s",
                         segment.path.name)
+            # 녹화 지킴이(record guard)가 나중에 '못 올린 것' 으로 보고 올리지 않게 표시
+            from .recorder import guard
+            guard.mark_held(segment.path, "장치 무음으로 중단된 세그먼트")
             return
         if uploader is None or not segment.path.exists() or segment.path.is_dir():
             return
@@ -654,9 +690,11 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
         try:
             _upload_recording_file(cfg, store, uploader, segment.path, _recording_tag(cfg, day))
             outbox.remove(layout.state, segment.path)
+        except PublicRepoBlocked as exc:
+            log.error("%s", exc)
         except Exception:
-            log.exception("세그먼트 업로드 실패 (로컬 파일은 남아 있고, 다음에 녹화 프로그램이 "
-                          "시작할 때 다시 올립니다)")
+            log.exception("세그먼트 업로드 실패 (로컬 파일은 남아 있고, 녹화 지킴이가 "
+                          "녹화가 끝난 뒤 다시 올립니다)")
 
     return on_done
 
@@ -693,6 +731,8 @@ def _drain_outbox(cfg, layout: Layout, *, dry_run: bool = False) -> tuple[int, i
             _upload_recording_file(cfg, store, uploader, path, _recording_tag(cfg, day))
             outbox.remove(layout.state, path)
             ok += 1
+        except PublicRepoBlocked as exc:
+            log.error("%s", exc)
         except Exception:
             failed += 1
             log.exception("다시 올리기 실패(목록에 남겨 다음에 또 시도): %s", path.name)
@@ -1056,6 +1096,159 @@ class _WatchOnceDone(Exception):
     """
 
 
+def _file_origin(layout: Layout, path: Path) -> tuple[str, str, object]:
+    """녹화 파일의 (과목 코드, 라벨, 날짜). 올릴 목록에 적힌 것이 있으면 그것, 없으면 경로에서.
+
+    경로: recordings/<YYYY-MM-DD>[/<과목>]/<라벨>/<stem>.mkv, stem = YYYYmmdd_HHMMSS_partNNN.
+    """
+    from datetime import date as _date
+
+    from .recorder import outbox
+
+    item = next((i for i in outbox.items(layout.state) if Path(i["path"]) == Path(path)), None)
+    label = str((item or {}).get("label") or Path(path).parent.name)
+    course_id = str((item or {}).get("course_id") or "")
+    day = None
+    try:
+        day = _date.fromisoformat(str((item or {}).get("day") or ""))
+    except ValueError:
+        try:
+            day = datetime.strptime(Path(path).name[:15], "%Y%m%d_%H%M%S").date()
+        except ValueError:
+            day = datetime.fromtimestamp(Path(path).stat().st_mtime).date()
+    return course_id, label, day
+
+
+def _guard_hooks(cfg, layout: Layout, *, dry_run: bool = False):
+    """녹화 지킴이가 쓰는 실제 동작들(복구·검사·업로드·릴리스 확인)."""
+    from .recorder import guard as G
+    from .recorder import lock as rec_lock
+    from .recorder import outbox
+    from .recorder import schedule as sched
+    from .release import ReleaseError
+    from .state import sha256_file
+
+    store_box: dict[str, Store] = {}
+    uploaders: dict[str, object] = {}
+
+    def store() -> Store:
+        if "s" not in store_box:
+            store_box["s"] = _store(layout, "recordings")
+        return store_box["s"]
+
+    def uploader_for(path: Path):
+        course_id, label, day = _file_origin(layout, path)
+        key = f"{course_id}|{label}|{day}"
+        if key not in uploaders:
+            course = _resolve_course(cfg, course_id=course_id, label=label,
+                                     when=datetime.combine(day, datetime.min.time()))
+            uploaders[key] = _uploader(cfg, dry_run=dry_run, course=course, what=Path(path).name)
+        return uploaders[key], day
+
+    def busy() -> str | None:
+        info = rec_lock.read(layout.state / "recording.lock")
+        if info is not None and not rec_lock._stale(info):
+            return "녹화 중"
+        quiet = float(cfg.get("recording.guard.quiet_before_class_minutes", 10))
+        slots = sched.parse(cfg.get("recording.timetable", []) or [])
+        if slots and quiet > 0:
+            nxt = sched.next_window(
+                slots, pre_roll_min=float(cfg.get("recording.pre_roll_minutes", 0)),
+                post_roll_min=float(cfg.get("recording.post_roll_minutes", 0)),
+                skip_days=sched.holidays(cfg.get("recording.holidays", [])),
+                policy=str(cfg.get("recording.overlap", sched.DEFAULT_POLICY)))
+            if nxt is not None:
+                left = (nxt.start - datetime.now()).total_seconds() / 60
+                if 0 < left <= quiet:
+                    return f"다음 수업({nxt.name})이 {left:.0f}분 뒤 시작"
+        return None
+
+    def record(digest: str) -> dict | None:
+        rec = store().data["uploaded"].get(digest)
+        return rec if isinstance(rec, dict) else None
+
+    def upload(path: Path) -> dict:
+        up, day = uploader_for(path)
+        if up is None:
+            raise G.Blocked("과목을 알 수 없어 올릴 곳이 없습니다([[eclass.course_repos]] 확인)")
+        try:
+            _upload_recording_file(cfg, store(), up, path, _recording_tag(cfg, day))
+        except PublicRepoBlocked as exc:
+            raise G.Blocked(str(exc)) from None
+        outbox.remove(layout.state, path)
+        if dry_run:
+            return {"tag": _recording_tag(cfg, day), "asset": "(dry-run)", "size": path.stat().st_size}
+        return record(sha256_file(path)) or {}
+
+    def remote(path: Path, rec: dict) -> bool | None:
+        up, _day = uploader_for(path)
+        if up is None or dry_run or not rec.get("tag") or not rec.get("asset"):
+            return None
+        try:
+            asset = up.find_asset(rec["tag"], rec["asset"])
+            if asset is None:
+                return False
+            name = str(rec["asset"])
+            if name.endswith(".part000"):                 # 나눠 올린 큰 파일: 복원 정보까지 있어야
+                return up.find_asset(rec["tag"], name[: -len(".part000")] + ".parts.json") is not None
+            return int(asset.get("size", -1)) == Path(path).stat().st_size
+        except ReleaseError as exc:
+            log.info("릴리스 확인 실패(나중에 다시): %s", exc)
+            return None
+
+    def forget(digest: str) -> None:
+        s = store()
+        s.forget("uploaded", digest)
+        s.save()
+
+    return G.Hooks(
+        busy=busy,
+        recover=lambda: _recover_recordings(cfg, layout, upload=False, dry_run=dry_run),
+        verify=G.verify_media, rebuild=G.rebuild_media, digest=sha256_file,
+        record=record, upload=upload, remote=remote, forget=forget)
+
+
+def cmd_record_guard(args) -> int:
+    """녹화 지킴이: 녹화 중이 아닐 때 몇 분마다 녹화 파일을 확인하고 못 올린 것을 올립니다."""
+    from .recorder import guard as G
+    from .recorder import lock as rec_lock
+
+    cfg, layout = _load(args)
+    ledger = G.Ledger(layout.state / G.LEDGER)
+    if args.status:
+        print(G.status_text(ledger))
+        return 0
+    if not cfg.get("recording.guard.enabled", True):
+        msg = "녹화 지킴이가 꺼져 있습니다(config.toml [recording.guard] enabled = false)."
+        log.info("%s", msg)
+        print(msg)
+        return 0
+    try:
+        hold = rec_lock.hold(layout.state / "guard.lock", "녹화 지킴이")
+        hold.__enter__()
+    except rec_lock.RecordingBusy:
+        print("녹화 지킴이가 이미 돌고 있습니다.")
+        return 0
+    try:
+        g = G.Guard(layout.recordings, ledger, _guard_hooks(cfg, layout, dry_run=args.dry_run),
+                    max_attempts=int(cfg.get("recording.guard.max_attempts", 6)),
+                    verify_remote=bool(cfg.get("recording.guard.verify_remote", True)))
+        interval = max(1.0, float(cfg.get("recording.guard.interval_minutes", 5))) * 60
+        while True:
+            s = g.tick()
+            if s.skipped:
+                log.info("녹화 지킴이: 쉼 — %s", s.skipped)
+            if args.once:
+                print(G.status_text(ledger))
+                c = s.counts
+                return 1 if (c.get(G.QUARANTINE) or c.get(G.BLOCKED)) else 0
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        hold.__exit__(None, None, None)
+
+
 def cmd_record_recover(args) -> int:
     """녹화 중에 꺼져 남은 조각을 파일로 만들고, 못 올린 녹화를 올립니다."""
     from .recorder import outbox, recover
@@ -1108,7 +1301,6 @@ def _upload_remuxed(cfg, layout, done, *, dry_run: bool) -> None:
     """녹화 때와 같은 규칙으로 올립니다: 과목을 모르면(course_repos 가 있을 때) 올리지 않음."""
     from . import courses as courses_mod
     from .release import tag_for
-    from .state import sha256_file
 
     store = _store(layout, "recordings")
     courses = courses_mod.load(cfg)
@@ -1120,14 +1312,9 @@ def _upload_remuxed(cfg, layout, done, *, dry_run: bool) -> None:
         tag = tag_for(str(cfg.get("github.tag_prefix_recording", "recordings")),
                       r.started.date() if r.started else None)
         try:
-            digest = sha256_file(r.final)
-            if store.is_uploaded(digest):
-                continue
-            res = uploader.upload(r.final, tag, prefix=f"{cfg.machine_label}_")
-            store.mark_uploaded(digest, tag=tag,
-                                asset_name=res["assets"][0].get("name", "") if res["assets"] else "",
-                                size=r.final.stat().st_size)
-            store.save()
+            _upload_recording_file(cfg, store, uploader, r.final, tag)
+        except PublicRepoBlocked as exc:
+            log.error("%s", exc)
         except Exception:
             log.exception("업로드 실패 (로컬 파일은 남아 있습니다): %s", r.final.name)
 
@@ -1954,6 +2141,12 @@ def build_parser() -> argparse.ArgumentParser:
         dest="sub", required=True)
     tt.add_parser("edit", help="PySide6 편집기로 [[recording.timetable]] 편집").set_defaults(
         func=cmd_timetable_edit)
+
+    p = rec.add_parser("guard", help="녹화 지킴이: 녹화 중이 아닐 때 녹화 파일을 확인하고 못 올린 것을 올림")
+    p.add_argument("--once", action="store_true", help="한 번만 확인하고 끝냄")
+    p.add_argument("--status", action="store_true", help="지금 상태만 보여 줌")
+    p.add_argument("--dry-run", action="store_true", help="업로드 흉내만 냄")
+    p.set_defaults(func=cmd_record_guard)
 
     p = rec.add_parser("recover", help="녹화 중에 컴퓨터가 꺼져 남은 조각을 파일로 만들어 올리기")
     p.add_argument("--list", action="store_true", help="무엇이 남았는지 보여 주기만")
