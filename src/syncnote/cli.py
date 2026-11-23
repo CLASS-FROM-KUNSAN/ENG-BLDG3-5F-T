@@ -589,14 +589,46 @@ def _actions_error(title: str, message: str) -> None:
 # ---------------------------------------------------------------------------
 # record
 # ---------------------------------------------------------------------------
+def _upload_recording_file(cfg, store: Store, uploader, path: Path, tag: str) -> None:
+    """녹화 파일 하나를 릴리스에 올립니다(이미 올렸으면 건너뜀). 실패하면 예외."""
+    from .state import sha256_file
+
+    digest = sha256_file(path)
+    if store.is_uploaded(digest):
+        return
+    result = uploader.upload(path, tag, prefix=f"{cfg.machine_label}_")
+    store.mark_uploaded(
+        digest, tag=tag,
+        asset_name=result["assets"][0].get("name", "") if result["assets"] else "",
+        size=path.stat().st_size,
+    )
+    store.save()
+    if cfg.get("github.delete_local_after_upload"):
+        path.unlink(missing_ok=True)
+        log.info("업로드 후 로컬 파일 삭제: %s", path.name)
+
+
+def _recording_tag(cfg, day) -> str:
+    """녹화한 날의 릴리스(올린 날이 아니라). 다음 날 복구해 올려도 그날 릴리스로 갑니다."""
+    from .release import tag_for
+
+    return tag_for(str(cfg.get("github.tag_prefix_recording", "recordings")), day)
+
+
 def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
                           course=None,
-                          upload: bool, dry_run: bool, language: str | None = None):
-    from .release import tag_for
+                          upload: bool, dry_run: bool, language: str | None = None,
+                          defer: bool = False):
+    """세그먼트가 끝나면: 전사 대기열 → 올릴 목록(outbox)에 적기 → 올리기 → 목록에서 지우기.
+
+    올리다 실패하거나 그 사이 컴퓨터가 꺼져도 목록에 남아 다음 시작 때 다시 올립니다.
+    defer=True(꺼진 녹화 복구)면 목록에만 적고, 올리기는 _drain_outbox 가 합니다.
+    """
+    from .recorder import outbox
     from .transcribe.batch import enqueue_segment
 
     uploader = _uploader(cfg, dry_run=dry_run, course=course, what=label) if upload else None
-    tag = tag_for(str(cfg.get("github.tag_prefix_recording", "recordings")))
+    course_id = str(getattr(course, "id", "") or "")
 
     def on_done(segment) -> None:
         try:
@@ -613,27 +645,131 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
             return
         if uploader is None or not segment.path.exists() or segment.path.is_dir():
             return
+        day = segment.started_at.date()
+        if not dry_run:
+            outbox.add(layout.state, segment.path, course_id=course_id, label=label,
+                       day=day.isoformat())
+        if defer:
+            return
         try:
-            from .state import sha256_file
-
-            digest = sha256_file(segment.path)
-            if store.is_uploaded(digest):
-                return
-            prefix = f"{cfg.machine_label}_"
-            result = uploader.upload(segment.path, tag, prefix=prefix)
-            store.mark_uploaded(
-                digest, tag=tag,
-                asset_name=result["assets"][0].get("name", "") if result["assets"] else "",
-                size=segment.path.stat().st_size,
-            )
-            store.save()
-            if cfg.get("github.delete_local_after_upload"):
-                segment.path.unlink(missing_ok=True)
-                log.info("업로드 후 로컬 파일 삭제: %s", segment.path.name)
+            _upload_recording_file(cfg, store, uploader, segment.path, _recording_tag(cfg, day))
+            outbox.remove(layout.state, segment.path)
         except Exception:
-            log.exception("세그먼트 업로드 실패 (로컬 파일은 남아 있습니다)")
+            log.exception("세그먼트 업로드 실패 (로컬 파일은 남아 있고, 다음에 녹화 프로그램이 "
+                          "시작할 때 다시 올립니다)")
 
     return on_done
+
+
+def _drain_outbox(cfg, layout: Layout, *, dry_run: bool = False) -> tuple[int, int]:
+    """올릴 목록에 남은 녹화 파일을 올립니다. (올림, 실패)."""
+    from datetime import date as _date
+
+    from .recorder import outbox
+
+    pending = outbox.items(layout.state)
+    if not pending:
+        return 0, 0
+    log.info("지난번에 올리지 못한 녹화 %d개를 올립니다.", len(pending))
+    store = _store(layout, "recordings")
+    ok = failed = 0
+    for it in pending:
+        path = Path(it["path"])
+        if not path.exists():
+            log.info("올릴 목록에서 뺍니다(파일이 없음): %s", path)
+            outbox.remove(layout.state, path)
+            continue
+        try:
+            day = _date.fromisoformat(it.get("day") or "")
+        except ValueError:
+            day = datetime.fromtimestamp(path.stat().st_mtime).date()
+        course = _resolve_course(cfg, course_id=str(it.get("course_id") or ""),
+                                 label=str(it.get("label") or ""),
+                                 when=datetime.combine(day, datetime.min.time()))
+        uploader = _uploader(cfg, dry_run=dry_run, course=course, what=path.name)
+        if uploader is None:
+            continue
+        try:
+            _upload_recording_file(cfg, store, uploader, path, _recording_tag(cfg, day))
+            outbox.remove(layout.state, path)
+            ok += 1
+        except Exception:
+            failed += 1
+            log.exception("다시 올리기 실패(목록에 남겨 다음에 또 시도): %s", path.name)
+    log.info("지난 녹화 다시 올리기: 올림 %d, 실패 %d", ok, failed)
+    return ok, failed
+
+
+def _recover_recordings(cfg, layout: Layout, *, upload: bool, dry_run: bool) -> int:
+    """녹화 중에 컴퓨터가 꺼져 남은 조각을 파일로 만들고, 못 올린 녹화를 올립니다.
+
+    record schedule / record watch 가 시작할 때(=로그온 직후) 뒤에서 돌고,
+    `record recover` 로 직접 돌릴 수도 있습니다. 복구한 세그먼트 수를 돌려줍니다.
+    """
+    from .recorder import lock as rec_lock
+    from .recorder import outbox, recover
+
+    info = rec_lock.read(layout.state / "recording.lock")
+    busy = info is not None and not rec_lock._stale(info)
+    try:
+        guard = rec_lock.hold(layout.state / "recover.lock", "녹화 복구")
+        guard.__enter__()
+    except rec_lock.RecordingBusy:
+        log.info("다른 프로그램이 이미 녹화 복구를 하고 있습니다.")
+        return 0
+    try:
+        store = _store(layout, "recordings")
+        done = recover.recover_all(layout.recordings, cfg, busy=busy)
+        for r in done:
+            if not r.finals:
+                continue
+            j = r.leftover.journal
+            label = str(j.get("label") or r.leftover.out_dir.name)
+            course = _resolve_course(cfg, course_id=str(j.get("course_id") or ""),
+                                     label=label, when=r.leftover.started)
+            on_done = _post_segment_factory(cfg, layout, store, label, course=course,
+                                            upload=upload, dry_run=dry_run, defer=True)
+            seg = r.segment()
+            on_done(seg)
+            if upload and not dry_run:
+                for extra in r.finals[1:]:             # 모니터가 여럿이면 나머지 화면 파일도
+                    outbox.add(layout.state, extra, course_id=str(getattr(course, "id", "") or ""),
+                               label=label, day=seg.started_at.date().isoformat())
+        if upload:
+            _drain_outbox(cfg, layout, dry_run=dry_run)
+        return sum(1 for r in done if r.finals)
+    finally:
+        guard.__exit__(None, None, None)
+
+
+def _recover_on_start(cfg, layout: Layout, args, *, exiting: bool = False) -> None:
+    """녹화 프로그램이 시작할 때(=로그온 직후) 지난번 꺼진 녹화를 마무리합니다.
+
+    곧 끝나는 경우(스위치 꺼짐·시간표 없음)에는 뒤에서 돌리면 프로그램과 함께 끊기므로
+    그 자리에서 끝까지 하고, 계속 대기하는 경우에는 녹화를 늦추지 않게 뒤에서 합니다.
+    """
+    upload = not getattr(args, "no_upload", False)
+    dry_run = bool(getattr(args, "dry_run", False))
+    if exiting:
+        try:
+            _recover_recordings(cfg, layout, upload=upload, dry_run=dry_run)
+        except Exception:
+            log.exception("녹화 복구 중 오류")
+    else:
+        _recover_in_background(cfg, layout, upload=upload, dry_run=dry_run)
+
+
+def _recover_in_background(cfg, layout: Layout, *, upload: bool, dry_run: bool) -> None:
+    """녹화 대기를 늦추지 않게 뒤에서. 실패해도 녹화 프로그램은 계속 돕니다."""
+    import threading
+
+    def run() -> None:
+        try:
+            _recover_recordings(cfg, layout, upload=upload, dry_run=dry_run)
+        except Exception:
+            log.exception("녹화 복구 중 오류(녹화 대기는 계속합니다)")
+
+    threading.Thread(target=run, name="record-recover", daemon=True).start()
 
 
 def _recording_meta(cfg, label: str, trigger: str, *, occ=None, course=None,
@@ -798,6 +934,7 @@ def cmd_record_start(args) -> int:
     if _trigger_off(cfg, "manual"):
         return 1                        # 사람이 누른 명령 — 안 됐다는 것을 알 수 있게
     label = args.label or f"수동_{datetime.now():%H%M}"
+    _recover_on_start(cfg, layout, args)
     course = _resolve_course(cfg, course_id=getattr(args, "course", "") or "",
                              label=label, when=datetime.now())
     # _run_recording 은 다른 녹화가 이미 돌고 있으면 None 을 돌려줍니다.
@@ -844,12 +981,16 @@ def cmd_record_schedule(args) -> int:
     from .recorder import schedule as sched
 
     cfg, layout = _load(args)
-    if not getattr(args, "show", False) and _trigger_off(cfg, "schedule"):
+    show = getattr(args, "show", False)
+    if not show and _trigger_off(cfg, "schedule"):
+        _recover_on_start(cfg, layout, args, exiting=True)   # 녹화는 안 해도 지난 녹화는 마무리
         return 0                        # 작업 스케줄러가 띄움 — 실패로 보이지 않게
     slots = sched.parse(cfg.get("recording.timetable", []))
     off = sched.holidays(cfg.get("recording.holidays", []))
     if not slots:
         print(sched.describe(slots))
+        if not show:
+            _recover_on_start(cfg, layout, args, exiting=True)
         return 1
 
     pre = float(cfg.get("recording.pre_roll_minutes", 0))
@@ -860,6 +1001,8 @@ def cmd_record_schedule(args) -> int:
     print(sched.describe(slots, off, pre_roll_min=pre, post_roll_min=post, policy=policy))
     if args.show:
         return 0
+    # 지난번 녹화 중에 컴퓨터가 꺼졌으면 그 조각을 파일로 만들어 올립니다(로그온 직후 한 번).
+    _recover_on_start(cfg, layout, args)
 
     while True:
         nxt = sched.next_window(slots, pre_roll_min=pre, post_roll_min=post,
@@ -911,6 +1054,27 @@ class _WatchOnceDone(Exception):
     과 '녹화 실패' 가 같은 종료 코드로 나갔습니다. watch --once 를
     스케줄 작업으로 걸면 이게 치명적입니다.
     """
+
+
+def cmd_record_recover(args) -> int:
+    """녹화 중에 꺼져 남은 조각을 파일로 만들고, 못 올린 녹화를 올립니다."""
+    from .recorder import outbox, recover
+
+    cfg, layout = _load(args)
+    left = recover.find_leftovers(layout.recordings)
+    waiting = outbox.items(layout.state)
+    print(f"끝나지 않은 녹화 조각 {len(left)}개, 올릴 목록에 남은 파일 {len(waiting)}개")
+    for lo in left:
+        print(f"  - {lo.out_dir.relative_to(layout.recordings)} / {lo.stem}"
+              f"  (화면 {len(lo.videos)}, 소리 {len(lo.wavs)}, 일지 {'있음' if lo.journal else '없음'})")
+    for it in waiting:
+        print(f"  - 올릴 것: {it['path']}")
+    if args.list:
+        return 0
+    n = _recover_recordings(cfg, layout, upload=not args.no_upload, dry_run=args.dry_run)
+    left_after = outbox.items(layout.state)
+    print(f"복구한 세그먼트 {n}개, 아직 못 올린 파일 {len(left_after) if not args.no_upload else '-'}개")
+    return 1 if (left_after and not args.no_upload and not args.dry_run) else 0
 
 
 def cmd_record_remux(args) -> int:
@@ -973,7 +1137,9 @@ def cmd_record_watch(args) -> int:
 
     cfg, layout = _load(args)
     if _trigger_off(cfg, "watch"):
+        _recover_on_start(cfg, layout, args, exiting=True)
         return 0                        # 작업 스케줄러가 띄움 — 실패로 보이지 않게
+    _recover_on_start(cfg, layout, args)
     watcher = Watcher(
         processes=cfg.get("recording.triggers.watch_processes", []),
         window_titles=cfg.get("recording.triggers.watch_window_titles", []),
@@ -1788,6 +1954,12 @@ def build_parser() -> argparse.ArgumentParser:
         dest="sub", required=True)
     tt.add_parser("edit", help="PySide6 편집기로 [[recording.timetable]] 편집").set_defaults(
         func=cmd_timetable_edit)
+
+    p = rec.add_parser("recover", help="녹화 중에 컴퓨터가 꺼져 남은 조각을 파일로 만들어 올리기")
+    p.add_argument("--list", action="store_true", help="무엇이 남았는지 보여 주기만")
+    p.add_argument("--no-upload", action="store_true", help="파일만 만들고 올리지 않음")
+    p.add_argument("--dry-run", action="store_true", help="업로드 흉내만 냄")
+    p.set_defaults(func=cmd_record_recover)
 
     p = rec.add_parser("remux", help="ffmpeg 없이 소리만 녹음해 둔 것을 파일로 만들기")
     p.add_argument("--upload", action="store_true", help="만든 파일을 녹화 때처럼 올림")
