@@ -1,0 +1,1 @@
+사용법: scripts\release.bat vX.Y.Z   (예: v0.3.0)

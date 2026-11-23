@@ -280,3 +280,35 @@ def test_python_code_launches_its_own_interpreter():
     bad = [f"{p.relative_to(src)}:{i}" for p in src.rglob("*.py")
            for i, ln in enumerate(p.read_text(encoding="utf-8").splitlines(), 1) if pat.search(ln)]
     assert not bad, f"이름으로 파이썬을 띄움: {bad} — sys.executable 을 쓰세요"
+
+
+# ---------------------------------------------------------------------------
+# .bat 은 ASCII 만(docs/SCRIPTS.md '규칙 1'). cmd 는 배치 파일의 한글(여러 바이트 글자) 때문에
+# 줄 위치를 잘못 계산해 주석 조각을 명령으로 실행합니다 — 2026-11-23 실기에서
+# '━硫?臾듭?'은(는) 내부 또는 외부 명령... 으로 setup 이 깨졌고, 한글 주석이 있는 _common.bat 이
+# _find_python.bat 을 call 하고 돌아올 때 cp949·UTF-8 창 모두에서 재현됐습니다.
+# 한글 안내는 scripts/msg/*.txt 에 두고 _say.bat(type)으로 보여 줍니다.
+# ---------------------------------------------------------------------------
+MSG = SCRIPTS / "msg"
+
+
+@pytest.mark.parametrize("path", BATS, ids=lambda p: p.name)
+def test_bat_files_are_ascii_only(path: Path):
+    raw = path.read_bytes()
+    bad = [i for i, ln in enumerate(raw.split(b"\r\n"), 1) if any(b > 127 for b in ln)]
+    assert not bad, (f"{path.name}: ASCII 가 아닌 줄 {bad[:10]} — 주석은 영어로, 한글 안내는 "
+                     "scripts/msg/<이름>.txt 에 두고 call \"%~dp0_say.bat\" <이름> 으로")
+
+
+def test_every_message_the_scripts_say_exists():
+    used = {(m, p.name) for p in BATS
+            for m in re.findall(r'_say\.bat"\s+([A-Za-z0-9_]+)', p.read_text(encoding="ascii"))}
+    missing = sorted(f"{p}: {m}" for m, p in used if not (MSG / f"{m}.txt").exists())
+    assert used and not missing, f"없는 메시지 파일: {missing}"
+
+
+@pytest.mark.parametrize("path", sorted(MSG.glob("*.txt")), ids=lambda p: p.name)
+def test_message_files_are_utf8_without_bom(path: Path):
+    raw = path.read_bytes()
+    assert not raw.startswith(codecs.BOM_UTF8), f"{path.name}: BOM 이 있으면 화면에 깨진 글자가 찍힘"
+    raw.decode("utf-8")                                   # UTF-8 이 아니면 여기서 실패

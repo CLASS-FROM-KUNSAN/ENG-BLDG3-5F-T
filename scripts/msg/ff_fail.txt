@@ -1,0 +1,4 @@
+[X] ffmpeg 를 받지 못했습니다. 직접 설치하세요:
+    1) https://github.com/GyanD/codexffmpeg/releases 에서 *-essentials_build.zip 을 받습니다
+       (또는 https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip)
+    2) 압축을 풀어 bin\ffmpeg.exe 가 아래 위치가 되도록 둡니다

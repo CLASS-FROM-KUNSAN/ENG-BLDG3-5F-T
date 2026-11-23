@@ -1,5 +1,5 @@
 @echo off
-REM 작업 스케줄러가 야간에 부르는 무인 전사. 물어보지 않고 바로 돌립니다.
+REM Unattended night transcription (Task Scheduler). Runs without asking.
 call "%~dp0_common.bat"
 "%PY%" -m syncnote --quiet transcribe queue
 exit /b %ERRORLEVEL%

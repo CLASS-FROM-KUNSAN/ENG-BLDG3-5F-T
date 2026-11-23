@@ -1,11 +1,11 @@
 @echo off
 REM =====================================================================
-REM  지금 바로 녹화를 시작합니다.
-REM  이 창을 닫거나 Ctrl+C 를 누르면 안전하게 마무리됩니다.
-REM  바탕화면에 바로가기를 만들어 두면 편합니다.
+REM  Start recording right now.
+REM  Closing this window or pressing Ctrl+C finishes the file safely.
+REM  A desktop shortcut to this file is handy.
 REM =====================================================================
 call "%~dp0_common.bat"
-echo 녹화를 시작합니다. 중단하려면 이 창에서 Ctrl+C 를 누르세요.
+call "%~dp0_say.bat" rn_start
 echo.
 "%PY%" -m syncnote record start %*
 echo.

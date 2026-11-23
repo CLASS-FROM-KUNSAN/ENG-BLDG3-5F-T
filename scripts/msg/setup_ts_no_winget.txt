@@ -1,0 +1,1 @@
+    [!] winget 이 없습니다. https://tailscale.com/download 에서 직접 설치하세요.
