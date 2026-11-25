@@ -194,3 +194,61 @@ def test_stereomix_takes_the_mic_place_when_there_is_no_mic(wavs, tmp_path):
     mux(out, None, 0.0, [MuxInput(wavs[n], n, 1000.0) for n in ("system", "stereomix")],
         layout="separate", delete_audio=False)
     assert _titles(out) == ["시스템 소리", "마이크"]
+
+
+# --- 메인보드 드라이버 검색(사용자 요청: 베이스보드 제조업체를 확인해 Google 검색을 Chromium 으로) ---
+
+from syncnote.recorder import driver_help as H  # noqa: E402
+
+
+@pytest.mark.parametrize("maker,product,label", [
+    ("Gigabyte Technology Co., Ltd.", "H410M HD3P", "Gigabyte H410M HD3P"),
+    # 강의실 PC 실제 값: 제조사 칸과 모델의 상표가 다름 — 모델을 믿음
+    ("ASUSTeK COMPUTER INC.", "Gigabyte B360M DS3H", "Gigabyte B360M DS3H"),
+    ("SAMSUNG ELECTRONICS CO., LTD.", "NT960XHA-KC51S", "SAMSUNG NT960XHA-KC51S"),
+])
+def test_board_label_and_search(maker, product, label):
+    assert H.board_label(maker, product) == label
+    url = H.search_url(maker, product)
+    assert url.startswith("https://www.google.com/search?q=")
+    assert label.replace(" ", "+") in url and "Realtek" in url
+
+
+def test_unknown_board_still_gives_a_generic_search():
+    assert "Realtek" in H.search_url("", "")
+
+
+def test_guidance_names_the_board_and_the_search():
+    text = D.driver_guidance(MIX.name, ("Gigabyte Technology Co., Ltd.", "H410M HD3P"))
+    assert "Gigabyte H410M HD3P" in text and "msinfo32" in text
+    assert H.search_url("Gigabyte Technology Co., Ltd.", "H410M HD3P") in text
+    assert D.REALTEK_DRIVER_URL in text
+
+
+def test_chromium_is_preferred_and_the_newest_is_used(tmp_path, monkeypatch):
+    for ver in ("1208", "1243"):
+        exe = tmp_path / f"chromium-{ver}" / "chrome-win64" / "chrome.exe"
+        exe.parent.mkdir(parents=True)
+        exe.write_bytes(b"")
+    shell = tmp_path / "chromium_headless_shell-1300" / "chrome-win64" / "chrome.exe"
+    shell.parent.mkdir(parents=True)
+    shell.write_bytes(b"")
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path))
+    assert H.chromium_exe() == tmp_path / "chromium-1243" / "chrome-win64" / "chrome.exe"
+
+    launched = []
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: launched.append(cmd))
+    assert H._real_open_search("https://www.google.com/search?q=x") == "Chromium"
+    assert launched[0][0].endswith("chrome.exe") and launched[0][-1].endswith("q=x")
+
+
+def test_people_run_commands_open_the_search_but_json_does_not(monkeypatch, capsys):
+    from syncnote import cli
+
+    opened = []
+    monkeypatch.setattr(H, "open_search", lambda url: opened.append(url) or "Chromium")
+    monkeypatch.setattr(D, "mix_only_help", lambda board=True: ("안내", "https://g/q"))
+    assert cli._print_mix_guidance() is True
+    assert opened == ["https://g/q"] and "Chromium 에 드라이버 검색을 열었습니다" in capsys.readouterr().out
+    opened.clear()
+    assert cli._print_mix_guidance(open_browser=False) is True and opened == []

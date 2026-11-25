@@ -81,12 +81,19 @@ $Scripts = Join-Path $Repo "scripts"
 $Vbs     = Join-Path $Scripts "hidden.vbs"
 
 # 권한이 없어 거부되면 종료 코드 5(tasks.py 가 보고 UAC 로 다시 시도). 그 밖의 실패는 1.
+# 주의: ScheduledTasks 명령(Get/Register/Unregister-ScheduledTask 등)은 모듈 함수라, 이 스크립트를
+# 프롬프트에서 .\register_tasks.ps1 로 실행하면 위의 $ErrorActionPreference = "Stop" 을 보지
+# 못합니다 — 오류가 나도 계속 진행해 '등록:' 을 찍고 '완료' 로 끝났습니다(강의실 PC 에서 실제로).
+# 그래서 이 명령들에는 모두 -ErrorAction 을 직접 줍니다.
 trap {
     $msg = "$($_.Exception.Message)"
     if ($_.Exception -is [UnauthorizedAccessException] -or $_.Exception.HResult -eq -2147024891 -or
-        $msg -match "Access is denied|액세스가 거부") {
+        $msg -match "Access is denied|액세스가 거부|0x80070005") {
         Write-Host "작업 등록이 거부됐습니다(권한 부족): $msg" -ForegroundColor Red
-        Write-Host "관리자 권한 PowerShell 에서 다시 실행하거나 setup.bat 을 실행하세요."
+        Write-Host "  이미 있는 작업이 관리자 권한 창(또는 SSH)에서 만들어졌으면, 일반 창에서는 같은"
+        Write-Host "  계정이라도 지우거나 바꿀 수 없습니다. 관리자 권한 PowerShell 에서 다시 실행하거나"
+        Write-Host "  scripts\setup.bat / scripts\doctor.bat 을 실행해 UAC 창에서 '예' 를 누르세요."
+        Write-Host "  (이미 맞게 등록된 작업은 바꾸지 않으므로, 바꿀 것이 없으면 이 오류는 나지 않습니다.)"
         exit 5
     }
     Write-Host "작업 등록 실패: $msg" -ForegroundColor Red
@@ -96,7 +103,7 @@ trap {
 function Remove-All {
     foreach ($name in @("EclassSync","RecordSchedule","RecordWatch","RecordGuard","TranscribeQueue","HomeBackup","HomePrune","TerminalAudio","StreamSchedule")) {
         if (Get-ScheduledTask -TaskPath "$Folder\" -TaskName $name -ErrorAction SilentlyContinue) {
-            Unregister-ScheduledTask -TaskPath "$Folder\" -TaskName $name -Confirm:$false
+            Unregister-ScheduledTask -TaskPath "$Folder\" -TaskName $name -Confirm:$false -ErrorAction Stop
             Write-Host "  삭제: $Folder\$name"
         }
     }
@@ -108,7 +115,7 @@ function New-HiddenAction([string]$BatName, [string[]]$ExtraArgs) {
     if (-not (Test-Path $bat)) { throw "없는 스크립트: $bat" }
     $argLine = "`"$Vbs`" `"$bat`""
     foreach ($a in $ExtraArgs) { $argLine += " `"$a`"" }
-    New-ScheduledTaskAction -Execute "wscript.exe" -Argument $argLine -WorkingDirectory $Repo
+    New-ScheduledTaskAction -Execute "wscript.exe" -Argument $argLine -WorkingDirectory $Repo -ErrorAction Stop
 }
 
 function Register-One([string]$Name, $Action, $Trigger, [string]$Description) {
@@ -123,13 +130,43 @@ function Register-One([string]$Name, $Action, $Trigger, [string]$Description) {
     $principal = New-ScheduledTaskPrincipal -UserId $User `
         -LogonType Interactive -RunLevel Limited
 
-    if (Get-ScheduledTask -TaskPath "$Folder\" -TaskName $Name -ErrorAction SilentlyContinue) {
-        Unregister-ScheduledTask -TaskPath "$Folder\" -TaskName $Name -Confirm:$false
+    # 이미 맞게 등록돼 있으면 그대로 둡니다(지웠다 다시 만들지 않음). 관리자 창에서 만든 작업은
+    # 일반 창에서 지울 수 없어서, 바꿀 것이 없는데도 '액세스 거부' 로 실패했습니다.
+    $existing = Get-ScheduledTask -TaskPath "$Folder\" -TaskName $Name -ErrorAction SilentlyContinue
+    if ($existing -and (Test-SameTask $existing $Action $Trigger $Description)) {
+        if ("$($existing.State)" -eq "Disabled") {
+            Enable-ScheduledTask -TaskPath "$Folder\" -TaskName $Name -ErrorAction Stop | Out-Null
+            Write-Host "  켬:   $Folder\$Name (꺼져 있었음)" -ForegroundColor Green
+        } else {
+            Write-Host "  그대로: $Folder\$Name (이미 맞게 등록됨)"
+        }
+        return
+    }
+    if ($existing) {
+        Unregister-ScheduledTask -TaskPath "$Folder\" -TaskName $Name -Confirm:$false -ErrorAction Stop
     }
     Register-ScheduledTask -TaskPath $Folder -TaskName $Name -Action $Action `
         -Trigger $Trigger -Settings $settings -Principal $principal `
-        -Description $Description | Out-Null
+        -Description $Description -ErrorAction Stop | Out-Null
     Write-Host "  등록: $Folder\$Name" -ForegroundColor Green
+}
+
+function Test-SameTask($Existing, $Action, $Trigger, [string]$Description) {
+    # 실행할 것(프로그램·인자·폴더), 계정(이름 끝부분 — '1121' 과 'PC\1121'), 로그온 방식,
+    # 설명(주기·시각이 들어 있음), 트리거 종류가 같으면 같은 작업으로 봅니다.
+    $a = @($Existing.Actions)[0]
+    if (-not $a) { return $false }
+    if ("$($a.Execute)" -ne "$($Action.Execute)") { return $false }
+    if ("$($a.Arguments)" -ne "$($Action.Arguments)") { return $false }
+    if ("$($a.WorkingDirectory)" -ne "$($Action.WorkingDirectory)") { return $false }
+    $u = ("$($Existing.Principal.UserId)" -split "\\")[-1]
+    if ($u -ne (("$User" -split "\\")[-1])) { return $false }
+    if ("$($Existing.Principal.LogonType)" -ne "Interactive") { return $false }
+    if ("$($Existing.Principal.RunLevel)" -ne "Limited") { return $false }
+    if ("$($Existing.Description)" -ne $Description) { return $false }
+    $had = @($Existing.Triggers | ForEach-Object { $_.CimClass.CimClassName }) -join ","
+    $want = @($Trigger | ForEach-Object { $_.CimClass.CimClassName }) -join ","
+    return ($had -eq $want)
 }
 
 if ($Remove) { Remove-All; exit 0 }
@@ -152,7 +189,7 @@ Register-One "EclassSync" (New-HiddenAction "eclass_sync.bat" @()) $t `
 
 # --- 시간표 녹화 ---
 if (-not $SkipSchedule) {
-    $t = New-ScheduledTaskTrigger -AtLogOn -User $User
+    $t = New-ScheduledTaskTrigger -AtLogOn -User $User -ErrorAction Stop
     $t.Delay = "PT1M"
     Register-One "RecordSchedule" (New-HiddenAction "record_schedule.bat" @()) $t `
         "로그온 후 대기하다가 config.toml 의 시간표대로 녹화합니다."
@@ -160,7 +197,7 @@ if (-not $SkipSchedule) {
 
 # --- 프로그램 감지 녹화 ---
 if (-not $SkipWatch) {
-    $t = New-ScheduledTaskTrigger -AtLogOn -User $User
+    $t = New-ScheduledTaskTrigger -AtLogOn -User $User -ErrorAction Stop
     $t.Delay = "PT2M"
     Register-One "RecordWatch" (New-HiddenAction "record_watch.bat" @()) $t `
         "Zoom 등 지정한 프로그램이 실행되면 자동으로 녹화합니다."
@@ -169,7 +206,7 @@ if (-not $SkipWatch) {
 # --- 녹화 지킴이 ---
 # 로그온 때 띄우고, 15분마다 다시 띄웁니다(이미 돌고 있으면 IgnoreNew 로 새로 안 띄움).
 # 꺼졌다 켜진 뒤·작업이 12시간 제한으로 끝난 뒤에도 다시 살아나게 하려는 것입니다.
-$t = New-ScheduledTaskTrigger -AtLogOn -User $User
+$t = New-ScheduledTaskTrigger -AtLogOn -User $User -ErrorAction Stop
 $t.Delay = "PT4M"
 $t.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
         -RepetitionInterval (New-TimeSpan -Minutes 15)).Repetition
@@ -203,7 +240,7 @@ if ($AudioAt) {
 
 # --- 시간표 실시간 송출 (선택) ---
 if ($Stream) {
-    $t = New-ScheduledTaskTrigger -AtLogOn -User $User
+    $t = New-ScheduledTaskTrigger -AtLogOn -User $User -ErrorAction Stop
     $t.Delay = "PT3M"
     Register-One "StreamSchedule" (New-HiddenAction "stream_schedule.bat" @()) $t `
         "로그온 후 대기하다가 시간표대로 수업마다 실시간 송출합니다([stream])."

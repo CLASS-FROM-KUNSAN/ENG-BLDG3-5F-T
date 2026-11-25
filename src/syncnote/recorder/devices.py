@@ -89,8 +89,19 @@ def mix_only(default_name: str, mic_names: Sequence[str], probes=None) -> bool:
     return False
 
 
-def driver_guidance(mix_name: str = "스테레오 믹스") -> str:
-    """사람이 직접 해야 하는 일(드라이버 설치·업데이트). 여러 줄."""
+def driver_guidance(mix_name: str = "스테레오 믹스", board: tuple[str, str] = ("", "")) -> str:
+    """사람이 직접 해야 하는 일(드라이버 설치·업데이트). 여러 줄. board = (제조사, 모델)."""
+    from . import driver_help
+
+    maker, product = board
+    label = driver_help.board_label(maker, product)
+    board_lines = [
+        f"   이 PC 의 메인보드: {label}  (msinfo32 의 '베이스보드 제조업체·제품')",
+        "      메인보드 제조사 홈페이지 [지원 → 드라이버] 의 Audio(Realtek) 드라이버가 가장 정확합니다.",
+        f"      검색: {driver_help.search_url(maker, product)}",
+    ] if product else [
+        "   메인보드 모델은 msinfo32 의 '베이스보드 제조업체·제품' 에서 확인하세요(제조사 드라이버가 가장 정확).",
+    ]
     return "\n".join([
         f"[중요] 기본 녹음 장치가 '{mix_name}' 이고 마이크 입력이 없습니다.",
         "  메인보드 마이크 단자(3.5mm, 분홍색)는 기기 이름을 전하지 못해서, Realtek 드라이버가",
@@ -100,6 +111,7 @@ def driver_guidance(mix_name: str = "스테레오 믹스") -> str:
         "      에 들어가 드라이버 설치 파일을 받아 실행합니다.",
         "      또는 장치 관리자(devmgmt.msc) → '사운드, 비디오 및 게임 컨트롤러' →",
         "      'Realtek(R) Audio' 우클릭 → [드라이버 업데이트].",
+        *board_lines,
         "   2) 그래도 마이크가 안 보이면:",
         "      - mmsys.cpl → [녹음] 탭 → 빈 곳 우클릭 → '사용할 수 없는 장치 표시'·'연결이 끊긴 장치",
         "        표시' 체크 → '마이크(Realtek(R) Audio)' 우클릭 → [사용]·[기본 장치로 설정].",
@@ -110,8 +122,18 @@ def driver_guidance(mix_name: str = "스테레오 믹스") -> str:
     ])
 
 
-def check_mix_only() -> str | None:
-    """지금 그 상태면 안내문, 아니면 None. 장치를 열지 않고 목록만 봅니다. 예외 없음."""
+def check_mix_only(*, board: bool = True) -> str | None:
+    """지금 그 상태면 안내문, 아니면 None. 장치를 열지 않고 목록만 봅니다. 예외 없음.
+
+    board: 메인보드 제조사·모델을 읽어 안내에 넣음(그 상태일 때만 읽음)."""
+    help_ = mix_only_help(board=board)
+    return help_[0] if help_ else None
+
+
+def mix_only_help(*, board: bool = True) -> tuple[str, str] | None:
+    """(안내문, 드라이버 검색 URL) 또는 None. 예외 없음."""
+    from . import driver_help
+
     try:
         sc = _sc()
         try:
@@ -122,7 +144,10 @@ def check_mix_only() -> str | None:
                  for m in sc.all_microphones(include_loopback=False)]
     except Exception:  # noqa: BLE001
         return None
-    return driver_guidance(default) if mix_only(default, names) else None
+    if not mix_only(default, names):
+        return None
+    b = driver_help.baseboard() if board else ("", "")
+    return driver_guidance(default, b), driver_help.search_url(*b)
 
 
 @dataclass

@@ -297,7 +297,9 @@ class RecordingSession:
         except Exception:  # noqa: BLE001 — 안내는 녹화를 막지 않음
             return
         if devices.mix_only(default, names, probes):
-            for line in devices.driver_guidance(default).splitlines():
+            from . import driver_help
+
+            for line in devices.driver_guidance(default, driver_help.baseboard()).splitlines():
                 log.error("%s", line)
 
     @staticmethod

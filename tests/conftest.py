@@ -138,3 +138,15 @@ def _no_real_stereo_mix(monkeypatch):
 
     monkeypatch.setattr(devices, "_real_find_mix_source", devices.find_mix_source, raising=False)
     monkeypatch.setattr(devices, "find_mix_source", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_browser_or_board(monkeypatch):
+    """드라이버 안내가 테스트에서 실제 Chromium 을 띄우거나 메인보드를 읽지 않게.
+    시험하는 테스트는 직접 바꿉니다(test_stereo_mix_track.py)."""
+    from syncnote.recorder import driver_help
+
+    monkeypatch.setattr(driver_help, "_real_open_search", driver_help.open_search, raising=False)
+    monkeypatch.setattr(driver_help, "_real_baseboard", driver_help.baseboard, raising=False)
+    monkeypatch.setattr(driver_help, "open_search", lambda url: "")
+    monkeypatch.setattr(driver_help, "baseboard", lambda: ("", ""))
