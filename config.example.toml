@@ -66,6 +66,7 @@ enabled = true
 owner = "CLASS-FROM-KUNSAN"
 repo  = "HUM-3F-1331"
 
+
 # 릴리스는 전부 일 단위입니다: <접두사>-년-월-일
 #   녹화·전사  -> recordings-2026-11-21
 #   e-class    -> eclass-2026-11-21
