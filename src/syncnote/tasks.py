@@ -110,9 +110,14 @@ _QUERY = (
 
 
 def _powershell(args: list[str], timeout: float) -> subprocess.CompletedProcess:
+    from .exec_policy import _powershell, ps_env
+
+    # Windows PowerShell 5.1 을 전체 경로로, PSModulePath 는 비워서(PowerShell 7 창에서 시작해도
+    # ScheduledTasks 등 5.1 모듈을 불러오게 — exec_policy.ps_env).
     return subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", *args],
-        capture_output=True, timeout=timeout, creationflags=_NO_WINDOW,
+        [_powershell(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", *args],
+        capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL, env=ps_env(),
+        creationflags=_NO_WINDOW,
     )
 
 
@@ -284,6 +289,12 @@ def ensure(repo: Path | None = None, *, elevate: bool = False, force: bool = Fal
     다른 곳에서 등록 중이면: 사람이 실행한 것(elevate)은 끝날 때까지 기다렸다가 확인하고,
     뒤에서 자동으로 한 것은 그냥 돌아갑니다."""
     repo = repo or repo_root()
+    # 정규 과정: 모든 자동 등록 전에 PowerShell 실행 정책을 확인하고, 부족하면 영구적으로 켭니다
+    # (scripts/exec_policy.ps1). 등록 자체는 -ExecutionPolicy Bypass 라 막히지 않지만, 사람이
+    # .ps1 을 직접 실행할 때 막혀 창이 바로 닫히지 않게 합니다. 예외를 던지지 않음.
+    from . import exec_policy
+
+    exec_policy.ensure()
     if not _acquire(300 if elevate else 0):
         log.info("다른 곳에서 작업 스케줄러를 등록하는 중이라 이번에는 건너뜁니다.")
         return check(repo)

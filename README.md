@@ -68,6 +68,10 @@ scripts\doctor.bat            REM 환경 점검
 `python -m syncnote tasks status`, 지금 등록: `python -m syncnote tasks ensure`.
 끄려면 환경 변수 `SYNCNOTE_NO_TASK_CHECK=1`.
 
+모든 스크립트와 자동 등록은 먼저 PowerShell 실행 정책을 확인하고, `.ps1` 을 실행할 수 없는
+정책이면 `RemoteSigned`(현재 사용자)로 영구 설정합니다(`scripts\exec_policy.ps1`,
+[SCRIPTS.md](docs/SCRIPTS.md) 규칙 3).
+
 ---
 
 ## 할 수 있는 일

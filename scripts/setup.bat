@@ -3,6 +3,8 @@ REM =====================================================================
 REM  One-time setup. Double-click it. (Korean guide: docs/SCRIPTS.md)
 REM  ASCII only; messages come from msg\setup_*.txt via _say.bat.
 REM =====================================================================
+REM Show the PowerShell execution policy check (done in _common.bat).
+set "SN_POLICY_SHOW=1"
 call "%~dp0_common.bat"
 cd /d "%REPO%"
 

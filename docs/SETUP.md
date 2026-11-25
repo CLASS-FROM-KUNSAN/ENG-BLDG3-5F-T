@@ -311,6 +311,10 @@ VLC 에서 `오디오 > 오디오 트랙` 을 열면 트랙 2개가 보여야 �
 `python -m syncnote tasks status`, 지금 등록: `python -m syncnote tasks ensure`.
 끄려면 환경 변수 `SYNCNOTE_NO_TASK_CHECK=1`.
 
+모든 스크립트와 자동 등록은 먼저 PowerShell 실행 정책을 확인하고, `.ps1` 을 실행할 수 없는
+정책이면 `RemoteSigned`(현재 사용자)로 영구 설정합니다(`scripts\exec_policy.ps1`,
+[SCRIPTS.md](SCRIPTS.md) 규칙 3).
+
 직접 실행할 수도 있습니다(옵션을 줄 때):
 
 ```powershell
