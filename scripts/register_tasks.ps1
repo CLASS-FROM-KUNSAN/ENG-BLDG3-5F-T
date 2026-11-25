@@ -72,6 +72,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# 실행 정책 확인·영구 설정(정규 과정, scripts\exec_policy.ps1 — 모든 스크립트가 먼저 거침).
+# 이미 실행 중인 이 창은 영향받지 않고, 다음에 .ps1 을 직접 실행할 때 막히지 않게 합니다.
+& (Join-Path $PSScriptRoot "exec_policy.ps1")
 $Repo    = Split-Path -Parent $PSScriptRoot
 $Scripts = Join-Path $Repo "scripts"
 $Vbs     = Join-Path $Scripts "hidden.vbs"

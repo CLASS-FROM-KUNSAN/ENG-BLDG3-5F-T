@@ -235,6 +235,22 @@ def _doctor(args, rep: dict) -> int:
         if not ar:
             ok = False
 
+    # PowerShell 실행 정책 — 확인만(바꾸는 것은 doctor.bat·모든 스크립트의 _common.bat 과
+    # 자동 등록이 함). 막혀 있으면 .ps1 을 직접 실행할 때 창이 바로 닫힙니다.
+    from . import exec_policy as _ep
+
+    if _ep.supported():
+        print("\n  PowerShell 실행 정책")
+        pol_items = section("PowerShell 실행 정책")
+        pol = _ep.status()
+        mark = "O" if pol.ok else ("-" if pol.gpo_blocked else "X")
+        fix = "" if pol.ok or pol.gpo_blocked else (
+            " -> 아무 스크립트(doctor.bat 등)나 실행하면 RemoteSigned 로 영구 설정합니다")
+        print(f"    [{mark}] 실행 정책         {pol.describe()}{fix}")
+        pol_items.append({"mark": mark, "name": "실행 정책", "detail": pol.describe() + fix})
+        if mark == "X":
+            ok = False
+
     # 작업 스케줄러 — 등록이 빠지면 시간표·감지 녹화와 지킴이가 한 번도 돌지 않습니다.
     from . import tasks as _tasks
 
