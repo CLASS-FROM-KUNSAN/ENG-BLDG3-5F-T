@@ -288,8 +288,7 @@ class RecordingSession:
     @staticmethod
     def _log_mic_choice(mic, probes) -> None:
         if not probes:
-            log.warning("실제 마이크가 없습니다(스테레오 믹스 같은 장치는 마이크로 쓰지 않음). "
-                        "시스템 소리와 화면만 녹화합니다.")
+            log.warning("녹음 장치(마이크)가 하나도 없습니다. 시스템 소리와 화면만 녹화합니다.")
             return
         if all(p.dead for p in probes):
             # '열지 못함' 과 '열었는데 정확히 0' 은 고칠 곳이 다릅니다. 권한은 짐작하지 않고

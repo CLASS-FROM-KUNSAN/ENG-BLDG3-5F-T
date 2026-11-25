@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import re
 import sys
 import time
 from collections.abc import Sequence
@@ -33,19 +32,13 @@ class SoundcardMissing(Exception):
 
 
 class NoMicrophone(Exception):
-    """실제 마이크가 없음(스테레오 믹스 같은 '나가는 소리 다시 녹음' 장치뿐)."""
+    """녹음 장치(입력)가 하나도 없음."""
 
 
-# '스테레오 믹스' 류: 입력 장치로 보이지만 스피커로 나가는 소리를 다시 녹음합니다.
-# 시스템 소리는 이미 WASAPI 루프백으로 따로 녹음하므로, 이걸 마이크로 쓰면 같은 소리가
-# 두 트랙에 들어갑니다(강의실 PC HUM-3F-1331 은 진짜 마이크 없이 이것만 있었음).
-# 자동 선택에서만 뺍니다 — 사람이 mic_device 에 적으면 그대로 씁니다.
-_MIX = re.compile(r"스테레오\s*믹스|stereo\s*mix|what\s*u\s*hear|wave\s*out\s*mix|"
-                  r"녹음되는\s*소리|rec(?:orded)?\s*mix", re.I)
-
-
-def is_mix_device(name: str) -> bool:
-    return bool(_MIX.search(str(name or "")))
+# '스테레오 믹스' 는 마이크입니다. 메인보드 마이크 단자에 꽂은 마이크가 Realtek 드라이버에서 이
+# 이름으로 보입니다(강의실 PC). 예전에는 '스피커 소리를 다시 녹음하는 장치' 로 보고 마이크에서
+# 빼서, 마이크가 이것뿐인 PC 는 마이크 녹음을 하지 않았고 송출(source = "mic")은 시작조차
+# 못 했습니다. 이제 다른 마이크와 똑같이 다룹니다(이름으로 거르지 않음).
 
 
 @dataclass
@@ -59,10 +52,6 @@ class Device:
     def __str__(self) -> str:
         mark = " (기본)" if self.is_default else ""
         return f"[{self.kind}] {self.name}{mark}"
-
-    @property
-    def is_mix(self) -> bool:
-        return self.kind == "microphone" and is_mix_device(self.name)
 
 
 def _sc():
@@ -128,22 +117,17 @@ def resolve_mic_source(name: str = ""):
             f"마이크를 찾지 못했습니다: {name!r}\n"
             "python -m syncnote devices 로 정확한 이름을 확인하세요."
         )
-    # 이름이 없으면 기본 장치. 단 '스테레오 믹스' 류면 진짜 마이크를 찾고, 없으면 없다고.
+    # 이름이 없으면 기본 장치, 없으면 첫 장치('스테레오 믹스' 도 마이크 — 위 설명).
     try:
         default = sc.default_microphone()
     except Exception:  # noqa: BLE001 — 기본 녹음 장치가 아예 없음
         default = None
-    if default is not None and not is_mix_device(getattr(default, "name", "")):
+    if default is not None:
         return default
-    for mic in sc.all_microphones(include_loopback=False):
-        if not is_mix_device(getattr(mic, "name", "")):
-            return mic
-    raise NoMicrophone(
-        "실제 마이크가 없습니다"
-        + (f"('{default.name}' 는 스피커로 나가는 소리를 다시 녹음하는 장치라 쓰지 않음)"
-           if default is not None else "")
-        + ". 시스템 소리(와 화면)만 녹음합니다."
-    )
+    mics = list(sc.all_microphones(include_loopback=False))
+    if mics:
+        return mics[0]
+    raise NoMicrophone("녹음 장치(마이크)가 하나도 없습니다. 시스템 소리(와 화면)만 녹음합니다.")
 
 
 # ---------------------------------------------------------------------
@@ -337,8 +321,6 @@ def select_working_mic(*, duration_sec: float = 1.5,
         if not mic:
             return False
         name = str(getattr(mic, "name", "") or "").lower()
-        if is_mix_device(name):                 # '스테레오 믹스' 류는 마이크가 아님
-            return True
         return any(ex in name for ex in excl_set)
 
     ordered = []
@@ -357,9 +339,10 @@ def select_working_mic(*, duration_sec: float = 1.5,
         probes.append(result)
         if not result.dead:
             return mic, probes
+    # 전부 죽어 있어도 시도는 합니다(기본 장치, 없으면 첫 장치).
     fallback = None if _is_excluded(default) else default
     if fallback is None and ordered:
-        fallback = ordered[0]                   # 기본이 믹스였으면 첫 진짜 마이크로 시도
+        fallback = ordered[0]
     return fallback, probes
 
 
@@ -380,10 +363,7 @@ def describe() -> str:
         if not picked:
             lines.append("   (없음)")
         for d in picked:
-            note = "  (스피커 소리를 다시 녹음하는 장치 — 마이크로 자동 선택하지 않음)" if d.is_mix else ""
-            lines.append(f'   "{d.name}"{"  <- 기본" if d.is_default else ""}{note}')
-        if kind == "microphone" and picked and all(d.is_mix for d in picked):
-            lines.append("   → 실제 마이크가 없습니다. 녹화는 시스템 소리(와 화면)만 남깁니다.")
+            lines.append(f'   "{d.name}"{"  <- 기본" if d.is_default else ""}')
     lines.append("")
     lines.append("config.toml 에는 이름의 일부만 적어도 됩니다 (부분 일치).")
     return "\n".join(lines)
