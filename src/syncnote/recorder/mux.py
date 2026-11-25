@@ -20,6 +20,7 @@ TRACK_TITLES = {
     "system": "시스템 소리",
     "mic": "마이크",
     "mix": "합친 소리",
+    "stereomix": "스테레오 믹스",
 }
 
 
@@ -103,21 +104,44 @@ def mux(
         meta_index = index
         index += 1
 
-    want_mix = layout in {"mixed", "both"} and len(audio_indices) >= 2
-    want_separate = layout in {"separate", "both"} or len(audio_indices) < 2
+    # 스테레오 믹스 트랙은 마이크와 겹쳐 하나의 '마이크' 소리로 냅니다(둘 다 받은 소리가 겹쳐
+    # 들리게). 마이크 트랙이 없으면(마이크 입력 없음) 스테레오 믹스가 그 자리를 대신합니다.
+    filters: list[str] = []
+    streams = [(f"{i}:a", f"[{i}:a]", name) for i, name in audio_indices]
+    names = [n for *_x, n in streams]
+    if "stereomix" in names:
+        mic = next((s for s in streams if s[2] == "mic"), None)
+        smix = next(s for s in streams if s[2] == "stereomix")
+        if mic is not None:
+            filters.append(f"{mic[1]}{smix[1]}amix=inputs=2:duration=longest:normalize=0[micmix]")
+            streams = [s for s in streams if s[2] != "stereomix"]
+            streams = [("[micmix]", "[micmix]", "mic") if s[2] == "mic" else s for s in streams]
+        else:
+            streams = [(s[0], s[1], "mic") if s[2] == "stereomix" else s for s in streams]
+
+    want_mix = layout in {"mixed", "both"} and len(streams) >= 2
+    want_separate = layout in {"separate", "both"} or len(streams) < 2
 
     if want_mix:
-        inputs = "".join(f"[{i}:a]" for i, _ in audio_indices)
-        cmd += ["-filter_complex",
-                f"{inputs}amix=inputs={len(audio_indices)}:duration=longest:normalize=0[mixed]"]
+        if any(s[0] == "[micmix]" for s in streams):
+            # 같은 필터 출력을 두 번 쓰려면 갈라야 합니다(별도 트랙 + 합친 소리).
+            filters.append("[micmix]asplit=2[micmix_a][micmix_b]")
+            mix_in = "".join("[micmix_b]" if s[0] == "[micmix]" else s[1] for s in streams)
+            streams = [("[micmix_a]", "[micmix_a]", n) if s == "[micmix]" else (s, lb, n)
+                       for s, lb, n in streams]
+        else:
+            mix_in = "".join(lb for _s, lb, _n in streams)
+        filters.append(f"{mix_in}amix=inputs={len(streams)}:duration=longest:normalize=0[mixed]")
+    if filters:
+        cmd += ["-filter_complex", ";".join(filters)]
 
     if video_index is not None:
         cmd += ["-map", f"{video_index}:v"]
 
     out_track_names: list[str] = []
     if want_separate:
-        for i, name in audio_indices:
-            cmd += ["-map", f"{i}:a"]
+        for spec, _label, name in streams:
+            cmd += ["-map", spec]
             out_track_names.append(name)
     if want_mix:
         cmd += ["-map", "[mixed]"]

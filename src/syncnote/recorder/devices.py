@@ -36,16 +36,93 @@ class NoMicrophone(Exception):
     """실제 마이크가 없음(스테레오 믹스 같은 '나가는 소리 다시 녹음' 장치뿐)."""
 
 
-# '스테레오 믹스' 류: 입력 장치로 보이지만 스피커로 나가는 소리를 다시 녹음합니다.
-# 시스템 소리는 이미 WASAPI 루프백으로 따로 녹음하므로, 이걸 마이크로 쓰면 같은 소리가
-# 두 트랙에 들어갑니다(강의실 PC HUM-3F-1331 은 진짜 마이크 없이 이것만 있었음).
-# 자동 선택에서만 뺍니다 — 사람이 mic_device 에 적으면 그대로 씁니다.
+# '스테레오 믹스' 류: 기본 마이크 선택에서는 뺍니다(진짜 마이크를 고름). 사람이 mic_device 에
+# 적으면 그대로 씁니다. 대신 따로 한 트랙으로 함께 녹음합니다 — 아래 find_mix_source 설명.
 _MIX = re.compile(r"스테레오\s*믹스|stereo\s*mix|what\s*u\s*hear|wave\s*out\s*mix|"
                   r"녹음되는\s*소리|rec(?:orded)?\s*mix", re.I)
 
 
 def is_mix_device(name: str) -> bool:
     return bool(_MIX.search(str(name or "")))
+
+
+# 메인보드 마이크 단자(3.5mm)는 소리 파형만 주고받아 기기 이름을 알 수 없고, Realtek 드라이버가
+# 꽂힌 단자를 '마이크 입력' 으로 바꾸지 못하면 녹음 장치가 '스테레오 믹스' 만 보입니다
+# (강의실 PC 에서 실제로). 그래서 스테레오 믹스는 기본 마이크로 고르지는 않지만, 따로 한 트랙으로
+# 함께 녹음해(AudioRecorder 의 'stereomix') 마이크와 겹쳐 남깁니다(mux 가 마이크 트랙에 섞음).
+# 그리고 '기본 녹음 장치가 스테레오 믹스이고 마이크 입력이 없는' 상태는 사람이 드라이버를 고쳐야
+# 하므로 직접 안내합니다(driver_guidance). 드라이버를 대신 받거나 실행하지는 않습니다.
+REALTEK_DRIVER_URL = "https://www.realtek.com/Download/List?cate_id=593"
+
+
+def find_mix_source(name: str = "", *, exclude: str = ""):
+    """'스테레오 믹스' 류 입력 장치. name 을 주면 그 이름(부분 일치). 없으면 None(예외 없음).
+
+    exclude: 이미 마이크로 쓰는 장치 이름 — 같은 장치를 두 트랙으로 열지 않게."""
+    try:
+        mics = list(_sc().all_microphones(include_loopback=False))
+    except Exception as exc:  # noqa: BLE001 — 찾지 못하면 그 트랙만 없음
+        log.debug("스테레오 믹스 장치 목록 실패: %s", exc)
+        return None
+    for mic in mics:
+        n = str(getattr(mic, "name", "") or "")
+        if exclude and n == exclude:
+            continue
+        if (name.lower() in n.lower()) if name else is_mix_device(n):
+            return mic
+    return None
+
+
+def mix_only(default_name: str, mic_names: Sequence[str], probes=None) -> bool:
+    """기본 녹음 장치가 '스테레오 믹스' 이고 마이크 입력이 없는 상태인가.
+
+    마이크 입력이 없음 = 스테레오 믹스 말고 다른 녹음 장치가 없거나, 있어도 전부 시험에서
+    죽어 있음(probes 를 주면)."""
+    if not is_mix_device(default_name):
+        return False
+    real = [n for n in mic_names if n and not is_mix_device(n)]
+    if not real:
+        return True
+    if probes:
+        alive = {p.name for p in probes if not p.dead}
+        return not any(n in alive for n in real)
+    return False
+
+
+def driver_guidance(mix_name: str = "스테레오 믹스") -> str:
+    """사람이 직접 해야 하는 일(드라이버 설치·업데이트). 여러 줄."""
+    return "\n".join([
+        f"[중요] 기본 녹음 장치가 '{mix_name}' 이고 마이크 입력이 없습니다.",
+        "  메인보드 마이크 단자(3.5mm, 분홍색)는 기기 이름을 전하지 못해서, Realtek 드라이버가",
+        "  꽂은 단자를 '마이크 입력' 으로 바꾸지 못하면 이렇게 '스테레오 믹스' 만 보입니다.",
+        "  마이크 소리를 녹음·송출하려면 직접 Realtek 오디오 드라이버를 설치하거나 업데이트하세요:",
+        f"   1) {REALTEK_DRIVER_URL}",
+        "      에 들어가 드라이버 설치 파일을 받아 실행합니다.",
+        "      또는 장치 관리자(devmgmt.msc) → '사운드, 비디오 및 게임 컨트롤러' →",
+        "      'Realtek(R) Audio' 우클릭 → [드라이버 업데이트].",
+        "   2) 그래도 마이크가 안 보이면:",
+        "      - mmsys.cpl → [녹음] 탭 → 빈 곳 우클릭 → '사용할 수 없는 장치 표시'·'연결이 끊긴 장치",
+        "        표시' 체크 → '마이크(Realtek(R) Audio)' 우클릭 → [사용]·[기본 장치로 설정].",
+        "      - Realtek Audio Console → 장치 고급 설정(아날로그 단자) → 꽂은 단자가",
+        "        '마이크 입력(Mic In)' 인지 확인.",
+        "      - 플러그의 검은 띠가 3개(4극, 스마트폰용)면 4극→3극 Y 분리 젠더로 분홍색 단자에.",
+        "  그동안은 스테레오 믹스를 따로 녹음해 마이크 자리에 함께 남깁니다.",
+    ])
+
+
+def check_mix_only() -> str | None:
+    """지금 그 상태면 안내문, 아니면 None. 장치를 열지 않고 목록만 봅니다. 예외 없음."""
+    try:
+        sc = _sc()
+        try:
+            default = str(getattr(sc.default_microphone(), "name", "") or "")
+        except Exception:  # noqa: BLE001
+            default = ""
+        names = [str(getattr(m, "name", "") or "")
+                 for m in sc.all_microphones(include_loopback=False)]
+    except Exception:  # noqa: BLE001
+        return None
+    return driver_guidance(default) if mix_only(default, names) else None
 
 
 @dataclass
@@ -380,10 +457,13 @@ def describe() -> str:
         if not picked:
             lines.append("   (없음)")
         for d in picked:
-            note = "  (스피커 소리를 다시 녹음하는 장치 — 마이크로 자동 선택하지 않음)" if d.is_mix else ""
+            note = ("  (기본 마이크로 고르지 않고 따로 한 트랙으로 함께 녹음)" if d.is_mix else "")
             lines.append(f'   "{d.name}"{"  <- 기본" if d.is_default else ""}{note}')
-        if kind == "microphone" and picked and all(d.is_mix for d in picked):
-            lines.append("   → 실제 마이크가 없습니다. 녹화는 시스템 소리(와 화면)만 남깁니다.")
+        if kind == "microphone":
+            default = next((d.name for d in picked if d.is_default), "")
+            if mix_only(default, [d.name for d in picked]):
+                lines.append("")
+                lines.extend("   " + ln for ln in driver_guidance(default).splitlines())
     lines.append("")
     lines.append("config.toml 에는 이름의 일부만 적어도 됩니다 (부분 일치).")
     return "\n".join(lines)

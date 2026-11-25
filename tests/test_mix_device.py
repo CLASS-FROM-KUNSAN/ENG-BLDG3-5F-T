@@ -77,10 +77,13 @@ def test_a_person_may_still_choose_the_mix_by_name(monkeypatch):
     assert D.resolve_mic_source("스테레오") is MIX
 
 
-def test_devices_listing_marks_mix_and_says_there_is_no_mic(monkeypatch):
+def test_devices_listing_marks_mix_and_guides_the_driver_fix(monkeypatch):
+    # 사양 변경(사용자 요청): 스테레오 믹스는 따로 한 트랙으로 함께 녹음하고, 기본 녹음 장치가
+    # 스테레오 믹스이고 마이크가 없으면 '실제 마이크가 없습니다' 대신 드라이버 설치·업데이트 안내.
     monkeypatch.setattr(D, "list_devices", lambda: [
         D.Device("스피커(Realtek(R) Audio)", "s", "speaker", is_default=True),
         D.Device("스피커(Realtek(R) Audio)", "l", "loopback"),
         D.Device(MIX.name, "m", "microphone", is_default=True)])
     text = D.describe()
-    assert "마이크로 자동 선택하지 않음" in text and "실제 마이크가 없습니다" in text
+    assert "기본 마이크로 고르지 않고 따로 한 트랙으로 함께 녹음" in text
+    assert D.REALTEK_DRIVER_URL in text

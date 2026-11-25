@@ -294,6 +294,13 @@ def _doctor(args, rep: dict) -> int:
                 audio.append({"mark": "X", "name": "루프백",
                               "detail": "시스템 소리를 잡을 루프백 장치가 없습니다"})
                 ok = False
+            guide = dev.check_mix_only()
+            if guide and cfg.get("recording.audio.mic_enabled", True):
+                print("    [X] 마이크 입력 없음 — 기본 녹음 장치가 스테레오 믹스")
+                for line in guide.splitlines():
+                    print("      " + line)
+                audio.append({"mark": "X", "name": "마이크 입력", "detail": guide})
+                ok = False
         except Exception as exc:
             print(f"    [X] {exc}")
             audio.append({"mark": "X", "name": "장치", "detail": str(exc)})
@@ -317,6 +324,7 @@ def _allow_mic() -> int:
         return 0
     if not denied:
         print("마이크 권한: 켜져 있습니다.")
+        _print_mix_guidance()
         return 0
     print("마이크 권한: 꺼져 있습니다 — 켭니다.")
     changed, problems = devices.enable_mic_permission()
@@ -326,7 +334,19 @@ def _allow_mic() -> int:
         print(f"  [X] {p}")
     still = devices.mic_permission_denied()
     print("마이크 권한: " + ("아직 꺼진 곳이 있습니다." if still else "이제 켜져 있습니다."))
+    _print_mix_guidance()
     return 1 if still else 0
+
+
+def _print_mix_guidance() -> bool:
+    """기본 녹음 장치가 스테레오 믹스이고 마이크 입력이 없으면 드라이버 안내를 보여 줌."""
+    from .recorder import devices
+
+    guide = devices.check_mix_only()
+    if guide:
+        print()
+        print(guide)
+    return bool(guide)
 
 
 def cmd_devices(args) -> int:

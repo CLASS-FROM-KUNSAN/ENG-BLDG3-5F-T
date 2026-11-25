@@ -127,3 +127,14 @@ def _no_real_task_scheduler(monkeypatch):
     """모든 명령의 시작·doctor·편집기 저장이 실제 작업 스케줄러를 읽고 등록하지 않게.
     작업 확인을 시험하는 테스트(test_tasks.py)는 이 변수를 지우고 PowerShell 을 가짜로 바꿉니다."""
     monkeypatch.setenv("SYNCNOTE_NO_TASK_CHECK", "1")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_stereo_mix(monkeypatch):
+    """녹음기가 '스테레오 믹스' 트랙을 찾으려고 실제 사운드 장치를 열지 않게(이 PC 에는 그 장치가
+    있을 수 있음). 그 트랙을 시험하는 테스트(test_stereo_mix_track.py)는 _sc 를 가짜로 바꾸고
+    이 대역을 되돌립니다."""
+    from syncnote.recorder import devices
+
+    monkeypatch.setattr(devices, "_real_find_mix_source", devices.find_mix_source, raising=False)
+    monkeypatch.setattr(devices, "find_mix_source", lambda *a, **k: None)
