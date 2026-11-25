@@ -119,5 +119,15 @@ REM only with administrator rights).
 "%PY%" -m syncnote devices --allow-mic
 
 echo.
+call "%~dp0_say.bat" setup_7
+REM Register the Task Scheduler tasks (record schedule/watch/guard, ...) if any
+REM is missing, points at another folder (old clone) or is disabled. Without
+REM them nothing records at log on. Retries with UAC if access is denied.
+"%PY%" -m syncnote tasks ensure
+if errorlevel 1 (
+    call "%~dp0_say.bat" setup_tasks_failed
+)
+
+echo.
 call "%~dp0_say.bat" setup_next
 pause

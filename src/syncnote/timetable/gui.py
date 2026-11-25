@@ -1872,11 +1872,25 @@ class TimetableWindow(QMainWindow):
                 f"config.toml 에 손으로 적은 시간표/공휴일 표 {commented}개를 주석 처리했습니다.\n"
                 "같은 수업이 두 번 잡히지 않게 하기 위해서이며, 지우지는 않았습니다.")
         self.statusBar().showMessage(note, 6000)
+        self._ensure_tasks()
         if setup:
             self.run_setup_flow()
         if show_summary:
             self.show_summary()
         return True
+
+    def _ensure_tasks(self) -> None:
+        """시간표를 저장하면 작업 스케줄러 등록을 확인하고, 빠졌거나 다른 폴더를 가리키면
+        등록합니다(권한이 없으면 UAC — 사람이 저장한 때라 물어도 됨). 시간표를 저장해도 작업이
+        없으면 녹화가 돌지 않으므로. 창을 멈추지 않게 뒤에서 돌립니다(src/syncnote/tasks.py)."""
+        import threading
+
+        from .. import tasks
+
+        if not tasks.supported():
+            return
+        threading.Thread(target=tasks.ensure, kwargs={"elevate": True},
+                         name="tasks-ensure", daemon=True).start()
 
     # -- config.toml 이 없을 때 ------------------------------------------
     def _example_path(self) -> Path | None:
