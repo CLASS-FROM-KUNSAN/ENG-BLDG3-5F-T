@@ -235,6 +235,23 @@ def _doctor(args, rep: dict) -> int:
         if not ar:
             ok = False
 
+    # 작업 스케줄러 — 등록이 빠지면 시간표·감지 녹화와 지킴이가 한 번도 돌지 않습니다.
+    from . import tasks as _tasks
+
+    if _tasks.supported():
+        print("\n  작업 스케줄러")
+        sched_items = section("작업 스케줄러")
+        st = _tasks.check()
+        if st.ok:
+            print(f"    [O] Sync Note 작업   {st.describe()}")
+            sched_items.append({"mark": "O", "name": "Sync Note 작업", "detail": st.describe()})
+        else:
+            fix = "doctor.bat·setup.bat 이 이어서 등록합니다(python -m syncnote tasks ensure)"
+            print(f"    [X] Sync Note 작업   {st.describe()} -> {fix}")
+            sched_items.append({"mark": "X", "name": "Sync Note 작업",
+                                "detail": f"{st.describe()} — {fix}"})
+            ok = False
+
     # 비밀값
     print("\n  자격증명")
     creds = section("자격증명")
@@ -2136,6 +2153,31 @@ def cmd_activity_watch_acrobat(args) -> int:
         return 2
 
 
+def cmd_tasks(args) -> int:
+    """작업 스케줄러 등록 확인(status)·자동 등록(ensure). src/syncnote/tasks.py."""
+    from . import tasks
+
+    auto = getattr(args, "auto", False)
+    try:
+        _load(args)                     # 파일 로그를 켜려고(설정이 틀려도 등록은 함)
+    except Exception as exc:            # noqa: BLE001
+        log.debug("설정을 읽지 못했지만 작업 확인은 계속합니다: %s", exc)
+    if not tasks.supported():
+        print("작업 스케줄러: " + ("SYNCNOTE_NO_TASK_CHECK 로 꺼져 있어 확인하지 않습니다."
+                                  if os.environ.get("SYNCNOTE_NO_TASK_CHECK")
+                                  else "Windows 의 레포 폴더에서 실행할 때만 확인합니다."))
+        return 0
+    if args.action == "status":
+        st = tasks.check()
+        print(f"작업 스케줄러: {st.describe()}")
+        return 0 if st.ok else 1
+    st = tasks.ensure(elevate=not auto and not getattr(args, "no_elevate", False),
+                      force=getattr(args, "force", False))
+    if not auto:
+        print(f"작업 스케줄러: {st.describe()}")
+    return 0 if st.ok else 1
+
+
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -2152,6 +2194,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="환경 점검")
     p.add_argument("--json", action="store_true", help="결과를 JSON 한 줄로(시간표 편집기용)")
     p.set_defaults(func=cmd_doctor)
+    p = sub.add_parser("tasks", help="작업 스케줄러 등록 확인·자동 등록")
+    p.add_argument("action", choices=["status", "ensure"],
+                   help="status: 확인만 / ensure: 빠졌으면 등록(권한이 없으면 UAC)")
+    p.add_argument("--auto", action="store_true",
+                   help="뒤에서 자동으로(창·UAC 없이). 모든 명령의 시작에서 띄움")
+    p.add_argument("--no-elevate", action="store_true", help="UAC 로 다시 시도하지 않음")
+    p.add_argument("--force", action="store_true", help="정상이어도 다시 등록")
+    p.set_defaults(func=cmd_tasks)
     p = sub.add_parser("devices", help="오디오 장치 목록")
     p.add_argument("--json", action="store_true", help="결과를 JSON 한 줄로(시간표 편집기용)")
     p.add_argument("--probe", action="store_true",
@@ -2404,6 +2454,15 @@ def main(argv: list[str] | None = None) -> int:
     _safe_console()
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.func not in (cmd_tasks, cmd_doctor):
+        # 작업 스케줄러에 빠진 작업이 있으면 뒤에서(창 없이) 등록합니다 — 등록을 잊어 녹화가
+        # 한 번도 돌지 않는 일을 막으려고. 명령을 늦추지 않고, 몇 시간에 한 번만 확인합니다.
+        try:
+            from . import tasks
+
+            tasks.spawn_background()
+        except Exception as exc:        # noqa: BLE001 — 무슨 일이 있어도 명령은 계속
+            log.debug("작업 스케줄러 확인을 띄우지 못했습니다: %s", exc)
     try:
         return args.func(args)
     except KeyboardInterrupt:

@@ -120,3 +120,10 @@ def _no_real_capture_tools(monkeypatch):
 
     monkeypatch.setattr(dshow_mic, "_ffmpeg", lambda: None)
     monkeypatch.setattr(dshow_mic, "_tool", lambda _name: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_task_scheduler(monkeypatch):
+    """모든 명령의 시작·doctor·편집기 저장이 실제 작업 스케줄러를 읽고 등록하지 않게.
+    작업 확인을 시험하는 테스트(test_tasks.py)는 이 변수를 지우고 PowerShell 을 가짜로 바꿉니다."""
+    monkeypatch.setenv("SYNCNOTE_NO_TASK_CHECK", "1")

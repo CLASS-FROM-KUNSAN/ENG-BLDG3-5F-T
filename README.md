@@ -56,11 +56,17 @@ scripts\doctor.bat            REM 환경 점검
 | `recording.holidays` | 쉬는 날 (그날 수업은 녹화·송출 일정에서 건너뜀) |
 | `recording.audio.system_device` | `devices.bat` 에 나온 루프백 장치 이름 |
 
-마지막으로 자동 실행을 걸려면 **관리자 권한 PowerShell** 에서:
+자동 실행(작업 스케줄러)은 **따로 등록하지 않아도 됩니다.** 다음 때 등록 상태를 확인하고,
+작업이 빠졌거나 다른 폴더(옛 레포)를 가리키거나 꺼져 있으면 `scripts\register_tasks.ps1` 을
+자동으로 실행합니다(`src/syncnote/tasks.py`).
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\register_tasks.ps1
-```
+- `setup.bat`(7단계)·`doctor.bat`·시간표 편집기에서 저장할 때: 권한이 없어 거부되면 UAC 창을 띄움
+- 그 밖의 모든 `syncnote` 명령이 시작할 때: 뒤에서 창·UAC 없이(정상이면 6시간, 못 고쳤으면
+  1시간에 한 번만 확인)
+
+관리자 권한은 보통 필요 없습니다(자기 계정의 '로그온한 경우에만 실행' 작업). 확인만:
+`python -m syncnote tasks status`, 지금 등록: `python -m syncnote tasks ensure`.
+끄려면 환경 변수 `SYNCNOTE_NO_TASK_CHECK=1`.
 
 ---
 
