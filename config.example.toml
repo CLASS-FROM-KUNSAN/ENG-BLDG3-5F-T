@@ -415,7 +415,8 @@ segment_minutes = 30
 
 # 최대 녹화 길이(분). 깜빡 잊고 켜둔 채 퇴근하는 사고 방지. 단위: 분, 0보다 커야 함.
 # 수동 녹화(record start)에서 --minutes 를 안 주면 이 길이에서 멈추고,
-# 감지 녹화(record watch)도 이 길이를 넘기지 않습니다.
+# 감지 녹화(record watch)는 녹화 하나를 이 길이에서 끊고, 대상이 아직 떠 있으면 곧바로 다음
+# 녹화를 이어서 시작합니다(수업을 놓치지 않게).
 # 시간표 녹화(record schedule)는 수업 길이(+여유 시간)만큼 녹화하므로 이 값을 쓰지 않습니다.
 max_duration_minutes = 240
 
@@ -666,7 +667,8 @@ watch = true
 watch_processes = ["Zoom.exe", "Webex.exe", "Teams.exe"]
 # 감지할 창 제목 부분 문자열 (대소문자 무시, Windows 에서만).
 # 문자열 목록. 예: ["회의 중"]. 비우면 창 제목으로는 감지하지 않습니다.
-# 너무 흔한 단어를 넣으면 계속 감지돼 max_duration_minutes 까지 녹화가 이어집니다.
+# 너무 흔한 단어를 넣으면 계속 감지돼 녹화가 끝나지 않고 이어집니다(max_duration_minutes 마다
+# 파일을 끊어 새 녹화).
 watch_window_titles = []
 # 감지 주기(초). 이 간격으로 프로세스·창 목록을 다시 봅니다.
 watch_interval_sec = 15

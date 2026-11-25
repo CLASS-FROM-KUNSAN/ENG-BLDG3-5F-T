@@ -42,7 +42,12 @@ log = get_logger("cli")
 
 # ---------------------------------------------------------------------------
 def _load(args) -> tuple[config_module.Config, Layout]:
-    cfg = config_module.load(args.config)
+    """설정을 읽습니다.
+
+    녹화·송출 명령(파서에서 lenient_config=True 로 표시)은 설정 일부가 틀려도 멈추지 않고
+    고쳐 씁니다(config.load(lenient=True)) — 설정 오타 하나로 그날 수업이 통째로 비지 않게.
+    """
+    cfg = config_module.load(args.config, lenient=bool(getattr(args, "lenient_config", False)))
     layout = Layout(cfg.data_dir)
     layout.ensure()
     setup_logging(
@@ -51,6 +56,8 @@ def _load(args) -> tuple[config_module.Config, Layout]:
         retention_days=int(cfg.get("general.log_retention_days", 30)),
         console=not args.quiet,
     )
+    for note in getattr(cfg, "load_notes", []):
+        log.error("%s", note)
     for note in config_module.warnings_for(cfg):
         log.warning(note)
     return cfg, layout
@@ -1087,6 +1094,11 @@ def cmd_record_schedule(args) -> int:
     # 지난번 녹화 중에 컴퓨터가 꺼졌으면 그 조각을 파일로 만들어 올립니다(로그온 직후 한 번).
     _recover_on_start(cfg, layout, args)
 
+    # 녹화가 시작조차 못 했거나(다른 녹화가 잠금을 쥠) 금방 끝나면, 수업 창이 아직 남아 있는 한
+    # 같은 창을 다시 녹화합니다(next_window 는 끝나지 않은 창을 돌려줌). 그 사이 간격을
+    # 5 → 15 → 30 → 60초로 늘려 재시작이 폭주하지 않게 합니다.
+    quick_ends = 0
+
     while True:
         nxt = sched.next_window(slots, pre_roll_min=pre, post_roll_min=post,
                                 skip_days=off, policy=policy)
@@ -1116,6 +1128,7 @@ def cmd_record_schedule(args) -> int:
         # 신호입니다 — 이게 없으면 다음 날 아침 로그를 봐도 그 수업이
         # 유실된 줄 모릅니다. '녹화 시작' 은 찍히고 '녹화 종료' 는
         # 안 찍히는 모양이라 눈에 안 띕니다.
+        run_t0 = time.monotonic()
         result = _run_recording(cfg, layout, nxt.name, minutes=minutes,
                                 upload=not args.no_upload, dry_run=args.dry_run,
                                 language=nxt.slot.language, course=course,
@@ -1123,10 +1136,22 @@ def cmd_record_schedule(args) -> int:
                                 meta=_recording_meta(cfg, nxt.name, "schedule", occ=nxt,
                                                      course=course))
         if result is None:
-            log.error("[%s] 녹화를 시작하지 못했습니다(다른 녹화가 돌고 있습니다). "
-                      "이 수업은 녹화되지 않았습니다.", nxt.name)
+            log.error("[%s] 녹화를 시작하지 못했습니다(다른 녹화가 돌고 있습니다). %s", nxt.name,
+                      "이 수업은 녹화되지 않았습니다." if args.once
+                      else "수업이 끝나기 전까지 잠시 뒤 다시 시도합니다(그 사이는 녹화되지 않았습니다).")
         if args.once:
             return 0 if result is not None else 1
+        if result is None or time.monotonic() - run_t0 < 60:
+            quick_ends += 1
+            if datetime.now() < nxt.end:
+                wait = (5, 15, 30, 60)[min(quick_ends - 1, 3)]
+                until = min(nxt.end, datetime.now() + timedelta(seconds=wait))
+                log.warning("[%s] 녹화가 곧바로 끝나 %.0f초 뒤 남은 수업을 다시 녹화합니다.",
+                            nxt.name, (until - datetime.now()).total_seconds())
+                if not sched.wait_until(until, poll_sec=1.0):
+                    return 0
+        else:
+            quick_ends = 0
 
 
 class _WatchOnceDone(Exception):
@@ -2172,7 +2197,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-upload", action="store_true")
     p.add_argument("--dry-run", action="store_true",
                    help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
-    p.set_defaults(func=cmd_record_start)
+    p.set_defaults(func=cmd_record_start, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     p = rec.add_parser("schedule", help="시간표대로 대기하다 녹화")
     p.add_argument("--show", action="store_true", help="시간표만 출력하고 종료")
@@ -2180,7 +2205,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-upload", action="store_true")
     p.add_argument("--dry-run", action="store_true",
                    help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
-    p.set_defaults(func=cmd_record_schedule)
+    p.set_defaults(func=cmd_record_schedule, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     tt = sub.add_parser("timetable", help="시간표 편집기(GUI)").add_subparsers(
         dest="sub", required=True)
@@ -2191,19 +2216,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--once", action="store_true", help="한 번만 확인하고 끝냄")
     p.add_argument("--status", action="store_true", help="지금 상태만 보여 줌")
     p.add_argument("--dry-run", action="store_true", help="업로드 흉내만 냄")
-    p.set_defaults(func=cmd_record_guard)
+    p.set_defaults(func=cmd_record_guard, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     p = rec.add_parser("recover", help="녹화 중에 컴퓨터가 꺼져 남은 조각을 파일로 만들어 올리기")
     p.add_argument("--list", action="store_true", help="무엇이 남았는지 보여 주기만")
     p.add_argument("--no-upload", action="store_true", help="파일만 만들고 올리지 않음")
     p.add_argument("--dry-run", action="store_true", help="업로드 흉내만 냄")
-    p.set_defaults(func=cmd_record_recover)
+    p.set_defaults(func=cmd_record_recover, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     p = rec.add_parser("remux", help="ffmpeg 없이 소리만 녹음해 둔 것을 파일로 만들기")
     p.add_argument("--upload", action="store_true", help="만든 파일을 녹화 때처럼 올림")
     p.add_argument("--upload-dry-run", action="store_true", help="업로드 흉내만")
     p.add_argument("--dry-run", action="store_true", help="목록만 보여 줌")
-    p.set_defaults(func=cmd_record_remux)
+    p.set_defaults(func=cmd_record_remux, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     p = rec.add_parser("watch", help="프로그램이 뜨면 자동 녹화")
     p.add_argument("-l", "--label")
@@ -2214,7 +2239,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-upload", action="store_true")
     p.add_argument("--dry-run", action="store_true",
                    help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
-    p.set_defaults(func=cmd_record_watch)
+    p.set_defaults(func=cmd_record_watch, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     # --- activity (활동 기록) ---
     ac = sub.add_parser(
@@ -2255,14 +2280,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="청취자가 이만큼(분) 없으면 멈춤")
     p.add_argument("--dry-run", action="store_true",
                    help="송출은 하되 이슈는 만들지 않고 내용만 출력")
-    p.set_defaults(func=cmd_stream_start)
+    p.set_defaults(func=cmd_stream_start, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     p = st.add_parser("schedule", help="시간표([[recording.timetable]])대로 수업마다 송출")
     _stream_opts(p)
     p.add_argument("--show", action="store_true", help="송출할 시간표만 출력")
     p.add_argument("--once", action="store_true", help="한 수업만 송출하고 종료")
     p.add_argument("--dry-run", action="store_true", help="이슈는 만들지 않고 내용만 출력")
-    p.set_defaults(func=cmd_stream_schedule)
+    p.set_defaults(func=cmd_stream_schedule, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     p = st.add_parser("link", help="Tailscale 상태와 만들어질 링크 미리 보기")
     _stream_opts(p)
@@ -2297,7 +2322,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--loop", action="store_true",
                    help="끝나면 새 파일로 다시 녹음 (--vad 와 함께 상시 감시)")
     p.add_argument("--print", action="store_true", help="실행하지 않고 명령만 출력")
-    p.set_defaults(func=cmd_audio_record)
+    p.set_defaults(func=cmd_audio_record, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     p = au.add_parser("tools", help="설치된 도구와 실행될 명령 보기")
     _audio_opts(p)

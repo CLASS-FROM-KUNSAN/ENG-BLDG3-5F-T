@@ -130,6 +130,14 @@ class RecordingSession:
         self.silence_stop_sec = float(cfg.get("recording.audio.silence_stop_sec", 900))
         self.silence_abort_sec = float(cfg.get("recording.audio.silence_abort_sec", 3600))
         self._silence_warned: str | None = None
+        # 무음 시간은 트랙(세그먼트)마다 처음부터 셉니다. 세그먼트가 바뀌어도 이어서 세려고
+        # '앞 세그먼트 끝까지 이어진 무음' 을 들고 갑니다(이게 없으면 30분 세그먼트에서
+        # 60분 경고가 한 번도 나오지 않았음).
+        self._quiet_carry = 0.0
+        self._segment_t0 = 0.0
+        # 화면 ffmpeg 가 곧바로 죽은 횟수(연속). 반복되면 그 세그먼트는 소리만 녹음.
+        self._video_quick_deaths = 0
+        self._video_died = False
         # 예전 '장치 무음으로 중단된 세션(업로드 안 함)' 표시. 이제 무음으로 세우지 않으므로 늘 False.
         self.broken = False
         self.realtime_queue = realtime_queue
@@ -155,6 +163,10 @@ class RecordingSession:
         if not tracks:
             return None
         quiet = min((t.silent_for for t in tracks), default=0.0)
+        # 이 세그먼트가 시작부터 내내 조용했으면 앞 세그먼트의 무음에 이어 붙임
+        elapsed = time.time() - self._segment_t0 if self._segment_t0 else 0.0
+        if self._quiet_carry and elapsed and quiet >= elapsed - 5.0:
+            quiet += self._quiet_carry
         tail = ("녹화와 업로드는 계속합니다(무음으로 멈추지 않음). 장치가 맞는지 "
                 "python -m syncnote devices 로 확인하세요.")
         if self.silence_abort_sec and quiet >= self.silence_abort_sec:
@@ -162,6 +174,16 @@ class RecordingSession:
         if self.silence_stop_sec and quiet >= self.silence_stop_sec:
             return ("long", f"모든 트랙이 {quiet / 60:.0f}분째 무음입니다. {tail}")
         return None
+
+    def _carry_silence(self, audio_rec, ended_at: float) -> None:
+        """세그먼트 끝까지 이어진 무음을 다음 세그먼트로 넘깁니다(무음 시간을 이어서 세려고)."""
+        tracks = [t for t in getattr(audio_rec, "results", []) or [] if not t.error]
+        if not tracks:
+            self._quiet_carry = 0.0
+            return
+        quiet = min(t.silent_for for t in tracks)
+        elapsed = ended_at - self._segment_t0 if self._segment_t0 else 0.0
+        self._quiet_carry = (self._quiet_carry + quiet if quiet >= elapsed - 5.0 else quiet)
 
     def _note_silence(self, audio_rec, result, index: int) -> None:
         """긴 무음을 단계마다 한 번씩 경고합니다. 녹화를 멈추지 않습니다."""
@@ -391,6 +413,7 @@ class RecordingSession:
 
         deadline = time.time() + max_minutes * 60
         index = 0
+        fails = 0
 
         while not self._stop_event.is_set() and time.time() < deadline:
             index += 1
@@ -398,14 +421,34 @@ class RecordingSession:
             this_len = min(seg_minutes, remaining_min)
             if this_len <= 0.05:
                 break
+            # 화면 ffmpeg 가 연달아 곧바로 죽으면 이번 세그먼트는 소리만(소리를 잃지 않게).
+            # 다음 세그먼트에서 화면을 다시 시도합니다.
+            video_this = video_on and self._video_quick_deaths < 2
+            if video_on and not video_this:
+                log.warning("화면 녹화가 연달아 곧바로 멈춰 이번 세그먼트는 소리만 녹음합니다"
+                            "(다음 세그먼트에서 화면을 다시 시도).")
+                self._video_quick_deaths = 0
+            self._video_died = False
+            seg_t0 = time.time()
             try:
                 segment = self._record_segment(index, out_dir, this_len, container,
-                                               video_on, audio_on, result)
+                                               video_this, audio_on, result)
+                fails = 0
             except Exception as exc:
-                log.exception("세그먼트 %d 실패", index)
-                result.warnings.append(f"세그먼트 {index} 실패: {exc}")
-                # 장치 문제라면 계속 돌려도 똑같이 실패하므로 멈춥니다.
-                break
+                # 한 세그먼트가 실패했다고 녹화 전체를 멈추지 않습니다 — 그러면 수업의 나머지가
+                # 통째로 빕니다. 간격을 두고(5 → 15 → 30 → 60초) 다음 세그먼트로 다시 시도합니다.
+                log.exception("세그먼트 %d 실패 — 잠시 뒤 다음 세그먼트로 계속합니다", index)
+                result.warnings.append(f"세그먼트 {index} 실패(녹화는 계속): {exc}")
+                wait = (5, 15, 30, 60)[min(fails, 3)]
+                fails += 1
+                self._stop_event.wait(min(wait, max(0.0, deadline - time.time())))
+                continue
+            if self._video_died:
+                # 화면 ffmpeg 가 죽어 세그먼트를 일찍 마무리했음 — 세션은 계속(다음 세그먼트에서 다시 켬)
+                quick = time.time() - seg_t0 < 60
+                self._video_quick_deaths = self._video_quick_deaths + 1 if quick else 0
+            else:
+                self._video_quick_deaths = 0
             if segment is not None:
                 result.segments.append(segment)
                 if self.on_segment_done:
@@ -556,6 +599,7 @@ class RecordingSession:
                     video_recs = []
 
         # --- 대기 ---
+        self._segment_t0 = time.time()
         self._journal(work, stem, index, container, now, audio_rec, video_recs)
         journal_again = time.time() + 5      # 소리 트랙 시작 시각은 첫 소리가 들어온 뒤 정해짐
         end_at = time.time() + minutes * 60
@@ -565,20 +609,22 @@ class RecordingSession:
             if journal_again and time.time() >= journal_again:
                 self._journal(work, stem, index, container, now, audio_rec, video_recs)
                 journal_again = 0.0
-            # 실행 중인 VideoRecorder 중 하나라도 죽으면 중단합니다.
+            # 화면 ffmpeg 가 죽으면 이 세그먼트만 마무리하고 녹화는 계속합니다(다음 세그먼트에서
+            # 화면을 다시 켬). 예전에는 녹화 전체를 멈춰 수업의 나머지를 잃었습니다.
             for vr, sfx in video_recs:
                 if vr is not None and not vr.is_running:
-                    log.error("ffmpeg 가 예기치 않게 종료됐습니다%s. 세그먼트를 마무리합니다.",
-                              f" (모니터{sfx})" if multi else "")
-                    result.warnings.append(f"세그먼트 {index}: ffmpeg 비정상 종료{sfx}")
-                    self._stop_event.set()
+                    log.error("화면 ffmpeg 가 예기치 않게 종료됐습니다%s. 이 세그먼트를 마무리하고 "
+                              "다음 세그먼트로 계속합니다.", f" (모니터{sfx})" if multi else "")
+                    result.warnings.append(f"세그먼트 {index}: ffmpeg 비정상 종료{sfx}(녹화는 계속)")
+                    self._video_died = True
                     break
-            if self._stop_event.is_set():
+            if self._stop_event.is_set() or self._video_died:
                 break
             self._note_silence(audio_rec, result, index)    # 경고만 — 멈추지 않음
 
         # --- 정지 ---
         ended_at = time.time()
+        self._carry_silence(audio_rec, ended_at)
         audio_results = audio_rec.stop() if audio_rec else []
         audio_started = audio_rec.started_at if audio_rec else 0.0
 
