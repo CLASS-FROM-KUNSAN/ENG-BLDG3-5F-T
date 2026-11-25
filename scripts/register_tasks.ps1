@@ -34,6 +34,12 @@
     작업을 실행할 계정(기본: 지금 계정). UAC 로 다른 관리자 계정이 승격해 실행할 때도
     작업은 원래 사용자의 로그온 세션에서 돌아야 하므로 tasks.py 가 원래 이름을 넘깁니다.
 
+.PARAMETER Yes
+    묻지 않고 등록합니다. 없으면, 새로 등록하거나 바꿀 작업이 있을 때 목록을 보여 주고
+    '등록할까요? (Y/N)' 를 묻습니다(이미 맞게 등록돼 있으면 묻지 않음). syncnote 의
+    tasks ensure 는 자기가 먼저 물어보고(뒤에서 하는 자동 등록은 묻지 않음) -Yes 로 부릅니다.
+    물을 수 없는 창(입력 없음)에서 -Yes 가 없으면 등록하지 않고 종료 코드 2.
+
 .PARAMETER Folder
     작업 스케줄러 폴더(기본 "\Sync Note"). 시험할 때 다른 폴더에 등록했다 지우려고 둡니다.
     tasks.py 는 기본 폴더만 봅니다.
@@ -68,7 +74,8 @@ param(
     [string[]]$AudioArgs = @(),
     [switch]$Stream,
     [string]$User = $env:USERNAME,
-    [string]$Folder = "\Sync Note"
+    [string]$Folder = "\Sync Note",
+    [switch]$Yes
 )
 
 $ErrorActionPreference = "Stop"
@@ -133,7 +140,15 @@ function Register-One([string]$Name, $Action, $Trigger, [string]$Description) {
     # 이미 맞게 등록돼 있으면 그대로 둡니다(지웠다 다시 만들지 않음). 관리자 창에서 만든 작업은
     # 일반 창에서 지울 수 없어서, 바꿀 것이 없는데도 '액세스 거부' 로 실패했습니다.
     $existing = Get-ScheduledTask -TaskPath "$Folder\" -TaskName $Name -ErrorAction SilentlyContinue
-    if ($existing -and (Test-SameTask $existing $Action $Trigger $Description)) {
+    $same = $existing -and (Test-SameTask $existing $Action $Trigger $Description)
+    if ($script:Planning) {
+        # 1단계: 무엇이 바뀌는지만 모음(사람에게 물어보려고). 아무것도 바꾸지 않음.
+        if (-not $existing) { $script:Changes += "새로 등록: $Folder\$Name" }
+        elseif (-not $same) { $script:Changes += "바꿔 다시 등록: $Folder\$Name (설정이 다름)" }
+        elseif ("$($existing.State)" -eq "Disabled") { $script:Changes += "켬: $Folder\$Name (꺼져 있음)" }
+        return
+    }
+    if ($same) {
         if ("$($existing.State)" -eq "Disabled") {
             Enable-ScheduledTask -TaskPath "$Folder\" -TaskName $Name -ErrorAction Stop | Out-Null
             Write-Host "  켬:   $Folder\$Name (꺼져 있었음)" -ForegroundColor Green
@@ -176,75 +191,104 @@ if (-not (Test-Path (Join-Path $Repo "config.toml"))) {
     exit 1
 }
 
-Write-Host "작업을 등록합니다..." -ForegroundColor Cyan
+Write-Host "작업 스케줄러 등록을 확인합니다..." -ForegroundColor Cyan
 Write-Host "  레포: $Repo"
 Write-Host "  계정: $User"
 
-# --- Eclass 주기 수집 ---
-# 정각을 피해 17분에 시작합니다. 정각에는 다른 작업이 몰립니다.
-$t = New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddMinutes(17) `
-        -RepetitionInterval (New-TimeSpan -Hours $EclassIntervalHours)
-Register-One "EclassSync" (New-HiddenAction "eclass_sync.bat" @()) $t `
-    "Eclass 자료를 ${EclassIntervalHours}시간마다 수집해 GitHub 릴리스에 올립니다."
+$RegisterAll = {
+    # --- Eclass 주기 수집 ---
+    # 정각을 피해 17분에 시작합니다. 정각에는 다른 작업이 몰립니다.
+    $t = New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddMinutes(17) `
+            -RepetitionInterval (New-TimeSpan -Hours $EclassIntervalHours)
+    Register-One "EclassSync" (New-HiddenAction "eclass_sync.bat" @()) $t `
+        "Eclass 자료를 ${EclassIntervalHours}시간마다 수집해 GitHub 릴리스에 올립니다."
 
-# --- 시간표 녹화 ---
-if (-not $SkipSchedule) {
+    # --- 시간표 녹화 ---
+    if (-not $SkipSchedule) {
+        $t = New-ScheduledTaskTrigger -AtLogOn -User $User -ErrorAction Stop
+        $t.Delay = "PT1M"
+        Register-One "RecordSchedule" (New-HiddenAction "record_schedule.bat" @()) $t `
+            "로그온 후 대기하다가 config.toml 의 시간표대로 녹화합니다."
+    }
+
+    # --- 프로그램 감지 녹화 ---
+    if (-not $SkipWatch) {
+        $t = New-ScheduledTaskTrigger -AtLogOn -User $User -ErrorAction Stop
+        $t.Delay = "PT2M"
+        Register-One "RecordWatch" (New-HiddenAction "record_watch.bat" @()) $t `
+            "Zoom 등 지정한 프로그램이 실행되면 자동으로 녹화합니다."
+    }
+
+    # --- 녹화 지킴이 ---
+    # 로그온 때 띄우고, 15분마다 다시 띄웁니다(이미 돌고 있으면 IgnoreNew 로 새로 안 띄움).
+    # 꺼졌다 켜진 뒤·작업이 12시간 제한으로 끝난 뒤에도 다시 살아나게 하려는 것입니다.
     $t = New-ScheduledTaskTrigger -AtLogOn -User $User -ErrorAction Stop
-    $t.Delay = "PT1M"
-    Register-One "RecordSchedule" (New-HiddenAction "record_schedule.bat" @()) $t `
-        "로그온 후 대기하다가 config.toml 의 시간표대로 녹화합니다."
+    $t.Delay = "PT4M"
+    $t.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+            -RepetitionInterval (New-TimeSpan -Minutes 15)).Repetition
+    Register-One "RecordGuard" (New-HiddenAction "record_guard.bat" @()) $t `
+        "녹화 중이 아닐 때 녹화 파일을 확인하고(꺼진 녹화 합치기·망가진 파일 다시 만들기) 못 올린 것을 올립니다."
+
+    # --- 야간 전사 ---
+    $t = New-ScheduledTaskTrigger -Daily -At $TranscribeTime
+    Register-One "TranscribeQueue" (New-HiddenAction "transcribe_run.bat" @()) $t `
+        "밀린 음성 전사를 매일 $TranscribeTime 에 처리합니다."
+
+    # --- 홈 백업 / 정리 ---
+    # 정리는 백업보다 늦게 돕니다. 지우는 것은 GitHub 에 올라간 사슬이
+    # 확인된 파일뿐이고, 둘 다 config.toml 에서 켜야 실제로 일합니다.
+    if (-not $SkipHome) {
+        $t = New-ScheduledTaskTrigger -Daily -At $HomeBackupTime
+        Register-One "HomeBackup" (New-HiddenAction "home_backup.bat" @()) $t `
+            "홈 폴더를 매일 $HomeBackupTime 에 GitHub 릴리스로 백업합니다(backup.home.enabled)."
+
+        $t = New-ScheduledTaskTrigger -Daily -At $HomePruneTime
+        Register-One "HomePrune" (New-HiddenAction "home_prune.bat" @()) $t `
+            "백업이 확인된 홈 파일을 매일 $HomePruneTime 에 정리합니다(backup.home.prune.enabled)."
+    }
+
+    # --- 터미널 녹음 (선택) ---
+    if ($AudioAt) {
+        $t = New-ScheduledTaskTrigger -Daily -At $AudioAt
+        Register-One "TerminalAudio" (New-HiddenAction "record_audio.bat" $AudioArgs) $t `
+            "매일 $AudioAt 에 소리만 녹음합니다(FFmpeg/SoX, [recording.terminal])."
+    }
+
+    # --- 시간표 실시간 송출 (선택) ---
+    if ($Stream) {
+        $t = New-ScheduledTaskTrigger -AtLogOn -User $User -ErrorAction Stop
+        $t.Delay = "PT3M"
+        Register-One "StreamSchedule" (New-HiddenAction "stream_schedule.bat" @()) $t `
+            "로그온 후 대기하다가 시간표대로 수업마다 실시간 송출합니다([stream])."
+    }
 }
 
-# --- 프로그램 감지 녹화 ---
-if (-not $SkipWatch) {
-    $t = New-ScheduledTaskTrigger -AtLogOn -User $User -ErrorAction Stop
-    $t.Delay = "PT2M"
-    Register-One "RecordWatch" (New-HiddenAction "record_watch.bat" @()) $t `
-        "Zoom 등 지정한 프로그램이 실행되면 자동으로 녹화합니다."
+# 1단계: 무엇이 바뀌는지 모으기 → 있으면 사람에게 묻기 → 2단계: 실제로 등록
+$script:Planning = $true
+$script:Changes = @()
+& $RegisterAll
+$script:Planning = $false
+if ($script:Changes.Count -eq 0) {
+    Write-Host "  모든 작업이 이미 맞게 등록돼 있습니다. 바꿀 것이 없습니다." -ForegroundColor Green
+    exit 0
 }
-
-# --- 녹화 지킴이 ---
-# 로그온 때 띄우고, 15분마다 다시 띄웁니다(이미 돌고 있으면 IgnoreNew 로 새로 안 띄움).
-# 꺼졌다 켜진 뒤·작업이 12시간 제한으로 끝난 뒤에도 다시 살아나게 하려는 것입니다.
-$t = New-ScheduledTaskTrigger -AtLogOn -User $User -ErrorAction Stop
-$t.Delay = "PT4M"
-$t.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
-        -RepetitionInterval (New-TimeSpan -Minutes 15)).Repetition
-Register-One "RecordGuard" (New-HiddenAction "record_guard.bat" @()) $t `
-    "녹화 중이 아닐 때 녹화 파일을 확인하고(꺼진 녹화 합치기·망가진 파일 다시 만들기) 못 올린 것을 올립니다."
-
-# --- 야간 전사 ---
-$t = New-ScheduledTaskTrigger -Daily -At $TranscribeTime
-Register-One "TranscribeQueue" (New-HiddenAction "transcribe_run.bat" @()) $t `
-    "밀린 음성 전사를 매일 $TranscribeTime 에 처리합니다."
-
-# --- 홈 백업 / 정리 ---
-# 정리는 백업보다 늦게 돕니다. 지우는 것은 GitHub 에 올라간 사슬이
-# 확인된 파일뿐이고, 둘 다 config.toml 에서 켜야 실제로 일합니다.
-if (-not $SkipHome) {
-    $t = New-ScheduledTaskTrigger -Daily -At $HomeBackupTime
-    Register-One "HomeBackup" (New-HiddenAction "home_backup.bat" @()) $t `
-        "홈 폴더를 매일 $HomeBackupTime 에 GitHub 릴리스로 백업합니다(backup.home.enabled)."
-
-    $t = New-ScheduledTaskTrigger -Daily -At $HomePruneTime
-    Register-One "HomePrune" (New-HiddenAction "home_prune.bat" @()) $t `
-        "백업이 확인된 홈 파일을 매일 $HomePruneTime 에 정리합니다(backup.home.prune.enabled)."
+Write-Host ""
+Write-Host "작업 스케줄러에 다음을 합니다:" -ForegroundColor Yellow
+foreach ($c in $script:Changes) { Write-Host "  - $c" }
+if (-not $Yes) {
+    $answer = $null
+    try { $answer = Read-Host "등록할까요? (Y/N)" } catch { $answer = $null }
+    if ($null -eq $answer) {
+        Write-Host "물어볼 수 없는 창이라 등록하지 않았습니다(-Yes 로 실행하면 묻지 않고 등록)." -ForegroundColor Yellow
+        exit 2
+    }
+    if ("$answer".Trim() -notmatch "^(y|yes|예|ㅛ)$") {
+        Write-Host "등록하지 않았습니다. 다음에 setup.bat·doctor.bat 을 실행하면 다시 묻습니다." -ForegroundColor Yellow
+        exit 2
+    }
 }
-
-# --- 터미널 녹음 (선택) ---
-if ($AudioAt) {
-    $t = New-ScheduledTaskTrigger -Daily -At $AudioAt
-    Register-One "TerminalAudio" (New-HiddenAction "record_audio.bat" $AudioArgs) $t `
-        "매일 $AudioAt 에 소리만 녹음합니다(FFmpeg/SoX, [recording.terminal])."
-}
-
-# --- 시간표 실시간 송출 (선택) ---
-if ($Stream) {
-    $t = New-ScheduledTaskTrigger -AtLogOn -User $User -ErrorAction Stop
-    $t.Delay = "PT3M"
-    Register-One "StreamSchedule" (New-HiddenAction "stream_schedule.bat" @()) $t `
-        "로그온 후 대기하다가 시간표대로 수업마다 실시간 송출합니다([stream])."
-}
+Write-Host ""
+& $RegisterAll
 
 Write-Host ""
 Write-Host "완료. 작업 스케줄러에서 '$Folder' 폴더를 확인하세요." -ForegroundColor Green

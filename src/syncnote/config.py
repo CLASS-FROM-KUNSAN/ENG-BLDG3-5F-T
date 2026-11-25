@@ -150,6 +150,8 @@ DEFAULTS: dict[str, Any] = {
             "mic_enabled": True,
             "mic_device": "",
             "mic_gain_db": 0.0,
+            "stereo_mix_enabled": True,
+            "stereo_mix_device": "",
             "track_layout": "separate",
             "silence_warn_sec": 60,
             # 모든 트랙이 동시에 이만큼 무음이면 멈춥니다(예약·감지 녹화만).
