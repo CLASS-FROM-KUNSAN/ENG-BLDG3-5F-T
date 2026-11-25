@@ -240,8 +240,22 @@ class Session:
         if mode == "soundcard":
             from ..recorder import devices
 
-            resolver = devices.resolve_system_source if s.source == "system" else devices.resolve_mic_source
-            pcm = resolver(device)
+            if s.source == "system":
+                pcm = devices.resolve_system_source(device)
+            else:
+                try:
+                    pcm = devices.resolve_mic_source(device)
+                except devices.NoMicrophone:
+                    # 마이크 입력이 없고 '스테레오 믹스' 만 있음: 송출을 못 하는 것보다 그 장치로
+                    # 내보냅니다(메인보드 단자 마이크가 이 이름으로 보이는 PC). 사람이 드라이버를
+                    # 고쳐야 하므로 안내합니다. 예전에는 재시도만 끝없이 반복했습니다.
+                    pcm = devices.find_mix_source("")
+                    if pcm is None:
+                        raise
+                    guide = devices.check_mix_only()
+                    for line in (guide or "").splitlines():
+                        log.error("%s", line)
+                    log.warning("마이크 입력이 없어 '%s' 로 송출합니다.", getattr(pcm, "name", pcm))
             inp = None
         else:
             inp = capture.ffmpeg_input_args(source=s.source, device=device)

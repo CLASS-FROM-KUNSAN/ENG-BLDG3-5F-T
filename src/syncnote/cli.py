@@ -294,6 +294,20 @@ def _doctor(args, rep: dict) -> int:
                 audio.append({"mark": "X", "name": "루프백",
                               "detail": "시스템 소리를 잡을 루프백 장치가 없습니다"})
                 ok = False
+            help_ = dev.mix_only_help() if cfg.get("recording.audio.mic_enabled", True) else None
+            if help_:
+                guide, url = help_
+                print("    [X] 마이크 입력 없음 — 기본 녹음 장치가 스테레오 믹스")
+                for line in guide.splitlines():
+                    print("      " + line)
+                audio.append({"mark": "X", "name": "마이크 입력", "detail": guide})
+                ok = False
+                if not getattr(args, "json", False):   # 편집기가 읽는 --json 에서는 띄우지 않음
+                    from .recorder import driver_help
+
+                    how = driver_help.open_search(url)
+                    if how:
+                        print(f"      → {how} 에 이 PC 메인보드의 오디오 드라이버 검색을 열었습니다.")
         except Exception as exc:
             print(f"    [X] {exc}")
             audio.append({"mark": "X", "name": "장치", "detail": str(exc)})
@@ -317,6 +331,7 @@ def _allow_mic() -> int:
         return 0
     if not denied:
         print("마이크 권한: 켜져 있습니다.")
+        _print_mix_guidance()
         return 0
     print("마이크 권한: 꺼져 있습니다 — 켭니다.")
     changed, problems = devices.enable_mic_permission()
@@ -326,7 +341,29 @@ def _allow_mic() -> int:
         print(f"  [X] {p}")
     still = devices.mic_permission_denied()
     print("마이크 권한: " + ("아직 꺼진 곳이 있습니다." if still else "이제 켜져 있습니다."))
+    _print_mix_guidance()
     return 1 if still else 0
+
+
+def _print_mix_guidance(*, open_browser: bool = True, full: bool = True) -> bool:
+    """기본 녹음 장치가 스테레오 믹스이고 마이크 입력이 없으면 드라이버 안내를 보여 주고,
+    이 PC 메인보드의 오디오 드라이버 검색을 Chromium 으로 띄움(사람이 실행한 명령에서만)."""
+    from .recorder import devices, driver_help
+
+    help_ = devices.mix_only_help()
+    if not help_:
+        return False
+    guide, url = help_
+    print()
+    if full:
+        print(guide)
+    else:                          # 목록(describe)에 안내가 이미 있음 — 메인보드·검색만
+        print("\n".join(ln for ln in guide.splitlines() if "메인보드" in ln or "검색:" in ln))
+    if open_browser:
+        how = driver_help.open_search(url)
+        print(f"  → {how} 에 드라이버 검색을 열었습니다." if how
+              else f"  → 브라우저를 열지 못했습니다. 직접 여세요: {url}")
+    return True
 
 
 def cmd_devices(args) -> int:
@@ -339,6 +376,7 @@ def cmd_devices(args) -> int:
         print(_devices_json(enumerate_monitors, probe=getattr(args, "probe", False)))
         return 0
     print(describe())
+    _print_mix_guidance(full=False)   # 목록에 안내는 이미 있음 — 메인보드·드라이버 검색을 띄움
     print()
     print("화면")
     print("=" * 40)

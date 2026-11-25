@@ -285,6 +285,10 @@ class AudioRecorder:
     vad_detector: object | None = None
     # "soundcard"(기본) | "dshow"(마이크를 처음부터 ffmpeg DirectShow 로). 시스템 소리는 늘 soundcard.
     backend: str = "soundcard"
+    # '스테레오 믹스' 를 따로 한 트랙('stereomix')으로 함께 녹음(기본 마이크로는 고르지 않음).
+    # mux 가 마이크 트랙에 겹쳐 섞습니다. 장치가 없으면 이 트랙만 없음(devices.find_mix_source).
+    stereo_mix_enabled: bool = True
+    stereo_mix_device: str = ""
 
     tracks: list[AudioTrack] = field(default_factory=list)
 
@@ -298,8 +302,17 @@ class AudioRecorder:
             specs.append(("mic", self.mic_device, self.mic_gain_db,
                           devices.resolve_mic_source))
 
+        if self.stereo_mix_enabled:
+            specs.append(("stereomix", self.stereo_mix_device, self.mic_gain_db, None))
+
+        mic_used = ""                   # 마이크로 연 장치 이름(스테레오 믹스를 두 번 열지 않게)
         for name, device_name, gain, resolver in specs:
-            if name == "mic" and self.mic_source is not None:
+            if name == "stereomix":
+                # 마이크로 이미 연 장치(사람이 mic_device 에 스테레오 믹스를 적은 경우 등)는 빼고
+                source = devices.find_mix_source(device_name, exclude=mic_used)
+                if source is None:
+                    continue
+            elif name == "mic" and self.mic_source is not None:
                 source = self.mic_source
             else:
                 try:
@@ -324,6 +337,8 @@ class AudioRecorder:
                 vad_detector=self.vad_detector,
                 prefer_dshow=(name == "mic" and self.backend == "dshow"),
             )
+            if name == "mic":
+                mic_used = str(getattr(source, "name", "") or "")
             self.tracks.append(track)
             track.start()
 

@@ -282,13 +282,31 @@ class RecordingSession:
             if changed:
                 mic, probes = pick()
         self._log_mic_choice(mic, probes)
+        self._guide_if_mix_only(probes)
         self._mic_source = mic
         return mic
 
     @staticmethod
+    def _guide_if_mix_only(probes) -> None:
+        """기본 녹음 장치가 스테레오 믹스이고 마이크 입력이 없으면 드라이버 안내(사람이 해야 함)."""
+        try:
+            sc = devices._sc()
+            default = str(getattr(sc.default_microphone(), "name", "") or "")
+            names = [str(getattr(m, "name", "") or "")
+                     for m in sc.all_microphones(include_loopback=False)]
+        except Exception:  # noqa: BLE001 — 안내는 녹화를 막지 않음
+            return
+        if devices.mix_only(default, names, probes):
+            from . import driver_help
+
+            for line in devices.driver_guidance(default, driver_help.baseboard()).splitlines():
+                log.error("%s", line)
+
+    @staticmethod
     def _log_mic_choice(mic, probes) -> None:
         if not probes:
-            log.warning("녹음 장치(마이크)가 하나도 없습니다. 시스템 소리와 화면만 녹화합니다.")
+            log.warning("실제 마이크가 없습니다(스테레오 믹스는 기본 마이크로 고르지 않고, 있으면 "
+                        "따로 한 트랙으로 함께 녹음합니다).")
             return
         if all(p.dead for p in probes):
             # '열지 못함' 과 '열었는데 정확히 0' 은 고칠 곳이 다릅니다. 권한은 짐작하지 않고
@@ -550,6 +568,8 @@ class RecordingSession:
                 mic_source=self._resolve_mic(),
                 vad_detector=self._vad_detector,
                 backend=str(cfg.get("recording.audio.backend", "soundcard")),
+                stereo_mix_enabled=bool(cfg.get("recording.audio.stereo_mix_enabled", True)),
+                stereo_mix_device=str(cfg.get("recording.audio.stereo_mix_device", "")),
             )
             audio_rec.start(stem)
         # 녹화 일지: 컴퓨터가 녹화 중에 꺼지면 다음 시작 때 이것으로 조각을 합쳐 올립니다.
