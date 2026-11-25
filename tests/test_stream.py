@@ -644,3 +644,40 @@ def test_stream_mic_all_dead_triggers_backoff_and_safe_recovery(monkeypatch):
     # 모든 마이크가 실패할 때 지수 백오프를 거쳐 상한(2회) 도달 시 안전 종료
     assert not sess._recover("전체 마이크 무음")
 
+
+
+def test_stream_starts_with_a_silent_device_when_nothing_has_sound(monkeypatch):
+    """사용자 요청 '무음 감지 시 송출 차단 금지': 소리 나는 장치가 없으면 무음 장치로라도 시작."""
+    from syncnote.recorder import devices
+
+    real_healthy = live.Session._wait_healthy                      # 진짜 무음 판정을 쓰려고
+    sess = fake_session(monkeypatch, settings={"source": "mic", "device": "", "restart_on_failure": 1})
+    monkeypatch.setattr(live.Session, "_wait_healthy", real_healthy)
+    sess.settings.min_uptime_sec = 1        # 실제 기본값(5)처럼 0 보다 커야 무음 판정을 함
+
+    def start_enc(self, dev):
+        self._encoder = FakeMicEncoder(dev, peak=0.0)              # 돌기는 하는데 레벨 0
+
+    monkeypatch.setattr(live.Session, "_start_encoder", start_enc)
+    monkeypatch.setattr(live.Session, "_wait_running", lambda self, sec: self._encoder.alive)
+    monkeypatch.setattr(devices, "select_working_mic", lambda **kw: (None, []))
+    assert sess._try_start()                                        # 무음이어도 송출 시작
+    assert sess._good_device == ""
+
+
+def test_stream_still_prefers_a_device_with_sound(monkeypatch):
+    from syncnote.recorder import devices
+
+    real_healthy = live.Session._wait_healthy                      # 진짜 무음 판정을 쓰려고
+    sess = fake_session(monkeypatch, settings={"source": "mic", "device": "조용한마이크",
+                                               "fallback_default_device": True})
+    monkeypatch.setattr(live.Session, "_wait_healthy", real_healthy)
+    sess.settings.min_uptime_sec = 1        # 실제 기본값(5)처럼 0 보다 커야 무음 판정을 함
+
+    def start_enc(self, dev):
+        self._encoder = FakeMicEncoder(dev, peak=0.0 if dev == "조용한마이크" else 0.4)
+
+    monkeypatch.setattr(live.Session, "_start_encoder", start_enc)
+    monkeypatch.setattr(live.Session, "_wait_running", lambda self, sec: self._encoder.alive)
+    monkeypatch.setattr(devices, "select_working_mic", lambda **kw: (None, []))
+    assert sess._try_start() and sess._good_device == ""            # 소리 나는 기본 장치가 먼저
