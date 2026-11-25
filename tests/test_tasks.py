@@ -216,3 +216,42 @@ def test_register_script_works_without_admin_and_takes_the_user():
     assert "[string]$User = $env:USERNAME" in ps
     assert "-UserId $User" in ps and "$env:USERNAME `" not in ps
     assert "exit 5" in ps
+
+
+# --- register_tasks.ps1: 이미 맞는 작업은 그대로, 오류는 진짜로 멈춤 -------------------
+# 강의실 PC: 작업이 관리자 창(SSH)에서 만들어져 일반 창에서 지울 수 없었는데, 바꿀 것이 없는데도
+# 지웠다 다시 만들려다 '액세스 거부' + '이미 있음' 이 났고, 그런데도 '등록:' 을 찍고 '완료' 로 끝남.
+# (프롬프트에서 .\register_tasks.ps1 로 실행하면 ScheduledTasks 모듈 함수가 스크립트의
+#  $ErrorActionPreference = "Stop" 을 보지 못함 — 이 PC 에서 재현.)
+
+import re  # noqa: E402
+
+_PS = (SCRIPTS / "register_tasks.ps1").read_text(encoding="utf-8-sig")
+
+
+@pytest.mark.parametrize("verb", ["Get", "Register", "Unregister", "Enable"])
+def test_every_task_store_call_passes_error_action(verb):
+    code = "\n".join(ln for ln in _PS.splitlines() if not ln.lstrip().startswith("#"))
+    # 줄 끝 백틱(`)으로 이어지는 여러 줄 호출까지 한 덩어리로
+    calls = [m.group(0) for m in re.finditer(
+        rf"{verb}-ScheduledTask\b(?:[^\n]*`\n)*[^\n]*", code)]
+    assert calls, verb
+    for call in calls:
+        assert "-ErrorAction" in call, f"-ErrorAction 이 없음: {call[:80]}"
+
+
+def test_an_already_correct_task_is_left_alone():
+    body = _PS[_PS.index("function Register-One"):_PS.index("function Test-SameTask")]
+    same = body.index("Test-SameTask")
+    assert same < body.index("Unregister-ScheduledTask"), "확인 전에 지우면 안 됨"
+    assert "return" in body[same:body.index("Unregister-ScheduledTask")]
+    # 비교 항목: 실행할 것·계정·로그온 방식·설명(주기·시각)·트리거
+    test = _PS[_PS.index("function Test-SameTask"):]
+    for key in ("Arguments", "WorkingDirectory", "UserId", "LogonType", "RunLevel",
+                "Description", "Triggers"):
+        assert key in test, key
+
+
+def test_access_denied_is_recognised_in_korean_and_by_hresult():
+    trap = _PS[_PS.index("trap {"):_PS.index("function Remove-All")]
+    assert "액세스가 거부" in trap and "0x80070005" in trap and "exit 5" in trap
