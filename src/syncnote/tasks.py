@@ -25,7 +25,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from .logging_setup import get as get_logger
 
@@ -139,7 +139,8 @@ def evaluate(tasks: list[Task] | None, repo: Path | None = None) -> Status:
     """작업 목록 → 상태. (query 와 나눠 테스트가 실제 작업 스케줄러 없이 확인)"""
     if tasks is None:
         return Status(checked=False, error="작업 스케줄러를 읽지 못했습니다")
-    scripts = str((repo or repo_root()) / "scripts").lower().rstrip("\\") + "\\"
+    # 작업의 인자는 늘 Windows 경로라 Windows 규칙으로 맞춰 봅니다(구분자·대소문자).
+    scripts = str(PureWindowsPath(repo or repo_root()) / "scripts").lower().rstrip("\\") + "\\"
     by_name = {t.name: t for t in tasks}
     st = Status(checked=True)
     for name in EXPECTED:
