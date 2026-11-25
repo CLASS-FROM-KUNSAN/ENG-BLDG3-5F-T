@@ -337,8 +337,8 @@ class Session:
         if self._notifier is not None:
             self._notifier.note(text)
 
-    def _wait_healthy(self, seconds: float) -> bool:
-        """seconds 동안 인코더가 살아 있고 실제로 바이트가 나왔는가."""
+    def _wait_running(self, seconds: float) -> bool:
+        """seconds 동안 인코더가 살아 있고 실제로 바이트가 나왔는가(소리 크기는 보지 않음)."""
         start_bytes = self._hub.bytes_in if self._hub is not None else 0
         deadline = time.time() + max(0.0, seconds)
         while time.time() < deadline:
@@ -350,9 +350,23 @@ class Session:
         if self._hub is not None and seconds > 0 and self._hub.bytes_in == start_bytes:
             self._encoder.error = "인코더에서 소리가 한 바이트도 나오지 않음"
             return False
+        return True
+
+    def _wait_healthy(self, seconds: float) -> bool:
+        """_wait_running 에 더해, 마이크 레벨이 정확히 0 이 아닌가(소리가 나오는 장치를 먼저 고르려고).
+
+        레벨 0 인 장치는 '무음 장치' 로 적어 둡니다 — 소리 나는 장치를 끝내 못 찾으면 그 장치로라도
+        송출을 시작합니다(무음 감지로 송출을 막지 않음).
+        """
+        if not self._wait_running(seconds):
+            return False
         if (self.settings.source == "mic" and getattr(self._encoder, "pcm_source", None) is not None
                 and getattr(self._encoder, "peak", 1.0) == 0.0 and seconds > 0):
             self._encoder.error = "[mic] 레벨이 정확히 0 입니다 (신호 경로 없음)"
+            silent = getattr(self, "_silent_devs", None)
+            dev = getattr(self, "_encoder_device", None)
+            if silent is not None and dev is not None and dev not in silent:
+                silent.append(dev)
             return False
         return True
 
@@ -383,10 +397,12 @@ class Session:
         can_switch_mic = (s.source == "mic" and (not s.device or s.fallback_default_device))
 
         failed_devices: list[str] = []
+        self._silent_devs: list[str] = []          # 돌기는 하는데 레벨이 0 인 장치
         for dev in order:
             if self._encoder is not None:
                 self._encoder.stop()
             try:
+                self._encoder_device = dev
                 self._start_encoder(dev)
             except (capture.CaptureError, StreamError):
                 raise  # 설정 문제: 다시 해도 같습니다
@@ -412,6 +428,7 @@ class Session:
                 if self._encoder is not None:
                     self._encoder.stop()
                 try:
+                    self._encoder_device = alt_dev
                     self._start_encoder(alt_dev)
                     if self._wait_healthy(s.min_uptime_sec):
                         log.warning("대체 마이크 '%s' 로 전환하여 복구했습니다.", alt_dev)
@@ -425,6 +442,25 @@ class Session:
                     failed_devices.append(alt_dev)
                     log.warning("대체 마이크 '%s' 열기 실패: %s", alt_dev, exc)
 
+        # 소리 나는 장치를 못 찾았어도 무음으로 돌기는 하는 장치가 있으면 그것으로 송출을 시작합니다.
+        # 무음 감지로 송출을 아예 시작하지 않으면 그 수업은 통째로 빕니다(조용한 시간·마이크 늦게
+        # 꽂음·음소거). 소리가 생기면 그대로 들립니다.
+        for dev in list(self._silent_devs):
+            if self._encoder is not None:
+                self._encoder.stop()
+            try:
+                self._encoder_device = dev
+                self._start_encoder(dev)
+            except Exception as exc:
+                log.warning("무음 장치 '%s' 도 다시 열지 못했습니다: %s", dev or "(기본)", exc)
+                continue
+            if self._wait_running(s.min_uptime_sec):
+                log.warning("소리가 나오는 장치를 찾지 못해, 지금은 무음인 '%s' 로 송출을 시작합니다"
+                            "(무음이어도 송출은 막지 않음). 마이크·음소거를 확인하세요.",
+                            dev or "(기본)")
+                self._good_device = dev
+                self._segment_started = time.time()
+                return True
         return False
 
     def _recover(self, why: str) -> bool:

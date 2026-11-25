@@ -182,11 +182,21 @@ def test_upload_failure_backs_off(w):
     assert e.state == G.VERIFIED and e.attempts == 1 and "네트워크" in e.last_error
 
 
-def test_held_segment_is_never_uploaded(w):
+def test_old_silence_hold_marker_no_longer_blocks_upload(w):
+    """사양 변경(사용자 요청 '무음 감지 시 업로드 차단 금지'): 예전 '무음 보류' 표시가 있어도 올림."""
     G.mark_held(_f(w), "장치 무음")
     g = w.guard()
     g.tick()
-    assert _e(g).state == G.HELD and not any(c.startswith("upload") for c in w.calls)
+    assert _e(g).state == G.CONFIRMED and f"upload {STEM}.mkv" in w.calls
+
+
+def test_entry_left_held_by_an_old_ledger_is_uploaded(w):
+    g = w.guard()
+    g.ledger.entries[str(_f(w))] = G.Entry(str(_f(w)), state=G.HELD,
+                                           size=_f(w).stat().st_size, mtime=_f(w).stat().st_mtime)
+    g.tick()
+    e = _e(g)
+    assert e.state == G.CONFIRMED and any("보류 해제" in h for h in e.history)
 
 
 def test_lost_ledger_is_rebuilt_without_uploading_twice(w):

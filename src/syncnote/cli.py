@@ -719,15 +719,9 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
         except Exception:
             log.exception("전사 대기열 등록 실패")
 
-        if getattr(segment, "broken", False):
-            # 장치 무음으로 중단된 세그먼트입니다. 로컬에는 두고 올리지만
-            # 않습니다 — 소리 없는 영상이 백업된 것처럼 보이면 안 됩니다.
-            log.warning("장치 무음으로 중단된 세그먼트는 올리지 않습니다: %s",
-                        segment.path.name)
-            # 녹화 지킴이(record guard)가 나중에 '못 올린 것' 으로 보고 올리지 않게 표시
-            from .recorder import guard
-            guard.mark_held(segment.path, "장치 무음으로 중단된 세그먼트")
-            return
+        # 무음이어도 올립니다. 예전에는 '장치 무음으로 중단된 세그먼트' 를 올리지 않았는데,
+        # 그러면 조용했던 수업·마이크를 늦게 꽂은 수업이 통째로 빠집니다(사용자 요청: 무음
+        # 감지 시 녹화·업로드 차단 금지). 무음 여부는 로그·경고로만 알립니다.
         if uploader is None or not segment.path.exists() or segment.path.is_dir():
             return
         day = segment.started_at.date()

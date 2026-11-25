@@ -1,4 +1,5 @@
-"""무음 중단.
+"""무음 경고. (사양 변경: 무음이어도 녹화·업로드를 멈추지 않음 — 경고만. 사용자 요청
+'무음 감지 시 녹화 및 업로드 차단 금지'. 예전 stop/abort 단계는 long/very_long 경고가 됨.)
 
 "루프백은 잡히는데 소리가 0" 은 녹화가 쓸모없어지는 가장 흔한 길입니다.
 지금까지는 60초 뒤 경고 한 줄이 전부라, 세 시간 뒤 로그를 봐야 알았습니다.
@@ -54,20 +55,20 @@ def test_one_quiet_track_is_not_a_device_problem(tmp_path):
     assert s._silence_verdict(rec) is None
 
 
-def test_every_track_quiet_for_long_enough_stops(tmp_path):
+def test_every_track_quiet_for_long_enough_warns_but_keeps_recording(tmp_path):
     s = session(tmp_path)
     rec = FakeRecorder([track("system", 1000.0), track("mic", 1000.0)])
     verdict = s._silence_verdict(rec)
-    assert verdict is not None and verdict[0] == "stop"
-    assert "무음" in verdict[1]
+    assert verdict is not None and verdict[0] == "long"
+    assert "무음" in verdict[1] and "계속" in verdict[1]
 
 
-def test_a_much_longer_silence_aborts(tmp_path):
+def test_a_much_longer_silence_warns_again_and_never_blocks_upload(tmp_path):
     s = session(tmp_path)
     rec = FakeRecorder([track("system", 4000.0), track("mic", 4000.0)])
     verdict = s._silence_verdict(rec)
-    assert verdict is not None and verdict[0] == "abort"
-    assert "업로드" in verdict[1]
+    assert verdict is not None and verdict[0] == "very_long"
+    assert "업로드는 계속" in verdict[1]
 
 
 def test_a_short_quiet_stretch_does_nothing(tmp_path):
@@ -90,7 +91,7 @@ def test_a_failed_track_does_not_mask_a_real_silence(tmp_path):
         track("mic", 0.0, error="장치를 열 수 없습니다"),
     ])
     verdict = s._silence_verdict(rec)
-    assert verdict is not None and verdict[0] == "stop"
+    assert verdict is not None and verdict[0] == "long"
 
 
 def test_a_failed_track_alone_is_not_a_verdict(tmp_path):
@@ -120,7 +121,7 @@ def test_zero_means_off(tmp_path, stop, abort):
     s = session(tmp_path, stop=stop, abort=abort)
     rec = FakeRecorder([track("system", 500.0), track("mic", 500.0)])
     verdict = s._silence_verdict(rec)
-    assert verdict is None or verdict[0] in ("stop", "abort")
+    assert verdict is None or verdict[0] in ("long", "very_long")
 
 
 def test_the_quietest_track_does_not_decide_alone(tmp_path):
@@ -155,7 +156,7 @@ def test_verdict_works_against_the_real_recorder(tmp_path):
     s = session(tmp_path)
     rec = _real_recorder(tmp_path, [track("system", 4000.0), track("mic", 4000.0)])
     verdict = s._silence_verdict(rec)
-    assert verdict is not None and verdict[0] == "abort"
+    assert verdict is not None and verdict[0] == "very_long"
 
 
 def test_real_recorder_results_follow_live_track_state(tmp_path):
@@ -192,3 +193,29 @@ def test_silence_peak_reaches_the_track(tmp_path, monkeypatch):
                                   silence_peak=0.25)
     rec.start("x")
     assert made and made[0]["silence_peak"] == 0.25
+
+
+
+# -- 무음이어도 녹화·업로드를 멈추지 않음(사용자 요청) ----------------------------------
+class _Result:
+    def __init__(self):
+        self.warnings = []
+
+
+def test_long_silence_never_stops_or_breaks_the_session(tmp_path):
+    s = session(tmp_path)
+    r = _Result()
+    for quiet in (1000.0, 1200.0, 4000.0, 9000.0):           # 15분 → 60분 넘게 계속 무음
+        s._note_silence(FakeRecorder([track("system", quiet), track("mic", quiet)]), r, 1)
+    assert not s._stop_event.is_set()                       # 녹화를 멈추지 않음
+    assert s.broken is False                                # 업로드 막는 표시도 없음
+    assert len(r.warnings) == 2                             # 단계마다 한 번씩만 경고(long, very_long)
+
+
+def test_silence_warning_rearms_after_sound_returns(tmp_path):
+    s = session(tmp_path)
+    r = _Result()
+    s._note_silence(FakeRecorder([track("system", 1000.0)]), r, 1)
+    s._note_silence(FakeRecorder([track("system", 0.0)]), r, 1)       # 소리가 다시 남
+    s._note_silence(FakeRecorder([track("system", 1000.0)]), r, 2)
+    assert len(r.warnings) == 2

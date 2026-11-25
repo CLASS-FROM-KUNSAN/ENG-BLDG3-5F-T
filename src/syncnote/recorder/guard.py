@@ -17,7 +17,7 @@
     올립니다(같은 이름 에셋은 업로더가 지우고 새로 올림).
   - 실패는 5분 → 15분 → 1시간 → 6시간 간격으로 다시 시도, max_attempts 번 넘으면 '격리'
     (하루 한 번 다시 시도). 원격을 못 읽으면(네트워크) 실패로 세지 않고 나중에 봅니다.
-보류: 장치 무음으로 중단된 세그먼트(<파일>.held.json)는 올리지 않습니다.
+무음: 무음이어도 올립니다. 예전의 '무음 보류'(<파일>.held.json) 표시는 무시하고 올립니다.
 막힘: 과목을 몰라 올릴 곳이 없거나 public 저장소 차단에 걸린 것 — 한 시간마다 다시 봅니다.
 """
 
@@ -77,7 +77,7 @@ def level_of(problem) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 보류 표시
+# 보류 표시(예전 것 — 지금은 업로드를 막지 않음. 옛 표시를 알아보는 데만 씀)
 # ---------------------------------------------------------------------------
 def held_path(path: Path) -> Path:
     return Path(path).with_name(Path(path).name + HELD_SUFFIX)
@@ -234,11 +234,11 @@ class Guard:
             e.size, e.mtime, e.digest = st.st_size, st.st_mtime, ""
             e.state = e.stage = FILE
             e.attempts, e.next_try, e.last_error = 0, 0.0, ""
-        if is_held(f):
-            e.state = HELD
-            return
-        if e.state == HELD:                               # 보류 표시가 지워졌으면 다시
+        # 예전 '무음이라 보류(.held.json)' 는 더 이상 업로드를 막지 않습니다(무음 감지 시 업로드
+        # 차단 금지). 보류였던 것도 처음부터 확인해 올립니다.
+        if e.state == HELD:
             e.state = e.stage = FILE
+            e.note("무음 보류 해제 — 무음이어도 올림", now)
         if e.state == CONFIRMED or e.next_try > now:
             return
         if e.state == QUARANTINE:

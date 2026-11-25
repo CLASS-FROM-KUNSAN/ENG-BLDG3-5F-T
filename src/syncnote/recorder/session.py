@@ -100,7 +100,8 @@ class RecordingSession:
         # 이 녹화가 어느 과목인지. None 이면 과목 폴더 없이 예전 경로 그대로고,
         # 업로드도 하지 않습니다(어느 레포로 갈지 모르므로).
         self.course = course
-        # 무음으로 멈출지. 수동 녹화는 멈추지 않고 경고만 합니다.
+        # 긴 무음을 경고할지(예약·감지 녹화). 어느 경우든 무음 때문에 녹화를 멈추거나
+        # 업로드를 막지 않습니다 — 경고만 합니다(이름은 예전 그대로).
         self.stop_on_silence = bool(stop_on_silence)
         # 화면 캡처를 이 시각(epoch 초) 전에는 시작하지 않습니다.
         # pre-roll 이 수업 시작 2분 전부터 녹화를 켜는데, 그 2분 동안
@@ -123,9 +124,13 @@ class RecordingSession:
             except Exception as exc:
                 log.warning("VAD 감지기 초기화 실패(진폭 판정으로 폴백): %s", exc)
 
+        # 무음 경고 시점(초). 예전에는 여기서 녹화를 멈추고(stop) 업로드를 막았지만(abort),
+        # 무음이어도 녹화·업로드는 계속합니다(조용한 시간·마이크 늦게 꽂음·장치 고장도
+        # 기록은 남아야 함). 키 이름은 기존 config.toml 과 맞추려고 그대로 둡니다.
         self.silence_stop_sec = float(cfg.get("recording.audio.silence_stop_sec", 900))
         self.silence_abort_sec = float(cfg.get("recording.audio.silence_abort_sec", 3600))
-        # 장치 무음으로 중단된 세션은 올리지 않습니다.
+        self._silence_warned: str | None = None
+        # 예전 '장치 무음으로 중단된 세션(업로드 안 함)' 표시. 이제 무음으로 세우지 않으므로 늘 False.
         self.broken = False
         self.realtime_queue = realtime_queue
         self.on_segment_done = on_segment_done
@@ -140,8 +145,9 @@ class RecordingSession:
     # (교수가 판서만 하는 5분, 시험 시간). **켜져 있는 트랙이 전부
     # 동시에** 조용할 때만 장치 문제로 봅니다.
     #
-    # 수동 녹화(record start)에는 적용하지 않습니다. 사용자가 직접
-    # 시작한 것을 코드가 멈추면 안 됩니다 — 경고만 합니다.
+    # 무음이어도 녹화를 멈추거나 업로드를 막지 않습니다. 오래 조용하면 경고만 남깁니다
+    # ("long" = silence_stop_sec, "very_long" = silence_abort_sec). 수동 녹화(record start)는
+    # 경고도 하지 않습니다.
     def _silence_verdict(self, audio_rec) -> tuple[str, str] | None:
         if audio_rec is None or not self.stop_on_silence:
             return None
@@ -149,14 +155,25 @@ class RecordingSession:
         if not tracks:
             return None
         quiet = min((t.silent_for for t in tracks), default=0.0)
+        tail = ("녹화와 업로드는 계속합니다(무음으로 멈추지 않음). 장치가 맞는지 "
+                "python -m syncnote devices 로 확인하세요.")
         if self.silence_abort_sec and quiet >= self.silence_abort_sec:
-            return ("abort", f"모든 트랙이 {quiet / 60:.0f}분째 무음입니다. "
-                             "장치 문제로 보고 세션을 중단합니다(업로드 안 함).")
+            return ("very_long", f"모든 트랙이 {quiet / 60:.0f}분째 무음입니다. {tail}")
         if self.silence_stop_sec and quiet >= self.silence_stop_sec:
-            return ("stop", f"모든 트랙이 {quiet / 60:.0f}분째 무음입니다. "
-                            "녹화를 멈춥니다. python -m syncnote devices 로 "
-                            "장치를 확인하세요.")
+            return ("long", f"모든 트랙이 {quiet / 60:.0f}분째 무음입니다. {tail}")
         return None
+
+    def _note_silence(self, audio_rec, result, index: int) -> None:
+        """긴 무음을 단계마다 한 번씩 경고합니다. 녹화를 멈추지 않습니다."""
+        verdict = self._silence_verdict(audio_rec)
+        if verdict is None:
+            self._silence_warned = None            # 소리가 다시 나면 다음 무음을 새로 경고
+            return
+        if verdict[0] == self._silence_warned:
+            return
+        self._silence_warned = verdict[0]
+        result.warnings.append(f"세그먼트 {index}: {verdict[1]}")
+        log.warning("%s", verdict[1])
 
     def _invalidate_and_fallback_mic(self) -> object | None:
         """마이크 에러 발생 시 캐시를 무효화하고 살아있는 다른 마이크로 전환합니다.
@@ -558,14 +575,7 @@ class RecordingSession:
                     break
             if self._stop_event.is_set():
                 break
-            verdict = self._silence_verdict(audio_rec)
-            if verdict:
-                result.warnings.append(f"세그먼트 {index}: {verdict[1]}")
-                log.error("%s", verdict[1])
-                if verdict[0] == "abort":
-                    self.broken = True
-                self._stop_event.set()
-                break
+            self._note_silence(audio_rec, result, index)    # 경고만 — 멈추지 않음
 
         # --- 정지 ---
         ended_at = time.time()
