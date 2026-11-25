@@ -123,8 +123,10 @@ def mux(
     want_separate = layout in {"separate", "both"} or len(streams) < 2
 
     if want_mix:
-        if any(s[0] == "[micmix]" for s in streams):
-            # 같은 필터 출력을 두 번 쓰려면 갈라야 합니다(별도 트랙 + 합친 소리).
+        if want_separate and any(s[0] == "[micmix]" for s in streams):
+            # 같은 필터 출력을 두 번 쓰려면 갈라야 합니다(별도 트랙 + 합친 소리, layout both).
+            # mixed 는 한 번만 쓰므로 가르지 않음 — 안 쓰는 출력이 남으면 ffmpeg 가 거부합니다
+            # ('asplit has output 0 unconnected', CI 의 ffmpeg 에서).
             filters.append("[micmix]asplit=2[micmix_a][micmix_b]")
             mix_in = "".join("[micmix_b]" if s[0] == "[micmix]" else s[1] for s in streams)
             streams = [("[micmix_a]", "[micmix_a]", n) if s == "[micmix]" else (s, lb, n)
