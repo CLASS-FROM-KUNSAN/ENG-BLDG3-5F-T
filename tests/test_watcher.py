@@ -17,19 +17,38 @@ def make(alive_fn, **kw):
     return w
 
 
-def test_gives_up_instead_of_thrashing():
-    """회귀 방지: 녹화가 즉시 실패하는데 대상이 계속 켜져 있으면
-    무한히 재시작하며 빈 폴더를 초당 수백 개 만들어 디스크를 채웁니다.
+def _stop_after(sec):
+    stop = {"go": False}
+    threading.Timer(sec, lambda: stop.__setitem__("go", True)).start()
+    return lambda: stop["go"]
+
+
+def test_keeps_watching_with_growing_backoff():
+    """녹화가 곧바로 실패해도 감시를 포기하지 않습니다(사양 변경: 녹화를 막는 구조 제거).
+    대신 간격을 두 배씩 늘려 폭주(초당 수백 번 재시작)하지 않습니다.
+    예전: 3번이면 그날 감시를 끝냄 → 예약 녹화와 겹친 뒤의 수업을 놓침.
     """
     w = make(lambda: True)
     calls = {"n": 0}
-    started = time.monotonic()
-
     w.watch(lambda hit: calls.__setitem__("n", calls["n"] + 1),
-            cooldown_sec=0.2, min_session_sec=1.0, max_fast_failures=3)
+            stop_check=_stop_after(1.6), cooldown_sec=0.1, min_session_sec=1.0,
+            max_fast_failures=3)
+    # 0.1 → 0.2 → 0.4 → 0.8초 간격: 1.6초 동안 4~5번. 3번에서 멈추지도, 폭주하지도 않음.
+    assert 4 <= calls["n"] <= 6, f"{calls['n']}회"
 
-    assert calls["n"] == 3, f"{calls['n']}회 시작됨 — 포기 로직이 동작하지 않았습니다"
-    assert time.monotonic() - started > 0.3, "쿨다운 없이 즉시 재시도했습니다"
+
+def test_still_running_after_a_full_session_records_again():
+    """최대 녹화 시간에 걸려 끝났는데 대상이 아직 떠 있으면 이어서 녹화합니다.
+    예전: 대상이 사라질 때까지 기다려 나머지 수업을 녹화하지 않음."""
+    w = make(lambda: True)
+    calls = {"n": 0}
+
+    def on_start(hit):
+        calls["n"] += 1
+        time.sleep(1.1)        # min_session_sec 를 넘긴 정상 세션
+
+    w.watch(on_start, stop_check=_stop_after(3.0), cooldown_sec=0.2, min_session_sec=1.0)
+    assert calls["n"] >= 2
 
 
 def test_one_appearance_one_recording():
@@ -102,7 +121,7 @@ def test_stop_check_honoured_before_first_match():
 
 
 def test_exception_in_on_start_does_not_kill_watcher():
-    """녹화가 예외로 죽어도 감시는 계속되거나 깔끔히 포기해야 합니다."""
+    """녹화가 예외로 죽어도 감시는 계속됩니다(간격을 늘려 가며 다시 시도)."""
     w = make(lambda: True)
     calls = {"n": 0}
 
@@ -110,8 +129,9 @@ def test_exception_in_on_start_does_not_kill_watcher():
         calls["n"] += 1
         raise RuntimeError("ffmpeg 폭발")
 
-    w.watch(boom, cooldown_sec=0.05, min_session_sec=1.0, max_fast_failures=2)
-    assert calls["n"] == 2
+    w.watch(boom, stop_check=_stop_after(1.0), cooldown_sec=0.05, min_session_sec=1.0,
+            max_fast_failures=2)
+    assert calls["n"] >= 3
 
 
 def test_keyboard_interrupt_propagates():
