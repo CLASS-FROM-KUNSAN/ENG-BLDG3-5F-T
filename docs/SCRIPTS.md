@@ -100,9 +100,11 @@ cp949 창과 UTF-8 창 **모두에서** 이전 줄의 한글 조각이 명령으
 
 ## 작업 스케줄러가 실행하는 것 (`register_tasks.ps1` 이 등록)
 
-등록은 자동입니다: `setup.bat`·`doctor.bat`·시간표 편집기 저장(필요하면 UAC), 그리고 모든
+등록은 자동입니다. 사람이 실행한 `setup.bat`·`doctor.bat`·시간표 편집기 저장·`register_tasks.ps1` 은
+새로 등록하거나 바꿀 것이 있을 때 **'등록할까요? (Y/N)'** 를 먼저 묻습니다. 필요하면 UAC 도 띄웁니다.
+그리고 모든
 `syncnote` 명령의 시작(뒤에서, 몇 시간에 한 번)에서 빠진 작업·옛 폴더를 가리키는 작업·꺼진
-작업을 찾아 `register_tasks.ps1` 을 실행합니다(`src/syncnote/tasks.py`). `doctor.bat --json`
+작업을 찾아 묻지 않고 `register_tasks.ps1 -Yes` 를 실행합니다(`src/syncnote/tasks.py`). 물어볼 사람이 없어서입니다. `doctor.bat --json`
 (편집기가 읽음)에서는 출력을 섞지 않으려고 등록하지 않습니다.
 
 | 파일 | 하는 일 |

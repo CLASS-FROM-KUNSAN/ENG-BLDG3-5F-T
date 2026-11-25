@@ -255,3 +255,75 @@ def test_an_already_correct_task_is_left_alone():
 def test_access_denied_is_recognised_in_korean_and_by_hresult():
     trap = _PS[_PS.index("trap {"):_PS.index("function Remove-All")]
     assert "액세스가 거부" in trap and "0x80070005" in trap and "exit 5" in trap
+
+
+# --- 등록 전에 묻기(사용자 요청: 작업을 새로 등록할지 사용자에게 물어볼 것) -----------------
+# 사람이 실행한 곳(setup·doctor·편집기·register_tasks.ps1)은 묻고, 뒤에서 하는 자동 등록은 묻지
+# 않음(사용자가 정함). 아니요면 다음 실행 때 다시 물음.
+
+def test_a_no_answer_registers_nothing(stamps, monkeypatch):
+    monkeypatch.setattr(T, "check", lambda repo=None: T.Status(checked=True, missing=["RecordWatch"]))
+    reg = []
+    monkeypatch.setattr(T, "register", lambda repo=None, **kw: reg.append(kw) or (0, ""))
+    asked = []
+    st = T.ensure(REPO, elevate=True, ask=lambda s: asked.append(s.describe()) or False)
+    assert reg == [] and not st.ok and "RecordWatch" in asked[0]
+
+
+def test_a_yes_answer_registers(stamps, monkeypatch):
+    seq = [T.Status(checked=True, missing=["RecordWatch"]),
+           T.Status(checked=True, present=list(T.EXPECTED))]
+    monkeypatch.setattr(T, "check", lambda repo=None: seq.pop(0))
+    reg = []
+    monkeypatch.setattr(T, "register", lambda repo=None, **kw: reg.append(kw) or (0, ""))
+    assert T.ensure(REPO, ask=lambda s: True).ok and len(reg) == 1
+
+
+def test_nothing_is_asked_when_all_is_registered(stamps, monkeypatch):
+    monkeypatch.setattr(T, "check", lambda repo=None: T.Status(checked=True, present=list(T.EXPECTED)))
+    assert T.ensure(REPO, ask=lambda s: pytest.fail("물을 것이 없는데 물음")).ok
+
+
+@pytest.mark.parametrize("answers,want", [(["y"], True), (["예"], True), (["n"], False),
+                                          (["?", "Y"], True), (["?", "?", "?"], False)])
+def test_console_ask(answers, want, capsys):
+    it = iter(answers)
+    st = T.Status(checked=True, missing=["RecordSchedule"])
+    assert T.console_ask(st, input_fn=lambda _p: next(it)) is want
+    assert "RecordSchedule" in capsys.readouterr().out
+
+
+def test_console_ask_without_input_registers_nothing():
+    def eof(_p):
+        raise EOFError
+    assert T.console_ask(T.Status(checked=True, missing=["RecordWatch"]), input_fn=eof) is False
+
+
+def test_the_script_is_always_called_with_yes_after_asking(monkeypatch):
+    calls = []
+    monkeypatch.setattr(T, "_powershell", lambda a, timeout: calls.append(a) or _CP(0))
+    T.register(REPO, user="1121")
+    assert "-Yes" in calls[0]
+
+
+def test_background_and_people_run_commands(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(T, "supported", lambda repo=None: True)
+    monkeypatch.setattr(T, "ensure", lambda **kw: seen.update(kw) or T.Status(checked=True))
+    monkeypatch.setattr(cli, "_load", lambda a: None)
+    cli.main(["tasks", "ensure"])
+    assert seen["ask"] is T.console_ask                   # setup.bat·doctor.bat — 물음
+    cli.main(["tasks", "ensure", "--auto"])
+    assert seen["ask"] is None                             # 뒤에서 하는 자동 등록 — 묻지 않음
+    cli.main(["tasks", "ensure", "--yes"])
+    assert seen["ask"] is None
+
+
+def test_register_script_asks_before_changing_anything():
+    plan = _PS[_PS.index("$script:Planning = $true"):]
+    assert plan.index("Read-Host") < plan.index("& $RegisterAll", plan.index("Read-Host"))
+    assert "if (-not $Yes)" in plan and "exit 2" in plan
+    # 계획 단계에서는 아무것도 바꾸지 않음
+    one = _PS[_PS.index("function Register-One"):_PS.index("function Test-SameTask")]
+    planning = one[one.index("if ($script:Planning)"):one.index("if ($same)")]
+    assert "Register-ScheduledTask" not in planning and "Unregister" not in planning

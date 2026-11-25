@@ -2225,8 +2225,11 @@ def cmd_tasks(args) -> int:
         st = tasks.check()
         print(f"작업 스케줄러: {st.describe()}")
         return 0 if st.ok else 1
+    # 사람이 실행한 것(setup.bat·doctor.bat)은 묻고, 뒤에서 하는 자동 등록(--auto)은 묻지 않음
+    # (사용자가 정함). --yes 면 묻지 않음.
+    ask = None if (auto or getattr(args, "yes", False)) else tasks.console_ask
     st = tasks.ensure(elevate=not auto and not getattr(args, "no_elevate", False),
-                      force=getattr(args, "force", False))
+                      force=getattr(args, "force", False), ask=ask)
     if not auto:
         print(f"작업 스케줄러: {st.describe()}")
     return 0 if st.ok else 1
@@ -2255,6 +2258,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="뒤에서 자동으로(창·UAC 없이). 모든 명령의 시작에서 띄움")
     p.add_argument("--no-elevate", action="store_true", help="UAC 로 다시 시도하지 않음")
     p.add_argument("--force", action="store_true", help="정상이어도 다시 등록")
+    p.add_argument("--yes", action="store_true", help="'등록할까요?' 를 묻지 않고 등록")
     p.set_defaults(func=cmd_tasks)
     p = sub.add_parser("devices", help="오디오 장치 목록")
     p.add_argument("--json", action="store_true", help="결과를 JSON 한 줄로(시간표 편집기용)")

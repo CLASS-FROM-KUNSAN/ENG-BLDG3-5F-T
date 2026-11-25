@@ -181,7 +181,8 @@ def register(repo: Path | None = None, *, elevate: bool = False,
     """register_tasks.ps1 실행. (종료 코드, 출력). 권한 부족이면 elevate 일 때 UAC 로 다시."""
     ps1 = str(script_path(repo))
     user = user or os.environ.get("USERNAME", "")
-    args = ["-File", ps1] + (["-User", user] if user else [])
+    # 묻는 일은 호출한 쪽이 먼저 함(ensure 의 ask, 뒤에서 하는 자동 등록은 묻지 않음) — 늘 -Yes
+    args = ["-File", ps1, "-Yes"] + (["-User", user] if user else [])
     try:
         cp = _powershell(args, timeout=300)
         rc, out = cp.returncode, (cp.stdout + cp.stderr).decode("utf-8", "replace")
@@ -190,7 +191,7 @@ def register(repo: Path | None = None, *, elevate: bool = False,
     if rc == ACCESS_DENIED and elevate and not _is_admin():
         log.warning("작업 등록이 권한 부족으로 거부돼 관리자 권한(UAC)으로 다시 시도합니다.")
         print("작업 스케줄러 등록에 관리자 권한이 필요합니다. 뜨는 창에서 '예' 를 누르세요.")
-        inner = (f"-NoProfile -ExecutionPolicy Bypass -File \"{ps1}\""
+        inner = (f"-NoProfile -ExecutionPolicy Bypass -File \"{ps1}\" -Yes"
                  + (f" -User \"{user}\"" if user else ""))
         cmd = ("try { $p = Start-Process powershell -Verb RunAs -Wait -PassThru "
                "-WindowStyle Hidden -ArgumentList '" + inner.replace("'", "''") + "'; "
@@ -283,11 +284,16 @@ def _release() -> None:
         pass
 
 
-def ensure(repo: Path | None = None, *, elevate: bool = False, force: bool = False) -> Status:
+def ensure(repo: Path | None = None, *, elevate: bool = False, force: bool = False,
+           ask=None) -> Status:
     """확인하고 빠졌으면 등록합니다. 녹화를 막지 않도록 무슨 일이 있어도 예외를 던지지 않음.
 
     다른 곳에서 등록 중이면: 사람이 실행한 것(elevate)은 끝날 때까지 기다렸다가 확인하고,
-    뒤에서 자동으로 한 것은 그냥 돌아갑니다."""
+    뒤에서 자동으로 한 것은 그냥 돌아갑니다.
+
+    ask(status) -> bool: 사람이 실행한 곳(setup·doctor·편집기)에서 '등록할까요?' 를 묻는 함수.
+    False 면 등록하지 않음(다음 실행 때 다시 물음). None 이면 묻지 않고 등록(뒤에서 하는 자동 등록 —
+    물어볼 사람이 없음, 사용자가 정함)."""
     repo = repo or repo_root()
     # 정규 과정: 모든 자동 등록 전에 PowerShell 실행 정책을 확인하고, 부족하면 영구적으로 켭니다
     # (scripts/exec_policy.ps1). 등록 자체는 -ExecutionPolicy Bypass 라 막히지 않지만, 사람이
@@ -308,7 +314,12 @@ def ensure(repo: Path | None = None, *, elevate: bool = False, force: bool = Fal
         if st.ok and not force:
             _write_stamp(repo, st)
             return st
-        if not st.ok:
+        if ask is not None and not st.ok:
+            if not ask(st):
+                log.warning("작업 스케줄러 등록을 하지 않기로 했습니다(다음 실행 때 다시 묻습니다) — %s",
+                            st.describe())
+                return st
+        elif not st.ok:
             log.warning("작업 스케줄러 등록이 빠져 있어 자동으로 등록합니다 — %s", st.describe())
         rc, out = register(repo, elevate=elevate)
         after = check(repo)
@@ -327,6 +338,27 @@ def ensure(repo: Path | None = None, *, elevate: bool = False, force: bool = Fal
         return Status(checked=False, error=str(exc))
     finally:
         _release()
+
+
+def console_ask(st: Status, *, input_fn=input) -> bool:
+    """콘솔에서 묻기(setup.bat·doctor.bat·tasks ensure). 물을 수 없으면(입력 없음) 등록하지 않음."""
+    print()
+    print("작업 스케줄러에 등록이 필요합니다 — " + st.describe())
+    print("  (로그온하면 시간표·감지 녹화와 녹화 지킴이가 저절로 돌게 합니다)")
+    for _ in range(3):
+        try:
+            answer = input_fn("등록할까요? (Y/N): ").strip().lower()
+        except (EOFError, OSError):
+            print("물어볼 수 없어 등록하지 않았습니다.")
+            return False
+        if answer in ("y", "yes", "예", "ㅛ"):
+            return True
+        if answer in ("n", "no", "아니요", "아니오", "ㅜ"):
+            print("등록하지 않았습니다. 다음에 setup.bat·doctor.bat 을 실행하면 다시 묻습니다.")
+            return False
+        print("Y 또는 N 으로 답해 주세요.")
+    print("등록하지 않았습니다.")
+    return False
 
 
 def spawn_background(repo: Path | None = None) -> bool:
