@@ -435,6 +435,8 @@ class Config:
 
     data: dict[str, Any] = field(default_factory=dict)
     path: Path | None = None
+    # 너그럽게 읽었을 때(load(lenient=True)) 무엇을 빼거나 기본값으로 대신했는지. 로그로 남깁니다.
+    load_notes: list[str] = field(default_factory=list)
 
     # -- 조회 ---------------------------------------------------------
     def get(self, dotted: str, default: Any = None) -> Any:
@@ -486,9 +488,18 @@ def default_config_path() -> Path:
     return (Path(__file__).resolve().parents[2] / "config.toml").resolve()
 
 
-def load(path: str | Path | None = None) -> Config:
-    """설정을 읽어 기본값과 병합하고 검증합니다."""
+def load(path: str | Path | None = None, *, lenient: bool = False) -> Config:
+    """설정을 읽어 기본값과 병합하고 검증합니다.
+
+    lenient=True(녹화·송출 명령): 설정이 조금 틀렸다고 녹화를 시작하지 않으면 그날 수업이
+    통째로 빕니다. 그래서 멈추지 않고 고칠 수 있는 만큼 고쳐 씁니다(cfg.load_notes 에 기록).
+      - TOML 문법이 깨진 줄은 그 줄만 빼고 읽음(파일은 바꾸지 않음, settings_schema.salvage).
+      - 검사에 걸린 키는 기본값으로 대신(예: container = "mkvv" → "mkv").
+      - 그래도 남는 문제(여러 키가 얽힌 것)는 기록만 하고 계속.
+    설정 파일이 아예 없거나 읽을 수 없을 때만 멈춥니다.
+    """
     cfg_path = Path(path).expanduser().resolve() if path else default_config_path()
+    notes: list[str] = []
 
     if not cfg_path.exists():
         example = cfg_path.with_name("config.example.toml")
@@ -499,6 +510,10 @@ def load(path: str | Path | None = None) -> Config:
         with cfg_path.open("rb") as fh:
             raw = tomllib.load(fh)
     except tomllib.TOMLDecodeError as exc:
+        if lenient:
+            raw = _salvage_toml(cfg_path, notes)
+            if raw is not None:
+                return _lenient_finish(_deep_merge(DEFAULTS, raw), cfg_path, notes)
         raise ConfigError(
             f"{cfg_path} 의 TOML 문법이 잘못됐습니다.\n"
             f"  {exc}\n"
@@ -512,9 +527,76 @@ def load(path: str | Path | None = None) -> Config:
         raise ConfigError(f"설정 파일을 읽을 수 없습니다: {cfg_path}\n  {exc}") from exc
 
     merged = _deep_merge(DEFAULTS, raw)
+    if lenient:
+        return _lenient_finish(merged, cfg_path, notes)
     cfg = Config(data=merged, path=cfg_path)
     validate(cfg)
     return cfg
+
+
+def _salvage_toml(cfg_path: Path, notes: list[str]) -> dict | None:
+    """깨진 줄만 빼고 읽은 TOML(파일은 그대로). 못 하면 None."""
+    from . import settings_schema
+
+    try:
+        text, _enc = settings_schema.decode(cfg_path.read_bytes())
+        fixed, broken = settings_schema.salvage(text)
+        raw = tomllib.loads(fixed)
+    except Exception:
+        return None
+    for b in broken:
+        notes.append(f"설정 파일의 {b.describe()} — 이 줄은 빼고 읽었습니다(파일은 그대로)")
+    return raw
+
+
+_DOTTED = re.compile(r"(?<![\w.])([a-z_]+(?:\.[a-z0-9_]+)+)")
+
+
+def _lenient_finish(merged: dict, cfg_path: Path, notes: list[str]) -> Config:
+    """검사에 걸린 키를 기본값으로 대신하고, 남는 문제는 기록만 합니다."""
+    cfg = Config(data=merged, path=cfg_path, load_notes=notes)
+    errors = problems(cfg)
+    if not errors:
+        return cfg
+    for msg in errors:
+        for dotted in _DOTTED.findall(msg):
+            default = _dig(DEFAULTS, dotted)
+            if default is _MISSING:
+                continue
+            was = cfg.get(dotted, _MISSING)
+            if was is _MISSING or was == default:
+                continue
+            _put(cfg.data, dotted, _copy(default))
+            notes.append(f"설정 오류라 기본값으로 대신합니다: {dotted} = {was!r} → {default!r} ({msg})")
+    for msg in problems(cfg):
+        notes.append(f"설정 오류가 남아 있지만 녹화·송출은 계속합니다: {msg}")
+    return cfg
+
+
+_MISSING: Any = object()
+
+
+def _dig(data: dict, dotted: str) -> Any:
+    node: Any = data
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return _MISSING
+        node = node[part]
+    return node
+
+
+def _put(data: dict, dotted: str, value: Any) -> None:
+    parts = dotted.split(".")
+    node = data
+    for part in parts[:-1]:
+        node = node.setdefault(part, {})
+    node[parts[-1]] = value
+
+
+def _copy(value: Any) -> Any:
+    import copy
+
+    return copy.deepcopy(value)
 
 
 # ---------------------------------------------------------------------------

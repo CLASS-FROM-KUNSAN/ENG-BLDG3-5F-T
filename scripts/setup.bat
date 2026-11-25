@@ -3,6 +3,8 @@ REM =====================================================================
 REM  One-time setup. Double-click it. (Korean guide: docs/SCRIPTS.md)
 REM  ASCII only; messages come from msg\setup_*.txt via _say.bat.
 REM =====================================================================
+REM Show the PowerShell execution policy check (done in _common.bat).
+set "SN_POLICY_SHOW=1"
 call "%~dp0_common.bat"
 cd /d "%REPO%"
 
@@ -117,6 +119,16 @@ if not exist "%REPO%\config.toml" (
 REM Turn the microphone permission on if it is off (the machine-wide switch
 REM only with administrator rights).
 "%PY%" -m syncnote devices --allow-mic
+
+echo.
+call "%~dp0_say.bat" setup_7
+REM Register the Task Scheduler tasks (record schedule/watch/guard, ...) if any
+REM is missing, points at another folder (old clone) or is disabled. Without
+REM them nothing records at log on. Retries with UAC if access is denied.
+"%PY%" -m syncnote tasks ensure
+if errorlevel 1 (
+    call "%~dp0_say.bat" setup_tasks_failed
+)
 
 echo.
 call "%~dp0_say.bat" setup_next

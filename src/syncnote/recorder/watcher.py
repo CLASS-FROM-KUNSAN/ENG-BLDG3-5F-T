@@ -126,17 +126,20 @@ class Watcher:
         cooldown_sec: float = 30.0,
         min_session_sec: float = 10.0,
         max_fast_failures: int = 3,
+        max_backoff_sec: float = 600.0,
     ) -> None:
         """감지되면 on_start(이름) 를 부릅니다. on_start 는 블로킹해도 됩니다.
 
-        재시작 폭주 방지:
-          on_start 가 돌아온 뒤 곧바로 다시 감지되면(Zoom 을 계속 켜 둔 상태)
-          무한히 녹화를 재시작하게 됩니다. ffmpeg 가 바로 죽는 상황이라면
-          빈 폴더를 초당 수백 개 만들어 디스크를 채웁니다.
-          그래서 (1) 대상이 사라질 때까지 기다린 뒤 재무장하고,
-          (2) 그래도 바로 재감지되면 cooldown_sec 만큼 쉬고,
-          (3) min_session_sec 보다 짧게 끝난 세션이 연속 max_fast_failures
-          번이면 설정 문제로 보고 감시를 중단합니다.
+        감시는 스스로 포기하지 않습니다(녹화를 막는 구조를 두지 않음):
+          - on_start 가 곧바로 끝나면(녹화가 시작조차 못 함 — 다른 녹화가 잠금을 쥐고 있거나
+            장치 문제) 쉬는 간격을 cooldown_sec 에서 두 배씩 늘려(최대 max_backoff_sec)
+            다시 시도합니다. 연속 max_fast_failures 번이면 오류 로그를 한 번 크게 남깁니다.
+            예전에는 3번이면 그날 감시를 끝내, 예약 녹화와 겹친 뒤의 수업을 놓쳤습니다.
+          - 정상 녹화가 끝났는데(최대 녹화 시간에 걸림) 대상이 아직 떠 있으면 수업이 이어지는
+            것이므로 곧바로 다음 녹화를 시작합니다. 예전에는 대상이 사라질 때까지 기다려
+            나머지 수업을 녹화하지 않았습니다.
+          - 대상이 사라졌다가 다시 뜨면 다시 녹화합니다(한 번의 '등장' 에 이어진 녹화).
+          - 녹화가 폭주(초당 수백 번 재시작)하지 않는 것은 위의 늘어나는 간격이 보장합니다.
         """
         if not self._procs and not self._titles:
             log.error("감시 대상이 비어 있습니다. watch_processes 또는 watch_window_titles 를 채우세요.")
@@ -154,7 +157,8 @@ class Watcher:
 
             hit = self.matched()
             if not hit:
-                time.sleep(self.interval_sec)
+                if not self._sleep(self.interval_sec, stop_check):
+                    return
                 continue
 
             log.info("감지: %s -> 녹화 시작", hit)
@@ -167,44 +171,32 @@ class Watcher:
                 log.exception("녹화 중 오류")
             session_sec = time.monotonic() - started
 
+            if stop_check is not None and stop_check():
+                return
+
             if session_sec < min_session_sec:
-                # 너무 빨리 끝났습니다 = 녹화가 제대로 시작조차 못 했습니다.
-                # 이때 '대상이 사라질 때까지' 기다리면 Zoom 을 계속 켜 둔
-                # 사용자는 영원히 멈춘 것처럼 보이고, 실패 횟수도 쌓이지
-                # 않아 포기 로직이 영원히 발동하지 않습니다.
-                # 그래서 실패한 경우에는 기다리지 않고 쿨다운만 하고 재시도합니다.
+                # 너무 빨리 끝났습니다 = 녹화가 제대로 시작조차 못 했습니다. 포기하지 않고
+                # 간격을 늘려 가며 다시 시도합니다(다른 녹화가 끝나면 이어서 녹화).
                 fast_failures += 1
+                wait = max(self.interval_sec,
+                           min(max_backoff_sec, cooldown_sec * (2 ** (fast_failures - 1))))
                 log.warning(
-                    "녹화가 %.1f초 만에 끝났습니다(%d/%d). 설정이나 장치에 문제가 있을 수 있습니다.",
-                    session_sec, fast_failures, max_fast_failures,
+                    "녹화가 %.1f초 만에 끝났습니다(연속 %d번). %.0f초 뒤 다시 시도합니다.",
+                    session_sec, fast_failures, wait,
                 )
-                if fast_failures >= max_fast_failures:
+                if fast_failures == max_fast_failures:
                     log.error(
-                        "짧은 녹화가 연속 %d회라 감시를 중단합니다. "
-                        "doctor 명령으로 원인을 확인하세요.",
-                        fast_failures,
+                        "짧은 녹화가 연속 %d번입니다. 감시는 계속하지만 설정이나 장치를 "
+                        "확인하세요(doctor 명령).", fast_failures,
                     )
-                    return
-                if not self._sleep(cooldown_sec, stop_check):
+                if not self._sleep(wait, stop_check):
                     return
                 continue
 
             fast_failures = 0
-
-            # 정상적으로 끝난 세션: 대상이 사라질 때까지 기다린 뒤 재무장합니다.
-            # (한 번의 '등장' 에 한 번만 녹화)
             if self.matched():
-                log.info("대상이 아직 실행 중입니다. 종료를 기다립니다.")
-                self.wait_until_gone(stop_check=stop_check)
-
-            if stop_check is not None and stop_check():
-                return
-
-            # 사라짐 감지가 불안정한 경우를 대비한 최소 휴식.
-            if self.matched() and cooldown_sec > 0:
-                log.info("대상이 여전히 감지돼 %.0f초 쉽니다.", cooldown_sec)
-                if not self._sleep(cooldown_sec, stop_check):
-                    return
+                # 최대 녹화 시간에 걸려 끝났지만 수업(대상)은 이어지고 있음 — 바로 이어서 녹화
+                log.info("대상이 아직 실행 중이라 이어서 다음 녹화를 시작합니다.")
 
     def wait_until_gone(self, *, stop_check: Callable[[], bool] | None = None,
                         max_wait_sec: float = 12 * 3600) -> None:

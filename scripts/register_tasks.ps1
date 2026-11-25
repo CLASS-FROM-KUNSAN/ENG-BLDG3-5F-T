@@ -3,9 +3,14 @@
     작업 스케줄러에 Sync Note 작업을 등록합니다.
 
 .DESCRIPTION
-    관리자 권한 PowerShell 에서 실행하세요.
+    보통은 직접 실행할 필요가 없습니다. setup.bat·doctor.bat·시간표 편집기, 그리고 모든
+    syncnote 명령이 시작할 때 작업이 빠졌거나 다른 폴더(옛 레포)를 가리키면 이 스크립트를
+    자동으로 실행합니다(syncnote 의 tasks ensure 명령, src/syncnote/tasks.py).
 
       powershell -ExecutionPolicy Bypass -File scripts\register_tasks.ps1
+
+    관리자 권한은 보통 필요 없습니다(자기 계정의 '로그온한 경우에만 실행' 작업). 권한이
+    없어 거부되면 종료 코드 5 로 끝나고, 사람이 실행한 setup/doctor 는 UAC 로 다시 시도합니다.
 
     등록되는 작업 (작업 스케줄러의 Sync Note 폴더 아래):
       EclassSync      - 지정한 간격마다 Eclass 자료 수집
@@ -24,6 +29,14 @@
       "사용자가 로그온한 경우에만 실행"(Interactive)으로 만듭니다.
       이걸 "로그온 여부에 관계없이 실행"으로 바꾸면 녹화 결과가
       검은 화면만 남습니다.
+
+.PARAMETER User
+    작업을 실행할 계정(기본: 지금 계정). UAC 로 다른 관리자 계정이 승격해 실행할 때도
+    작업은 원래 사용자의 로그온 세션에서 돌아야 하므로 tasks.py 가 원래 이름을 넘깁니다.
+
+.PARAMETER Folder
+    작업 스케줄러 폴더(기본 "\Sync Note"). 시험할 때 다른 폴더에 등록했다 지우려고 둡니다.
+    tasks.py 는 기본 폴더만 봅니다.
 
 .PARAMETER Remove
     등록된 작업을 모두 지웁니다.
@@ -53,23 +66,31 @@ param(
     [switch]$SkipSchedule,
     [string]$AudioAt = "",
     [string[]]$AudioArgs = @(),
-    [switch]$Stream
+    [switch]$Stream,
+    [string]$User = $env:USERNAME,
+    [string]$Folder = "\Sync Note"
 )
 
 $ErrorActionPreference = "Stop"
-$Folder  = "\Sync Note"
+
+# 실행 정책 확인·영구 설정(정규 과정, scripts\exec_policy.ps1 — 모든 스크립트가 먼저 거침).
+# 이미 실행 중인 이 창은 영향받지 않고, 다음에 .ps1 을 직접 실행할 때 막히지 않게 합니다.
+& (Join-Path $PSScriptRoot "exec_policy.ps1")
 $Repo    = Split-Path -Parent $PSScriptRoot
 $Scripts = Join-Path $Repo "scripts"
 $Vbs     = Join-Path $Scripts "hidden.vbs"
 
-function Assert-Admin {
-    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($id)
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Host "관리자 권한이 필요합니다." -ForegroundColor Red
-        Write-Host "PowerShell 을 오른쪽 클릭 -> 관리자 권한으로 실행 후 다시 시도하세요."
-        exit 1
+# 권한이 없어 거부되면 종료 코드 5(tasks.py 가 보고 UAC 로 다시 시도). 그 밖의 실패는 1.
+trap {
+    $msg = "$($_.Exception.Message)"
+    if ($_.Exception -is [UnauthorizedAccessException] -or $_.Exception.HResult -eq -2147024891 -or
+        $msg -match "Access is denied|액세스가 거부") {
+        Write-Host "작업 등록이 거부됐습니다(권한 부족): $msg" -ForegroundColor Red
+        Write-Host "관리자 권한 PowerShell 에서 다시 실행하거나 setup.bat 을 실행하세요."
+        exit 5
     }
+    Write-Host "작업 등록 실패: $msg" -ForegroundColor Red
+    exit 1
 }
 
 function Remove-All {
@@ -99,7 +120,7 @@ function Register-One([string]$Name, $Action, $Trigger, [string]$Description) {
         -ExecutionTimeLimit (New-TimeSpan -Hours 12) `
         -RestartCount 2 -RestartInterval (New-TimeSpan -Minutes 5)
 
-    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME `
+    $principal = New-ScheduledTaskPrincipal -UserId $User `
         -LogonType Interactive -RunLevel Limited
 
     if (Get-ScheduledTask -TaskPath "$Folder\" -TaskName $Name -ErrorAction SilentlyContinue) {
@@ -111,8 +132,6 @@ function Register-One([string]$Name, $Action, $Trigger, [string]$Description) {
     Write-Host "  등록: $Folder\$Name" -ForegroundColor Green
 }
 
-Assert-Admin
-
 if ($Remove) { Remove-All; exit 0 }
 
 if (-not (Test-Path (Join-Path $Repo "config.toml"))) {
@@ -122,6 +141,7 @@ if (-not (Test-Path (Join-Path $Repo "config.toml"))) {
 
 Write-Host "작업을 등록합니다..." -ForegroundColor Cyan
 Write-Host "  레포: $Repo"
+Write-Host "  계정: $User"
 
 # --- Eclass 주기 수집 ---
 # 정각을 피해 17분에 시작합니다. 정각에는 다른 작업이 몰립니다.
@@ -132,7 +152,7 @@ Register-One "EclassSync" (New-HiddenAction "eclass_sync.bat" @()) $t `
 
 # --- 시간표 녹화 ---
 if (-not $SkipSchedule) {
-    $t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $t = New-ScheduledTaskTrigger -AtLogOn -User $User
     $t.Delay = "PT1M"
     Register-One "RecordSchedule" (New-HiddenAction "record_schedule.bat" @()) $t `
         "로그온 후 대기하다가 config.toml 의 시간표대로 녹화합니다."
@@ -140,7 +160,7 @@ if (-not $SkipSchedule) {
 
 # --- 프로그램 감지 녹화 ---
 if (-not $SkipWatch) {
-    $t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $t = New-ScheduledTaskTrigger -AtLogOn -User $User
     $t.Delay = "PT2M"
     Register-One "RecordWatch" (New-HiddenAction "record_watch.bat" @()) $t `
         "Zoom 등 지정한 프로그램이 실행되면 자동으로 녹화합니다."
@@ -149,7 +169,7 @@ if (-not $SkipWatch) {
 # --- 녹화 지킴이 ---
 # 로그온 때 띄우고, 15분마다 다시 띄웁니다(이미 돌고 있으면 IgnoreNew 로 새로 안 띄움).
 # 꺼졌다 켜진 뒤·작업이 12시간 제한으로 끝난 뒤에도 다시 살아나게 하려는 것입니다.
-$t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$t = New-ScheduledTaskTrigger -AtLogOn -User $User
 $t.Delay = "PT4M"
 $t.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
         -RepetitionInterval (New-TimeSpan -Minutes 15)).Repetition
@@ -183,7 +203,7 @@ if ($AudioAt) {
 
 # --- 시간표 실시간 송출 (선택) ---
 if ($Stream) {
-    $t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $t = New-ScheduledTaskTrigger -AtLogOn -User $User
     $t.Delay = "PT3M"
     Register-One "StreamSchedule" (New-HiddenAction "stream_schedule.bat" @()) $t `
         "로그온 후 대기하다가 시간표대로 수업마다 실시간 송출합니다([stream])."

@@ -42,7 +42,12 @@ log = get_logger("cli")
 
 # ---------------------------------------------------------------------------
 def _load(args) -> tuple[config_module.Config, Layout]:
-    cfg = config_module.load(args.config)
+    """설정을 읽습니다.
+
+    녹화·송출 명령(파서에서 lenient_config=True 로 표시)은 설정 일부가 틀려도 멈추지 않고
+    고쳐 씁니다(config.load(lenient=True)) — 설정 오타 하나로 그날 수업이 통째로 비지 않게.
+    """
+    cfg = config_module.load(args.config, lenient=bool(getattr(args, "lenient_config", False)))
     layout = Layout(cfg.data_dir)
     layout.ensure()
     setup_logging(
@@ -51,6 +56,8 @@ def _load(args) -> tuple[config_module.Config, Layout]:
         retention_days=int(cfg.get("general.log_retention_days", 30)),
         console=not args.quiet,
     )
+    for note in getattr(cfg, "load_notes", []):
+        log.error("%s", note)
     for note in config_module.warnings_for(cfg):
         log.warning(note)
     return cfg, layout
@@ -226,6 +233,39 @@ def _doctor(args, rep: dict) -> int:
         tools.append({"mark": "O" if ar else "X", "name": "arecord",
                       "detail": ar or f"없음 — {sox_fetch.LINUX_HINT}"})
         if not ar:
+            ok = False
+
+    # PowerShell 실행 정책 — 확인만(바꾸는 것은 doctor.bat·모든 스크립트의 _common.bat 과
+    # 자동 등록이 함). 막혀 있으면 .ps1 을 직접 실행할 때 창이 바로 닫힙니다.
+    from . import exec_policy as _ep
+
+    if _ep.supported():
+        print("\n  PowerShell 실행 정책")
+        pol_items = section("PowerShell 실행 정책")
+        pol = _ep.status()
+        mark = "O" if pol.ok else ("-" if pol.gpo_blocked else "X")
+        fix = "" if pol.ok or pol.gpo_blocked else (
+            " -> 아무 스크립트(doctor.bat 등)나 실행하면 RemoteSigned 로 영구 설정합니다")
+        print(f"    [{mark}] 실행 정책         {pol.describe()}{fix}")
+        pol_items.append({"mark": mark, "name": "실행 정책", "detail": pol.describe() + fix})
+        if mark == "X":
+            ok = False
+
+    # 작업 스케줄러 — 등록이 빠지면 시간표·감지 녹화와 지킴이가 한 번도 돌지 않습니다.
+    from . import tasks as _tasks
+
+    if _tasks.supported():
+        print("\n  작업 스케줄러")
+        sched_items = section("작업 스케줄러")
+        st = _tasks.check()
+        if st.ok:
+            print(f"    [O] Sync Note 작업   {st.describe()}")
+            sched_items.append({"mark": "O", "name": "Sync Note 작업", "detail": st.describe()})
+        else:
+            fix = "doctor.bat·setup.bat 이 이어서 등록합니다(python -m syncnote tasks ensure)"
+            print(f"    [X] Sync Note 작업   {st.describe()} -> {fix}")
+            sched_items.append({"mark": "X", "name": "Sync Note 작업",
+                                "detail": f"{st.describe()} — {fix}"})
             ok = False
 
     # 비밀값
@@ -719,15 +759,9 @@ def _post_segment_factory(cfg, layout: Layout, store: Store, label: str, *,
         except Exception:
             log.exception("전사 대기열 등록 실패")
 
-        if getattr(segment, "broken", False):
-            # 장치 무음으로 중단된 세그먼트입니다. 로컬에는 두고 올리지만
-            # 않습니다 — 소리 없는 영상이 백업된 것처럼 보이면 안 됩니다.
-            log.warning("장치 무음으로 중단된 세그먼트는 올리지 않습니다: %s",
-                        segment.path.name)
-            # 녹화 지킴이(record guard)가 나중에 '못 올린 것' 으로 보고 올리지 않게 표시
-            from .recorder import guard
-            guard.mark_held(segment.path, "장치 무음으로 중단된 세그먼트")
-            return
+        # 무음이어도 올립니다. 예전에는 '장치 무음으로 중단된 세그먼트' 를 올리지 않았는데,
+        # 그러면 조용했던 수업·마이크를 늦게 꽂은 수업이 통째로 빠집니다(사용자 요청: 무음
+        # 감지 시 녹화·업로드 차단 금지). 무음 여부는 로그·경고로만 알립니다.
         if uploader is None or not segment.path.exists() or segment.path.is_dir():
             return
         day = segment.started_at.date()
@@ -1093,6 +1127,11 @@ def cmd_record_schedule(args) -> int:
     # 지난번 녹화 중에 컴퓨터가 꺼졌으면 그 조각을 파일로 만들어 올립니다(로그온 직후 한 번).
     _recover_on_start(cfg, layout, args)
 
+    # 녹화가 시작조차 못 했거나(다른 녹화가 잠금을 쥠) 금방 끝나면, 수업 창이 아직 남아 있는 한
+    # 같은 창을 다시 녹화합니다(next_window 는 끝나지 않은 창을 돌려줌). 그 사이 간격을
+    # 5 → 15 → 30 → 60초로 늘려 재시작이 폭주하지 않게 합니다.
+    quick_ends = 0
+
     while True:
         nxt = sched.next_window(slots, pre_roll_min=pre, post_roll_min=post,
                                 skip_days=off, policy=policy)
@@ -1122,6 +1161,7 @@ def cmd_record_schedule(args) -> int:
         # 신호입니다 — 이게 없으면 다음 날 아침 로그를 봐도 그 수업이
         # 유실된 줄 모릅니다. '녹화 시작' 은 찍히고 '녹화 종료' 는
         # 안 찍히는 모양이라 눈에 안 띕니다.
+        run_t0 = time.monotonic()
         result = _run_recording(cfg, layout, nxt.name, minutes=minutes,
                                 upload=not args.no_upload, dry_run=args.dry_run,
                                 language=nxt.slot.language, course=course,
@@ -1129,10 +1169,22 @@ def cmd_record_schedule(args) -> int:
                                 meta=_recording_meta(cfg, nxt.name, "schedule", occ=nxt,
                                                      course=course))
         if result is None:
-            log.error("[%s] 녹화를 시작하지 못했습니다(다른 녹화가 돌고 있습니다). "
-                      "이 수업은 녹화되지 않았습니다.", nxt.name)
+            log.error("[%s] 녹화를 시작하지 못했습니다(다른 녹화가 돌고 있습니다). %s", nxt.name,
+                      "이 수업은 녹화되지 않았습니다." if args.once
+                      else "수업이 끝나기 전까지 잠시 뒤 다시 시도합니다(그 사이는 녹화되지 않았습니다).")
         if args.once:
             return 0 if result is not None else 1
+        if result is None or time.monotonic() - run_t0 < 60:
+            quick_ends += 1
+            if datetime.now() < nxt.end:
+                wait = (5, 15, 30, 60)[min(quick_ends - 1, 3)]
+                until = min(nxt.end, datetime.now() + timedelta(seconds=wait))
+                log.warning("[%s] 녹화가 곧바로 끝나 %.0f초 뒤 남은 수업을 다시 녹화합니다.",
+                            nxt.name, (until - datetime.now()).total_seconds())
+                if not sched.wait_until(until, poll_sec=1.0):
+                    return 0
+        else:
+            quick_ends = 0
 
 
 class _WatchOnceDone(Exception):
@@ -2117,6 +2169,31 @@ def cmd_activity_watch_acrobat(args) -> int:
         return 2
 
 
+def cmd_tasks(args) -> int:
+    """작업 스케줄러 등록 확인(status)·자동 등록(ensure). src/syncnote/tasks.py."""
+    from . import tasks
+
+    auto = getattr(args, "auto", False)
+    try:
+        _load(args)                     # 파일 로그를 켜려고(설정이 틀려도 등록은 함)
+    except Exception as exc:            # noqa: BLE001
+        log.debug("설정을 읽지 못했지만 작업 확인은 계속합니다: %s", exc)
+    if not tasks.supported():
+        print("작업 스케줄러: " + ("SYNCNOTE_NO_TASK_CHECK 로 꺼져 있어 확인하지 않습니다."
+                                  if os.environ.get("SYNCNOTE_NO_TASK_CHECK")
+                                  else "Windows 의 레포 폴더에서 실행할 때만 확인합니다."))
+        return 0
+    if args.action == "status":
+        st = tasks.check()
+        print(f"작업 스케줄러: {st.describe()}")
+        return 0 if st.ok else 1
+    st = tasks.ensure(elevate=not auto and not getattr(args, "no_elevate", False),
+                      force=getattr(args, "force", False))
+    if not auto:
+        print(f"작업 스케줄러: {st.describe()}")
+    return 0 if st.ok else 1
+
+
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -2133,6 +2210,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="환경 점검")
     p.add_argument("--json", action="store_true", help="결과를 JSON 한 줄로(시간표 편집기용)")
     p.set_defaults(func=cmd_doctor)
+    p = sub.add_parser("tasks", help="작업 스케줄러 등록 확인·자동 등록")
+    p.add_argument("action", choices=["status", "ensure"],
+                   help="status: 확인만 / ensure: 빠졌으면 등록(권한이 없으면 UAC)")
+    p.add_argument("--auto", action="store_true",
+                   help="뒤에서 자동으로(창·UAC 없이). 모든 명령의 시작에서 띄움")
+    p.add_argument("--no-elevate", action="store_true", help="UAC 로 다시 시도하지 않음")
+    p.add_argument("--force", action="store_true", help="정상이어도 다시 등록")
+    p.set_defaults(func=cmd_tasks)
     p = sub.add_parser("devices", help="오디오 장치 목록")
     p.add_argument("--json", action="store_true", help="결과를 JSON 한 줄로(시간표 편집기용)")
     p.add_argument("--probe", action="store_true",
@@ -2178,7 +2263,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-upload", action="store_true")
     p.add_argument("--dry-run", action="store_true",
                    help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
-    p.set_defaults(func=cmd_record_start)
+    p.set_defaults(func=cmd_record_start, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     p = rec.add_parser("schedule", help="시간표대로 대기하다 녹화")
     p.add_argument("--show", action="store_true", help="시간표만 출력하고 종료")
@@ -2186,7 +2271,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-upload", action="store_true")
     p.add_argument("--dry-run", action="store_true",
                    help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
-    p.set_defaults(func=cmd_record_schedule)
+    p.set_defaults(func=cmd_record_schedule, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     tt = sub.add_parser("timetable", help="시간표 편집기(GUI)").add_subparsers(
         dest="sub", required=True)
@@ -2197,19 +2282,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--once", action="store_true", help="한 번만 확인하고 끝냄")
     p.add_argument("--status", action="store_true", help="지금 상태만 보여 줌")
     p.add_argument("--dry-run", action="store_true", help="업로드 흉내만 냄")
-    p.set_defaults(func=cmd_record_guard)
+    p.set_defaults(func=cmd_record_guard, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     p = rec.add_parser("recover", help="녹화 중에 컴퓨터가 꺼져 남은 조각을 파일로 만들어 올리기")
     p.add_argument("--list", action="store_true", help="무엇이 남았는지 보여 주기만")
     p.add_argument("--no-upload", action="store_true", help="파일만 만들고 올리지 않음")
     p.add_argument("--dry-run", action="store_true", help="업로드 흉내만 냄")
-    p.set_defaults(func=cmd_record_recover)
+    p.set_defaults(func=cmd_record_recover, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     p = rec.add_parser("remux", help="ffmpeg 없이 소리만 녹음해 둔 것을 파일로 만들기")
     p.add_argument("--upload", action="store_true", help="만든 파일을 녹화 때처럼 올림")
     p.add_argument("--upload-dry-run", action="store_true", help="업로드 흉내만")
     p.add_argument("--dry-run", action="store_true", help="목록만 보여 줌")
-    p.set_defaults(func=cmd_record_remux)
+    p.set_defaults(func=cmd_record_remux, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     p = rec.add_parser("watch", help="프로그램이 뜨면 자동 녹화")
     p.add_argument("-l", "--label")
@@ -2220,7 +2305,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-upload", action="store_true")
     p.add_argument("--dry-run", action="store_true",
                    help="업로드 흉내만 냄 (녹화·전사는 실제로 합니다)")
-    p.set_defaults(func=cmd_record_watch)
+    p.set_defaults(func=cmd_record_watch, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     # --- activity (활동 기록) ---
     ac = sub.add_parser(
@@ -2261,14 +2346,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="청취자가 이만큼(분) 없으면 멈춤")
     p.add_argument("--dry-run", action="store_true",
                    help="송출은 하되 이슈는 만들지 않고 내용만 출력")
-    p.set_defaults(func=cmd_stream_start)
+    p.set_defaults(func=cmd_stream_start, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     p = st.add_parser("schedule", help="시간표([[recording.timetable]])대로 수업마다 송출")
     _stream_opts(p)
     p.add_argument("--show", action="store_true", help="송출할 시간표만 출력")
     p.add_argument("--once", action="store_true", help="한 수업만 송출하고 종료")
     p.add_argument("--dry-run", action="store_true", help="이슈는 만들지 않고 내용만 출력")
-    p.set_defaults(func=cmd_stream_schedule)
+    p.set_defaults(func=cmd_stream_schedule, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     p = st.add_parser("link", help="Tailscale 상태와 만들어질 링크 미리 보기")
     _stream_opts(p)
@@ -2303,7 +2388,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--loop", action="store_true",
                    help="끝나면 새 파일로 다시 녹음 (--vad 와 함께 상시 감시)")
     p.add_argument("--print", action="store_true", help="실행하지 않고 명령만 출력")
-    p.set_defaults(func=cmd_audio_record)
+    p.set_defaults(func=cmd_audio_record, lenient_config=True)   # 설정이 틀려도 녹화·송출은 계속
 
     p = au.add_parser("tools", help="설치된 도구와 실행될 명령 보기")
     _audio_opts(p)
@@ -2385,6 +2470,15 @@ def main(argv: list[str] | None = None) -> int:
     _safe_console()
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.func not in (cmd_tasks, cmd_doctor):
+        # 작업 스케줄러에 빠진 작업이 있으면 뒤에서(창 없이) 등록합니다 — 등록을 잊어 녹화가
+        # 한 번도 돌지 않는 일을 막으려고. 명령을 늦추지 않고, 몇 시간에 한 번만 확인합니다.
+        try:
+            from . import tasks
+
+            tasks.spawn_background()
+        except Exception as exc:        # noqa: BLE001 — 무슨 일이 있어도 명령은 계속
+            log.debug("작업 스케줄러 확인을 띄우지 못했습니다: %s", exc)
     try:
         return args.func(args)
     except KeyboardInterrupt:

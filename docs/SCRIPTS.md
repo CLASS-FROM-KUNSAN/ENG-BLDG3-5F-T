@@ -46,6 +46,30 @@ cp949 창과 UTF-8 창 **모두에서** 이전 줄의 한글 조각이 명령으
 자세한 내용은 [설치 상세의 '파이썬 실행 규칙'](SETUP.md#파이썬-실행-규칙-모든-스크립트가-지킵니다).
 `python` / `py` / `python3` 를 직접 부르지 않고 `%PY%` / `$PY` 만 씁니다.
 
+## 규칙 3 — 실행 정책 확인은 정규 과정 (`exec_policy.ps1`)
+
+모든 스크립트는 먼저 PowerShell 실행 정책을 확인합니다. `.bat` 은 `_common.bat` 의 마지막 단계에서,
+`.ps1` 은 맨 앞에서, 작업 스케줄러 자동 등록(`src/syncnote/tasks.py`)은 등록 전에 거칩니다.
+
+1. `Get-ExecutionPolicy -List` 로 영구 정책을 봅니다. 이 확인은 `-ExecutionPolicy Bypass` 로 실행되므로
+   Process 범위는 빼고 봅니다. 그대로 `Get-ExecutionPolicy` 를 부르면 늘 Bypass 로 나옵니다.
+2. `.ps1` 을 실행할 수 없는 정책(Restricted·AllSigned·Undefined)이면
+   `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` 로 **영구** 설정합니다.
+   - 레지스트리에 저장되어 재부팅해도 유지되고, 관리자 권한이 필요 없습니다.
+   - 관리자 권한으로 실행 중이면 LocalMachine 도 켭니다.
+   - Unrestricted 가 아니라 RemoteSigned 입니다. 인터넷에서 받은 스크립트는 서명이 있어야 실행됩니다.
+3. 인터넷에서 받은 표시(MOTW)가 붙은 `scripts\*.ps1` 은 차단을 풉니다.
+4. 그룹 정책(MachinePolicy·UserPolicy)으로 막혀 있으면 바꿀 수 없습니다. 알리기만 하고, 우리 작업은
+   `-ExecutionPolicy Bypass` 로 부르므로 그대로 돕니다.
+5. 무슨 일이 있어도 종료 코드는 0입니다. 정책 문제로 스크립트나 녹화를 멈추지 않습니다.
+
+- 정상이면 아무것도 출력하지 않습니다. `setup.bat` 과 `doctor.bat` 은 현재 정책을 한 줄 보여 줍니다
+  (`SN_POLICY_SHOW=1`). `doctor` 에는 점검 항목으로도 나옵니다.
+- `activity_host.bat` 은 표준입출력이 브라우저와의 통신용이라, 입력을 닫고 출력 없이 실행합니다.
+- 이 단계를 부를 때만 `PSModulePath` 를 비웁니다. PowerShell 7 창에서 `.bat` 을 실행하면 이 값이
+  PowerShell 7 의 모듈을 가리켜, Windows PowerShell 5.1 이 `Get-ExecutionPolicy` 를 불러오지 못했습니다.
+  비우면 5.1 이 자기 기본값을 다시 만듭니다.
+
 ## 공통 파일
 
 | 파일 | 하는 일 |
@@ -75,6 +99,11 @@ cp949 창과 UTF-8 창 **모두에서** 이전 줄의 한글 조각이 명령으
 | `release.bat` | `vX.Y.Z` 태그를 만들어 푸시(GitHub Actions 가 릴리스). 이미 있는 태그·형식이 틀린 태그는 거부. |
 
 ## 작업 스케줄러가 실행하는 것 (`register_tasks.ps1` 이 등록)
+
+등록은 자동입니다: `setup.bat`·`doctor.bat`·시간표 편집기 저장(필요하면 UAC), 그리고 모든
+`syncnote` 명령의 시작(뒤에서, 몇 시간에 한 번)에서 빠진 작업·옛 폴더를 가리키는 작업·꺼진
+작업을 찾아 `register_tasks.ps1` 을 실행합니다(`src/syncnote/tasks.py`). `doctor.bat --json`
+(편집기가 읽음)에서는 출력을 섞지 않으려고 등록하지 않습니다.
 
 | 파일 | 하는 일 |
 |---|---|

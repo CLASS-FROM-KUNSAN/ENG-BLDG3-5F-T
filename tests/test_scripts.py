@@ -312,3 +312,12 @@ def test_message_files_are_utf8_without_bom(path: Path):
     raw = path.read_bytes()
     assert not raw.startswith(codecs.BOM_UTF8), f"{path.name}: BOM 이 있으면 화면에 깨진 글자가 찍힘"
     raw.decode("utf-8")                                   # UTF-8 이 아니면 여기서 실패
+
+
+def test_hidden_vbs_is_ascii_with_clean_line_ends():
+    """wscript 는 BOM 없는 .vbs 를 ANSI(cp949)로 읽습니다 — 한글은 깨진 글자가 됩니다.
+    줄 중간의 CR 하나는 주석을 두 줄로 쪼개 '종결되지 않은 문자열' 오류로 작업 전체를
+    멈춥니다(바꾸는 중 실제로 났음: 'scripts\record_schedule' 의 \r)."""
+    raw = (SCRIPTS / "hidden.vbs").read_bytes()
+    assert all(b < 128 for b in raw), "hidden.vbs 는 ASCII 만"
+    assert raw.replace(b"\r\n", b"").count(b"\r") == 0, "줄 중간에 CR 이 있음"
