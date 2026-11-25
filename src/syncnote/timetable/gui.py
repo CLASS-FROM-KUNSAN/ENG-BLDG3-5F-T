@@ -1889,6 +1889,18 @@ class TimetableWindow(QMainWindow):
 
         if not tasks.supported():
             return
+        st = tasks.check()
+        if st.ok or not st.checked:
+            return
+        # 사람이 저장한 때라 묻습니다(사용자가 정함). 아니요면 다음 저장 때 다시 물음.
+        answer = QMessageBox.question(
+            self, "작업 스케줄러 등록",
+            "작업 스케줄러에 등록이 필요합니다.\n" + st.describe() + "\n\n"
+            "로그온하면 시간표·감지 녹화와 녹화 지킴이가 저절로 돌게 합니다.\n등록할까요?")
+        if answer != QMessageBox.StandardButton.Yes:
+            self.statusBar().showMessage("작업 스케줄러 등록을 하지 않았습니다(다음 저장 때 다시 묻습니다).",
+                                         6000)
+            return
         threading.Thread(target=tasks.ensure, kwargs={"elevate": True},
                          name="tasks-ensure", daemon=True).start()
 
