@@ -879,6 +879,26 @@ vad_stop_sec  = 3.0
 # 주의: 강의 소리는 교수와 학교의 저작물입니다. tailnet 밖(funnel)으로
 #       내보내거나 public 저장소에 링크를 올리면 공중송신이 됩니다.
 # =====================================================================
+[incidents]
+# 실패·오류를 빠짐없이 GitHub 이슈로 올립니다(src/syncnote/incidents.py). 녹화·녹음·업로드·업데이트
+# (병합 충돌 포함)·작업 등록·송출·수집에서 오류(ERROR)는 전부, 경고는 실패를 뜻하는 것만.
+# 같은 PC·같은 종류(코드)는 이슈 하나에 댓글로 이어집니다. 네트워크가 끊겨도 이 PC 의 대기열
+# (state\incidents\queue.jsonl)에 남았다가 다음에 올라갑니다. 사용자 경로·토큰·메일·IP·학번 같은
+# 긴 숫자·이름 칸은 가리고 올립니다.
+#   true  = 켬 — 실패·오류를 이슈로 올립니다   [기본]
+#   false = 끔 — 로그에만 남깁니다
+enabled = true
+# 올릴 레포 "owner/repo". 비우면 [github] owner/repo. 토큰(secrets github)이 없으면 gh 로그인을 씁니다.
+repo = ""
+# 붙일 라벨(그 밖에 sev:<심각도>·pc:<PC 이름> 을 자동으로 붙임).
+labels = ["incident"]
+# 같은 이슈에 댓글을 다는 최소 간격(분). 그 사이 것은 모아서 한 댓글로.
+min_comment_minutes = 10
+# 이슈에 같이 붙일 앞선 로그 줄 수.
+context_lines = 40
+# 한 번에 올리는 최대 횟수(이슈·댓글). 나머지는 다음 차례에.
+max_writes_per_flush = 15
+
 [update]
 # 레포 자동 업데이트(작업 스케줄러 AutoUpdate → scripts\update.bat → `syncnote update`).
 # 로그온 10분 뒤부터 한 시간마다 `git pull --no-rebase --no-edit <remote> <branch>` 를 합니다.

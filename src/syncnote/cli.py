@@ -57,6 +57,13 @@ def _load(args) -> tuple[config_module.Config, Layout]:
         retention_days=int(cfg.get("general.log_retention_days", 30)),
         console=not args.quiet,
     )
+    # 실패·오류를 빠짐없이 GitHub 이슈로(src/syncnote/incidents.py). 잡기는 로컬 대기열만, 올리기는 뒤에서.
+    try:
+        from . import incidents
+
+        incidents.install(cfg, layout)
+    except Exception as exc:            # noqa: BLE001 — 이것 때문에 명령이 멈추면 안 됨
+        log.debug("이슈 보고를 켜지 못했습니다: %s", exc)
     for note in getattr(cfg, "load_notes", []):
         log.error("%s", note)
     for note in config_module.warnings_for(cfg):
@@ -268,6 +275,25 @@ def _doctor(args, rep: dict) -> int:
             sched_items.append({"mark": "X", "name": "Sync Note 작업",
                                 "detail": f"{st.describe()} — {fix}"})
             ok = False
+
+    # git · gh — 필수(자동 업데이트, 오류 이슈 보고)
+    import shutil as _shutil
+
+    for exe, purpose in (("git", "자동 업데이트(git pull origin main)"),
+                         ("gh", "오류 이슈 보고(토큰이 없을 때)")):
+        found = _shutil.which(exe)
+        mark = "O" if found else "X"
+        missing = "없음 -> scripts\\setup.bat 을 다시 실행(winget 으로 설치)"
+        print(f"    [{mark}] {exe:<16} {found or missing}")
+        tools.append({"mark": mark, "name": exe, "detail": found or f"없음 — {purpose}"})
+        if not found:
+            ok = False
+    if _shutil.which("gh"):
+        from . import incidents as _inc
+
+        authed = _inc.gh_ready()
+        print(f"    [{'O' if authed else '-'}] gh 로그인        "
+              f"{'됨' if authed else '안 됨 — 토큰(secrets github)이 있으면 그것으로 올림, 없으면 gh auth login'}")
 
     # 비밀값
     print("\n  자격증명")
@@ -2256,6 +2282,27 @@ def cmd_activity_watch_acrobat(args) -> int:
         return 2
 
 
+def cmd_incidents(args) -> int:
+    """실패·오류 이슈 대기열: status(몇 개 남았는지) · flush(지금 올리기)."""
+    from . import incidents
+
+    cfg, layout = _load(args)
+    rep = incidents.install(cfg, layout, background=False)
+    if rep is None:
+        print("이슈 보고가 꺼져 있습니다([incidents] enabled = false 또는 SYNCNOTE_NO_INCIDENTS).")
+        return 0
+    if args.action == "status":
+        left = rep._read_queue()
+        print(f"올릴 대기: {len(left)}건")
+        for it in left[-10:]:
+            print(f"  {it['code']:<26} {it['severity']:<8} {incidents.redact(it['message'])[:80]}")
+        return 0
+    r = rep.flush()
+    print(f"올림 {r.sent}건 (새 이슈 {r.created or '-'}, 댓글 {r.commented or '-'}), 남음 {r.kept}건"
+          + (f" — {r.error}" if r.error else ""))
+    return 1 if r.error and r.kept else 0
+
+
 def cmd_update(args) -> int:
     """레포 자동 업데이트(git pull origin main). scripts\\update.bat · AutoUpdate 작업. src/syncnote/updater.py."""
     from . import updater
@@ -2283,7 +2330,15 @@ def cmd_update(args) -> int:
         line += f" | 패키지 설치 {res.pip}"
     if res.restarted:
         line += " | 다시 시작: " + ", ".join(res.restarted)
-    (log.error if res.status == "failed" else log.info)("%s", line)
+    if res.status == "failed":
+        msg = res.message
+        code = ("UPDATE.MERGE_CONFLICT" if any(k in msg for k in ("CONFLICT", "Automatic merge failed"))
+                else "UPDATE.FETCH_FAILED" if "가져오기 실패" in msg else "UPDATE.PULL_FAILED")
+        log.error("%s", line, extra={"incident": code})
+    else:
+        log.info("%s", line)
+    if res.pip == "failed":
+        log.error("업데이트 뒤 패키지 설치 실패(requirements.txt)", extra={"incident": "UPDATE.PIP_FAILED"})
     print(line)
     return 1 if res.status == "failed" else 0
 
@@ -2360,6 +2415,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="환경 점검")
     p.add_argument("--json", action="store_true", help="결과를 JSON 한 줄로(시간표 편집기용)")
     p.set_defaults(func=cmd_doctor)
+    p = sub.add_parser("incidents", help="실패·오류 이슈: status(대기열) · flush(지금 올리기)")
+    p.add_argument("action", choices=["status", "flush"])
+    p.set_defaults(func=cmd_incidents)
     p = sub.add_parser("update", help="레포 업데이트(git pull origin main) — 녹화 중이 아닐 때만")
     p.add_argument("--dry-run", action="store_true", help="받을 커밋 수만 확인")
     p.add_argument("--no-restart", action="store_true", help="받은 뒤 녹화 프로그램을 다시 시작하지 않음")

@@ -85,6 +85,14 @@ REM then the official SourceForge zip (SHA-256 checked).
 if errorlevel 1 (
     call "%~dp0_say.bat" setup_sox_failed
 )
+REM git and GitHub CLI (gh): required. git = auto-update (git pull origin main);
+REM gh = GitHub issues for failures when no token is stored. Installed with
+REM winget if missing (kept if present).
+call "%~dp0_say.bat" setup_gitgh
+where git >nul 2>&1
+if errorlevel 1 call :winget_install Git.Git
+where gh >nul 2>&1
+if errorlevel 1 call :winget_install GitHub.cli
 
 echo.
 call "%~dp0_say.bat" setup_5
@@ -133,3 +141,19 @@ if errorlevel 1 (
 echo.
 call "%~dp0_say.bat" setup_next
 pause
+exit /b 0
+
+:winget_install
+where winget >nul 2>&1
+if errorlevel 1 (
+    call "%~dp0_say.bat" setup_gitgh_no_winget
+    echo %~1
+    exit /b 1
+)
+winget install --id %~1 -e --silent --accept-package-agreements --accept-source-agreements
+if errorlevel 1 (
+    call "%~dp0_say.bat" setup_gitgh_failed
+    echo %~1
+    exit /b 1
+)
+exit /b 0
