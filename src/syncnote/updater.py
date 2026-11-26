@@ -65,6 +65,24 @@ def git(repo: Path, *args: str, timeout: float = 180) -> subprocess.CompletedPro
                           stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
 
 
+# git 사용자 이름·메일이 없으면 병합 커밋을 만들 때 git 이 'Please tell me who you are' 로 거부해
+# 자동 업데이트가 매번 실패합니다(CI 에서 실제로). 없을 때만 이 레포의 설정(.git/config, 전역 아님)에
+# 익명 값을 적습니다. 사람이 적어 둔 값(전역·레포)은 건드리지 않습니다.
+ANON_NAME = "Sync Note (anonymous)"
+ANON_EMAIL = "anonymous@syncnote.invalid"
+
+
+def ensure_identity(repo: Path) -> bool:
+    """이름·메일이 없으면 레포 설정에 익명 값을 적습니다. 적었으면 True."""
+    wrote = False
+    for key, value in (("user.name", ANON_NAME), ("user.email", ANON_EMAIL)):
+        if not git(repo, "config", key).stdout.strip():
+            git(repo, "config", "--local", key, value)
+            log.warning("git %s 가 없어 이 레포에 익명 값을 적었습니다: %s", key, value)
+            wrote = True
+    return wrote
+
+
 def recording_now(state_dir: Path) -> str:
     """녹화 중이면 그 녹화의 라벨, 아니면 ""."""
     from .recorder import lock as rec_lock
@@ -113,13 +131,8 @@ def _update(repo, state_dir, remote, branch, install_requirements, restart_tasks
     if dry_run:
         incoming = git(repo, "log", "--oneline", "HEAD..FETCH_HEAD").stdout.strip().splitlines()
         return Result("skipped", f"받을 커밋 {len(incoming)}개(--dry-run 이라 받지 않음)", old=old)
-    # 빨리 감기가 아니면 병합 커밋을 만듭니다. 그 PC 에 git 사용자 이름·메일이 없으면 git 이
-    # 'Please tell me who you are' 로 거부해 매번 실패하므로, 그때만 이 커밋에 자동 업데이트 이름을
-    # 씁니다(git 설정은 바꾸지 않음).
-    ident = []
-    if not git(repo, "config", "user.email").stdout.strip():
-        ident = ["-c", "user.name=Sync Note auto-update", "-c", "user.email=syncnote-update@localhost"]
-    pull = git(repo, *ident, "pull", "--no-rebase", "--no-edit", remote, branch, timeout=300)
+    ensure_identity(repo)
+    pull = git(repo, "pull", "--no-rebase", "--no-edit", remote, branch, timeout=300)
     if pull.returncode != 0:
         # 충돌·로컬 변경과 겹침: 하던 병합을 되돌려 폴더를 원래대로
         if (repo / ".git" / "MERGE_HEAD").exists():

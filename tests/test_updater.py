@@ -190,4 +190,15 @@ def test_merge_works_without_a_git_identity(repos, tmp_path, monkeypatch):
     res = run(pc, state)
     assert res.status == "updated", res.message
     assert (pc / "src" / "c.py").exists()
-    assert "user.email" not in (pc / ".git" / "config").read_text(encoding="utf-8")   # 설정은 그대로
+    # 사양(사용자 요청): 없으면 익명 값을 자동으로 설정 — 이 레포 설정(.git/config)에만
+    cfg = (pc / ".git" / "config").read_text(encoding="utf-8")
+    assert U.ANON_EMAIL in cfg and U.ANON_NAME in cfg
+    assert empty.read_text(encoding="utf-8") == ""                                  # 전역은 그대로
+
+
+def test_existing_identity_is_never_overwritten(repos):
+    _o, _d, pc, _state = repos
+    sh(pc, "config", "--local", "user.name", "사람")
+    sh(pc, "config", "--local", "user.email", "person@example.com")
+    assert U.ensure_identity(pc) is False
+    assert sh(pc, "config", "user.email").strip() == "person@example.com"
