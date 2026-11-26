@@ -585,6 +585,15 @@ stereo_mix_enabled = true
 # 비우면 이름에 '스테레오 믹스'·'Stereo Mix' 가 들어간 장치. 이름 일부만 적어도 됩니다.
 stereo_mix_device = ""
 
+# 마이크 자동 증폭(마이크·스테레오 믹스 트랙). 강의실 PC 에서 수업 중 마이크가 -58 ~ -79 dBFS 로
+# 녹화 영상에서 들리지 않았습니다(Windows 입력 레벨은 이미 최대). 받은 소리를 ffmpeg dynaudnorm 으로
+# 짧은 구간마다 키웁니다 — 작은 소리는 많이, 큰 소리는 적게 키워 찢어지지 않게.
+#   true  = 켬 — 녹화 파일을 만들 때 마이크 소리를 자동으로 키웁니다   [기본]
+#   false = 끔 — 받은 그대로
+mic_auto_gain = true
+# 최대 몇 dB 까지 키울지. 0 이면 끔. 40 = 최대 100배.
+mic_auto_gain_max_db = 40.0
+
 # 기본 마이크가 '죽어 있으면' 다른 마이크로 바꿉니다.
 #
 # 2026-11-13 실기 PC 의 기본 마이크는 '마이크 배열 (Audio Share)' 라는
@@ -883,6 +892,12 @@ server = "builtin"
 # "system" : 스피커로 나가는 소리(온라인 강의 소리)   [기본]
 # "mic"    : 마이크
 source = "system"
+# source = "mic" 일 때 마이크 소리를 자동으로 키움([recording.audio] mic_auto_gain 과 같은 방식).
+#   true  = 켬 — 송출할 때 마이크 소리를 자동으로 키웁니다   [기본]
+#   false = 끔 — 받은 그대로 송출합니다
+mic_auto_gain = true
+# 최대 몇 dB 까지 키울지. 0 이면 끔.
+mic_auto_gain_max_db = 40.0
 # 소리를 받는 방법. 가능한 값:
 # "auto"      : soundcard 모듈이 있으면 soundcard, 없으면 ffmpeg   [기본]
 # "soundcard" : WASAPI 루프백 포함. Windows 에서 system 은 이것만 됩니다

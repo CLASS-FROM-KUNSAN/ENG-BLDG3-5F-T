@@ -43,6 +43,7 @@ class EncodeSpec:
     bitrate_kbps: int = 96
     samplerate: int = 48000
     channels: int = 2
+    audio_filter: str = ""          # 마이크 자동 증폭 등(recorder/autogain.py)
 
 
 def _codec_args(spec: EncodeSpec) -> list[str]:
@@ -67,7 +68,8 @@ def build_ffmpeg(spec: EncodeSpec, *, exe: str, input_args: list[str] | None,
         inp = list(input_args)
     # 지연을 줄입니다: 입력 버퍼링을 끄고(입력 옵션) 출력은 바로바로 내보냅니다(출력 옵션).
     extra = ["-content_type", content_type] if content_type and output.startswith("icecast://") else []
-    return [exe, "-hide_banner", "-loglevel", "warning", "-fflags", "nobuffer", *inp,
+    af = ["-af", spec.audio_filter] if spec.audio_filter else []
+    return [exe, "-hide_banner", "-loglevel", "warning", "-fflags", "nobuffer", *inp, *af,
             "-ac", str(spec.channels), "-ar", str(spec.samplerate),
             *_codec_args(spec), "-flush_packets", "1", *extra, output]
 
