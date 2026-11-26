@@ -113,7 +113,13 @@ def _update(repo, state_dir, remote, branch, install_requirements, restart_tasks
     if dry_run:
         incoming = git(repo, "log", "--oneline", "HEAD..FETCH_HEAD").stdout.strip().splitlines()
         return Result("skipped", f"받을 커밋 {len(incoming)}개(--dry-run 이라 받지 않음)", old=old)
-    pull = git(repo, "pull", "--no-rebase", "--no-edit", remote, branch, timeout=300)
+    # 빨리 감기가 아니면 병합 커밋을 만듭니다. 그 PC 에 git 사용자 이름·메일이 없으면 git 이
+    # 'Please tell me who you are' 로 거부해 매번 실패하므로, 그때만 이 커밋에 자동 업데이트 이름을
+    # 씁니다(git 설정은 바꾸지 않음).
+    ident = []
+    if not git(repo, "config", "user.email").stdout.strip():
+        ident = ["-c", "user.name=Sync Note auto-update", "-c", "user.email=syncnote-update@localhost"]
+    pull = git(repo, *ident, "pull", "--no-rebase", "--no-edit", remote, branch, timeout=300)
     if pull.returncode != 0:
         # 충돌·로컬 변경과 겹침: 하던 병합을 되돌려 폴더를 원래대로
         if (repo / ".git" / "MERGE_HEAD").exists():

@@ -171,3 +171,23 @@ def test_cli(monkeypatch):
     monkeypatch.setattr(U, "update", lambda **kw: seen.update(kw) or U.Result("up_to_date", "최신"))
     assert cli.main(["update", "--no-restart"]) == 0
     assert seen["remote"] == "origin" and seen["branch"] == "main" and seen["restart_tasks"] is False
+
+
+def test_merge_works_without_a_git_identity(repos, tmp_path, monkeypatch):
+    """git 사용자 이름·메일이 없는 PC(CI 에서 실제로 걸림): 병합 커밋을 만들 수 있어야 함."""
+    _o, dev, pc, state = repos
+    push(dev, "src/c.py", "c = 1\n")
+    (pc / "local.txt").write_text("x\n", encoding="utf-8")
+    sh(pc, "add", "local.txt")
+    sh(pc, "commit", "-m", "local only")
+    empty = tmp_path / "empty.gitconfig"
+    empty.write_text("", encoding="utf-8")
+    for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("EMAIL", "")
+    res = run(pc, state)
+    assert res.status == "updated", res.message
+    assert (pc / "src" / "c.py").exists()
+    assert "user.email" not in (pc / ".git" / "config").read_text(encoding="utf-8")   # 설정은 그대로
