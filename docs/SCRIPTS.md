@@ -96,6 +96,7 @@ cp949 창과 UTF-8 창 **모두에서** 이전 줄의 한글 조각이 명령으
 | `eclass_probe.bat` | eClass 화면 구조가 바뀌어 수집이 안 될 때. 결과는 데이터 폴더 `state\probe`. |
 | `open_data_folder.bat` | 녹화·자료가 저장된 폴더 열기. |
 | `install_ffmpeg.bat` | ffmpeg 설치(setup 이 부름). 찾기 → 가져온 zip → pip → winget → 릴리스 목록(롤백) → 다운로드 폴더 zip, 파이썬이 없으면 winget → PowerShell zip. |
+| `audio_check.bat` | 소리 입출력 단계별 점검: 무음 → 마이크에 말하기 → 증폭해서 들어 보기 → 톤 → 잡음 → 요약. 마이크 소리가 실제로 들어오는 장치를 찾습니다(docs/TROUBLESHOOTING.md). |
 | `release.bat` | `vX.Y.Z` 태그를 만들어 푸시(GitHub Actions 가 릴리스). 이미 있는 태그·형식이 틀린 태그는 거부. |
 
 ## 작업 스케줄러가 실행하는 것 (`register_tasks.ps1` 이 등록)
