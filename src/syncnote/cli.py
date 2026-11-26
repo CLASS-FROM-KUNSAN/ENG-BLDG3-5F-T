@@ -2282,6 +2282,48 @@ def cmd_activity_watch_acrobat(args) -> int:
         return 2
 
 
+def cmd_remote_ops(args) -> int:
+    """원격 git 작업: 소유자가 GitHub 로 올린 서명된 계획을 받아 정규화한 git 명령만 실행.
+    poll(받아 실행) · sign(계획에 서명) · new(예시 계획) · status. src/syncnote/remote_ops.py."""
+    import json as _json
+
+    from . import remote_ops as R
+
+    if args.action == "sign":
+        from . import secrets
+        secret = secrets.get("remote_ops")
+        plan = _json.loads(Path(args.file).read_text(encoding="utf-8"))
+        print(_json.dumps(R.sign_plan(plan, secret), ensure_ascii=False, indent=1))
+        return 0
+    if args.action == "new":
+        plan = R.new_plan(target=args.target or "all", reason=args.reason or "",
+                          steps=[{"op": "status"},
+                                 {"op": "stash-push", "msg": "remote-ops backup"},
+                                 {"op": "fetch", "remote": "origin", "branch": "main", "prune": True},
+                                 {"op": "reset-hard", "ref": "origin/main"}],
+                          confirm_destructive=True)
+        print(_json.dumps(plan, ensure_ascii=False, indent=1))
+        print("\n# 위 계획을 고친 뒤:  python -m syncnote remote-ops sign <파일>  로 서명해 Gist 에 올리고,"
+              "\n# 그 Gist 링크를 remote-ops 라벨 이슈에 올리세요(소유자 계정으로).", file=sys.stderr)
+        return 0
+
+    cfg, layout = _load(args)
+    if args.action == "status":
+        st = R.State.load(layout.state / "remote_ops.json")
+        on = bool(cfg.get("remote_ops.enabled", False))
+        print(f"원격 작업: {'켜짐' if on else '꺼짐'}, 마지막 seq {st.last_seq}, 실행한 계획 {len(st.done_ids)}개")
+        print("허용 작업: " + ", ".join(R.ALLOWED_OPS))
+        return 0
+    out = R.poll_once(cfg, layout, dry_run=args.dry_run)
+    line = f"원격 작업: 확인 {out.checked}건, 실행 {out.ran}건"
+    if out.rejected:
+        line += " | 거부 " + "; ".join(out.rejected[:5])
+    if out.error:
+        line += f" | {out.error}"
+    print(line)
+    return 0
+
+
 def cmd_incidents(args) -> int:
     """실패·오류 이슈 대기열: status(몇 개 남았는지) · flush(지금 올리기)."""
     from . import incidents
@@ -2415,6 +2457,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="환경 점검")
     p.add_argument("--json", action="store_true", help="결과를 JSON 한 줄로(시간표 편집기용)")
     p.set_defaults(func=cmd_doctor)
+    p = sub.add_parser("remote-ops", help="원격 git 작업(소유자가 GitHub 로 올린 서명된 계획을 실행)")
+    p.add_argument("action", choices=["poll", "sign", "new", "status"])
+    p.add_argument("file", nargs="?", help="sign 할 계획 JSON 파일")
+    p.add_argument("--dry-run", action="store_true", help="실행하지 않고 할 일만")
+    p.add_argument("--target", default="", help="new: 대상 PC 이름(기본 all)")
+    p.add_argument("--reason", default="", help="new: 사유")
+    p.set_defaults(func=cmd_remote_ops)
     p = sub.add_parser("incidents", help="실패·오류 이슈: status(대기열) · flush(지금 올리기)")
     p.add_argument("action", choices=["status", "flush"])
     p.set_defaults(func=cmd_incidents)

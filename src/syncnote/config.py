@@ -231,6 +231,14 @@ DEFAULTS: dict[str, Any] = {
         "context_lines": 40,
         "max_writes_per_flush": 15,
     },
+    "remote_ops": {
+        "enabled": True,
+        "repo": "",
+        "owner_login": "",
+        "require_admin": True,
+        "allow_destructive": True,
+        "poll_interval_minutes": 30,
+    },
     "update": {
         "enabled": True,
         "remote": "origin",
