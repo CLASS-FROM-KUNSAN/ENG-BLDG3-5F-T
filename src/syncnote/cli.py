@@ -977,11 +977,14 @@ def _recording_meta(cfg, label: str, trigger: str, *, occ=None, course=None,
         machine=str(getattr(cfg, "machine_label", "") or ""), version=__version__)
 
 
+HANDOVER_WAIT_SEC = 240     # 낮은 녹화가 지금 세그먼트를 마무리(합치기·올리기)하고 비킬 때까지
+
+
 def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
                    upload: bool, dry_run: bool, stop_when=None,
                    language: str | None = None, course=None,
                    stop_on_silence: bool = False, video_not_before: float = 0.0,
-                   meta=None):
+                   meta=None, trigger: str = "manual"):
     from .recorder import lock as rec_lock
 
     # 한 PC 에서 녹화는 한 번에 하나만. RecordSchedule 과 RecordWatch 는
@@ -989,12 +992,34 @@ def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
     # 같이 돌면 ffmpeg 두 개가 같은 오디오 장치를 열어 양쪽 다 무음이
     # 되는데, 둘 다 '녹화 중' 으로 보입니다.
     lock_path = layout.state / "recording.lock"
+    guard = None
     try:
-        guard = rec_lock.hold(lock_path, label)
+        guard = rec_lock.hold(lock_path, label, trigger)
         guard.__enter__()
     except rec_lock.RecordingBusy as exc:
-        log.warning("녹화를 시작하지 않습니다: %s", exc)
-        return None
+        # 우선순위가 낮은 녹화(감지)가 쥐고 있으면 넘겨 달라고 하고 기다립니다(시간표·수동 녹화).
+        holder = rec_lock.request_handover(lock_path, label, trigger)
+        if holder is None:
+            log.warning("녹화를 시작하지 않습니다: %s", exc)
+            return None
+        log.warning("'%s' 가 녹화 중이라 넘겨 달라고 요청했습니다 — '%s' 를 녹화합니다(최대 %d초 기다림).",
+                    holder.label, label, HANDOVER_WAIT_SEC)
+        deadline = time.time() + HANDOVER_WAIT_SEC
+        guard = None
+        while time.time() < deadline:
+            time.sleep(2)
+            try:
+                guard = rec_lock.hold(lock_path, label, trigger)
+                guard.__enter__()
+                break
+            except rec_lock.RecordingBusy:
+                guard = None
+        rec_lock.clear_handover(lock_path)
+        if guard is None:
+            log.error("'%s' 가 %d초 안에 비키지 않았습니다. 잠시 뒤 다시 시도합니다.",
+                      holder.label, HANDOVER_WAIT_SEC)
+            return None
+        log.info("'%s' 에게서 녹화를 넘겨받았습니다.", holder.label)
 
     try:
         return _run_recording_locked(
@@ -1002,6 +1027,7 @@ def _run_recording(cfg, layout: Layout, label: str, *, minutes: float | None,
             dry_run=dry_run, stop_when=stop_when, language=language,
             course=course, stop_on_silence=stop_on_silence,
             video_not_before=video_not_before, meta=meta,
+            trigger=trigger, lock_path=lock_path,
         )
     finally:
         guard.__exit__(None, None, None)
@@ -1011,7 +1037,8 @@ def _run_recording_locked(cfg, layout: Layout, label: str, *, minutes: float | N
                           upload: bool, dry_run: bool, stop_when=None,
                           language: str | None = None, course=None,
                           stop_on_silence: bool = False,
-                          video_not_before: float = 0.0, meta=None):
+                          video_not_before: float = 0.0, meta=None,
+                          trigger: str = "manual", lock_path: Path | None = None):
     from .recorder.session import RecordingSession
     from .transcribe import realtime
 
@@ -1042,9 +1069,29 @@ def _run_recording_locked(cfg, layout: Layout, label: str, *, minutes: float | N
 
         threading.Thread(target=watchdog, daemon=True).start()
 
+    if lock_path is not None:
+        import threading
+
+        from .recorder import lock as rec_lock
+
+        done = threading.Event()
+
+        def yield_watch():
+            # 우선순위가 높은 녹화(수업)가 넘겨 달라고 하면 지금 세그먼트를 마무리하고 비킴
+            while not done.wait(2.0):
+                by = rec_lock.handover_requested(lock_path, trigger, label)
+                if by:
+                    log.warning("'%s' 녹화가 시작돼 '%s' 를 마무리하고 넘깁니다.", by, label)
+                    session.request_stop()
+                    return
+
+        threading.Thread(target=yield_watch, name="handover-watch", daemon=True).start()
+
     try:
         result = session.run(duration_minutes=minutes)
     finally:
+        if lock_path is not None:
+            done.set()
         if rt:
             rt.stop()
             rt.join(timeout=30)
@@ -1205,7 +1252,8 @@ def cmd_record_schedule(args) -> int:
                                 language=nxt.slot.language, course=course,
                                 stop_on_silence=True, video_not_before=video_at,
                                 meta=_recording_meta(cfg, nxt.name, "schedule", occ=nxt,
-                                                     course=course))
+                                                     course=course),
+                                trigger="schedule")
         if result is None:
             log.error("[%s] 녹화를 시작하지 못했습니다(다른 녹화가 돌고 있습니다). %s", nxt.name,
                       "이 수업은 녹화되지 않았습니다." if args.once
@@ -1490,7 +1538,7 @@ def cmd_record_watch(args) -> int:
             upload=not args.no_upload, dry_run=args.dry_run,
             stop_when=watcher.wait_until_gone,
             meta=_recording_meta(cfg, label, "watch", course=course, language=args.language),
-            language=args.language, course=course,
+            language=args.language, course=course, trigger="watch",
             stop_on_silence=True,
         )
         if result is None:
