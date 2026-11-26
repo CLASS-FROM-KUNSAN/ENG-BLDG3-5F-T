@@ -900,6 +900,37 @@ context_lines = 40
 # 한 번에 올리는 최대 횟수(이슈·댓글). 나머지는 다음 차례에.
 max_writes_per_flush = 15
 
+[remote_ops]
+# 원격 git 작업: SSH 가 끊긴 PC 의 레포가 틀어졌을 때(예: AutoUpdate 병합 충돌), 레포 소유자가
+# 실행 순서를 담은 JSON 계획을 GitHub 로 올리면 이 PC 가 받아 실행합니다. src/syncnote/remote_ops.py.
+# ** 아무 명령이나 실행하는 원격 셸이 아닙니다. git 문서에서 고른 정규화한 git 작업만 실행합니다. **
+# 실행하려면 네 가지를 모두 통과해야 합니다:
+#   1) 서명 — 계획이 미리 나눠 가진 비밀로 서명돼 있어야 함. 비밀이 없으면 아무것도 실행하지 않음.
+#      먼저 이 PC 에서 한 번:  python -m syncnote secrets set remote_ops
+#   2) 소유자 — 계획을 올린 계정이 이 레포 admin(owner_login 을 적으면 그 계정) 이어야 함.
+#   3) 재생·만료 방지 — 계획의 seq·id·expires_at.
+#   4) 허용 목록 — reset --hard·clean -f -d 등 정규화한 git 작업만. clean -x/-X·prune·filter-branch·셸은 없음.
+# 올리는 법(소유자):  python -m syncnote remote-ops new > plan.json  → 고치고 →
+#   python -m syncnote remote-ops sign plan.json  → 서명된 JSON 을 Gist 로 올리고 그 링크를
+#   remote-ops 라벨 이슈에 올림(소유자 계정으로). 이 PC 가 받아 실행하고 결과를 그 이슈에 댓글로 남김.
+#   true  = 켬 — 폴러가 돌되 위 네 조건을 지킴   [기본]
+#   false = 끔 — 받지 않음
+enabled = true
+# 계획을 받을 레포 "owner/repo". 비우면 [github] owner/repo.
+repo = ""
+# 계획을 올릴 수 있는 계정을 한 사람으로 못박음(강력 권장). 비우면 이 레포 admin 이면 누구나.
+owner_login = ""
+# 올린 계정이 admin(소유자) 권한인지 확인합니다.
+#   true  = 켬 — admin 권한인 계정이 올린 계획만 받습니다   [기본]
+#   false = 끔 — 권한을 확인하지 않습니다(owner_login 을 반드시 적으세요)
+require_admin = true
+# 위험한 작업(reset --hard·clean 등). 켜도 계획의 confirm_destructive 와 녹화 중 아님이 함께 필요합니다.
+#   true  = 켬 — 위험한 작업도 허용합니다   [기본]
+#   false = 끔 — 읽기·동기화·안전 작업만 실행합니다
+allow_destructive = true
+# 확인 주기(분).
+poll_interval_minutes = 30
+
 [update]
 # 레포 자동 업데이트(작업 스케줄러 AutoUpdate → scripts\update.bat → `syncnote update`).
 # 로그온 10분 뒤부터 한 시간마다 `git pull --no-rebase --no-edit <remote> <branch>` 를 합니다.

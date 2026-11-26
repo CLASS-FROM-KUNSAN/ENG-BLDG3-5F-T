@@ -33,7 +33,7 @@ log = get_logger("tasks")
 
 FOLDER = "\\Sync Note\\"
 EXPECTED = ("EclassSync", "RecordSchedule", "RecordWatch", "RecordGuard",
-            "TranscribeQueue", "HomeBackup", "HomePrune", "AutoUpdate")
+            "TranscribeQueue", "HomeBackup", "HomePrune", "AutoUpdate", "RemoteOps")
 OPTIONAL = ("TerminalAudio", "StreamSchedule")
 ACCESS_DENIED = 5          # register_tasks.ps1 이 권한 부족일 때 돌려주는 코드
 UAC_CANCELLED = 1223       # 사용자가 UAC 창에서 '아니요'
