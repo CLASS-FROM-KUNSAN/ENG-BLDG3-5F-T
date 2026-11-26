@@ -44,6 +44,7 @@ def mux(
     meta=None,
     segment_index: int = 1,
     ended_at: float | None = None,
+    mic_gain_filter: str = "",
 ) -> Path:
     """최종 파일을 만듭니다.
 
@@ -108,6 +109,19 @@ def mux(
     # 들리게). 마이크 트랙이 없으면(마이크 입력 없음) 스테레오 믹스가 그 자리를 대신합니다.
     filters: list[str] = []
     streams = [(f"{i}:a", f"[{i}:a]", name) for i, name in audio_indices]
+    # 마이크·스테레오 믹스는 자동 증폭(recorder/autogain.py) — 수업 중 실측 -58 ~ -79 dBFS 로 들리지 않았음
+    if mic_gain_filter:
+        from .autogain import GAIN_TRACKS
+
+        boosted = []
+        for spec, label, name in streams:
+            if name in GAIN_TRACKS:
+                out = f"[g{spec.split(':')[0]}]"
+                filters.append(f"{label}{mic_gain_filter}{out}")
+                boosted.append((out, out, name))
+            else:
+                boosted.append((spec, label, name))
+        streams = boosted
     names = [n for *_x, n in streams]
     if "stereomix" in names:
         mic = next((s for s in streams if s[2] == "mic"), None)
