@@ -150,3 +150,10 @@ def _no_real_browser_or_board(monkeypatch):
     monkeypatch.setattr(driver_help, "_real_baseboard", driver_help.baseboard, raising=False)
     monkeypatch.setattr(driver_help, "open_search", lambda url: "")
     monkeypatch.setattr(driver_help, "baseboard", lambda: ("", ""))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_incident_reports(monkeypatch):
+    """테스트의 오류 로그가 실제 GitHub 이슈로 올라가지 않게(incidents.install 을 끔).
+    이슈 보고를 시험하는 테스트(test_incidents.py)는 이 변수를 지우고 가짜 전송을 씁니다."""
+    monkeypatch.setenv("SYNCNOTE_NO_INCIDENTS", "1")

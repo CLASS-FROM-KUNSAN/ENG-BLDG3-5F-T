@@ -223,6 +223,21 @@ DEFAULTS: dict[str, Any] = {
     },
     # 실시간 오디오 송출 (Tailscale 망 안에서만). `python -m syncnote stream start`
     # 각 항목의 뜻은 config.example.toml 과 docs/STREAMING.md 에 있습니다.
+    "incidents": {
+        "enabled": True,
+        "repo": "",
+        "labels": ["incident"],
+        "min_comment_minutes": 10,
+        "context_lines": 40,
+        "max_writes_per_flush": 15,
+    },
+    "update": {
+        "enabled": True,
+        "remote": "origin",
+        "branch": "main",
+        "install_requirements": True,
+        "restart_tasks": True,
+    },
     "stream": {
         "server": "builtin",
         "source": "system",
