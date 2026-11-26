@@ -32,11 +32,70 @@ class RecordingBusy(RuntimeError):
     """다른 녹화가 이미 돌고 있습니다."""
 
 
+# --- 넘겨받기(우선순위) -----------------------------------------------------------
+# 먼저 잡은 녹화가 끝까지 잠금을 쥐면, 감지 녹화(chrome·PowerPoint 등이 뜨면 시작)가 아침부터
+# 잠금을 쥐고 있다가 수업 시간이 되어도 시간표 녹화가 시작하지 못합니다(강의실 PC 에서 실제로 —
+# '감지_chrome_0910' 이 하루 종일). 그 감지 녹화는 수업 밖에서 시작해 과목이 없으니 과목 레포에도
+# 올라가지 않습니다. 그래서 우선순위가 높은 녹화(시간표·수동)는 낮은 녹화(감지)에게 넘겨 달라고
+# 요청하고, 낮은 쪽은 지금 세그먼트를 마무리하고 비켜 줍니다.
+PRIORITY = {"manual": 3, "schedule": 3, "watch": 1}
+
+
+def priority(trigger: str, label: str = "") -> int:
+    """잠금을 쥔 녹화의 우선순위. 예전 잠금 파일(trigger 없음)은 라벨로 짐작('감지_' = 감지)."""
+    if trigger in PRIORITY:
+        return PRIORITY[trigger]
+    return PRIORITY["watch"] if str(label).startswith("감지_") else PRIORITY["schedule"]
+
+
+def _handover_path(path: Path) -> Path:
+    return Path(path).with_name(Path(path).name + ".handover")
+
+
+def request_handover(path: Path, label: str, trigger: str) -> LockInfo | None:
+    """지금 녹화가 나보다 우선순위가 낮으면 넘겨 달라고 적어 둡니다. 그런 녹화면 LockInfo."""
+    current = read(path)
+    if current is None or _stale(current):
+        return None
+    if priority(current.trigger, current.label) >= priority(trigger, label):
+        return None
+    payload = {"label": label, "trigger": trigger, "at": time.time(), "for_pid": current.pid}
+    try:
+        _handover_path(path).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        log.warning("넘겨받기 요청을 적지 못했습니다: %s", exc)
+        return None
+    return current
+
+
+def handover_requested(path: Path, trigger: str, label: str = "") -> str | None:
+    """나(잠금을 쥔 쪽)에게 넘겨 달라는 요청이 있으면 요청한 녹화의 라벨. 10분 지난 요청은 무시."""
+    try:
+        data = json.loads(_handover_path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if time.time() - float(data.get("at", 0)) > 600:
+        return None
+    if int(data.get("for_pid", -1)) not in (-1, os.getpid()):
+        return None
+    if priority(str(data.get("trigger", "")), str(data.get("label", ""))) <= priority(trigger, label):
+        return None
+    return str(data.get("label", "") or "다른 녹화")
+
+
+def clear_handover(path: Path) -> None:
+    try:
+        _handover_path(path).unlink()
+    except OSError:
+        pass
+
+
 @dataclass(frozen=True)
 class LockInfo:
     pid: int
     label: str
     started_at: float
+    trigger: str = ""
     # PID 는 재사용됩니다. 'PID 가 살아 있다' 가 '그 녹화가 살아 있다' 는
     # 아닙니다. 프로세스 시작 시각을 같이 적어 두고 대조합니다.
     create_time: float = 0.0
@@ -207,6 +266,7 @@ def read(path: Path) -> LockInfo | None:
     try:
         return LockInfo(int(data.get("pid", 0)), str(data.get("label", "")),
                         float(data.get("started_at", 0.0)),
+                        str(data.get("trigger", "") or ""),
                         float(data.get("create_time", 0.0)))
     except (TypeError, ValueError):
         return None
@@ -223,7 +283,7 @@ def _stale(info: LockInfo | None) -> bool:
     return not _alive(info.pid, info.create_time)
 
 
-def _try_create(path: Path, label: str) -> bool:
+def _try_create(path: Path, label: str, trigger: str = "") -> bool:
     """**원자적으로** 만듭니다. 이미 있으면 False.
 
     exists() 로 보고 write_text() 하면 두 프로세스가 둘 다 '없다' 를
@@ -232,6 +292,7 @@ def _try_create(path: Path, label: str) -> bool:
     payload = {
         "pid": os.getpid(),
         "label": label,
+        "trigger": trigger,
         "started_at": time.time(),
         "create_time": _create_time(os.getpid()),
     }
@@ -245,15 +306,16 @@ def _try_create(path: Path, label: str) -> bool:
 
 
 @contextmanager
-def hold(path: Path, label: str):
-    """녹화 잠금을 잡습니다. 이미 살아 있는 녹화가 있으면 RecordingBusy."""
+def hold(path: Path, label: str, trigger: str = ""):
+    """녹화 잠금을 잡습니다. 이미 살아 있는 녹화가 있으면 RecordingBusy.
+    trigger("schedule"·"watch"·"manual")는 넘겨받기 우선순위에 씁니다(PRIORITY)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # 한 번은 그냥, 한 번은 죽은 잠금을 치운 뒤. 두 번이면 충분합니다 —
     # 치운 직후 남이 먼저 잡았다면 그쪽이 진짜 녹화 중입니다.
     for attempt in (1, 2):
-        if _try_create(path, label):
+        if _try_create(path, label, trigger):
             break
         current = read(path)
         if current is not None and not _stale(current):
