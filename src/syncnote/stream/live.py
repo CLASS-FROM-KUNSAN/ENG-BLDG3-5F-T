@@ -37,6 +37,9 @@ ON_MAX_DURATION = ("rollback", "stop")
 class StreamSettings:
     server: str = "builtin"
     source: str = "system"
+    # source = "mic" 일 때 자동 증폭(recorder/autogain.py) — 수업 중 마이크가 -58 dBFS 로 들리지 않았음
+    mic_auto_gain: bool = True
+    mic_auto_gain_max_db: float = 40.0
     capture: str = "auto"
     device: str = ""
     codec: str = "mp3"
@@ -94,8 +97,9 @@ _STR = ("server", "source", "capture", "device", "codec", "bind", "path", "title
 _INT = ("bitrate_kbps", "samplerate", "channels", "port", "max_listeners", "client_buffer_kb",
         "token_bytes", "restart_on_failure")
 _FLOAT = ("max_duration_minutes", "idle_stop_minutes", "min_uptime_sec", "restart_backoff_sec",
-          "restart_backoff_max_sec", "pre_roll_minutes", "post_roll_minutes")
-_BOOL = ("player_page", "require_token", "fallback_default_device", "follow_timetable")
+          "restart_backoff_max_sec", "pre_roll_minutes", "post_roll_minutes", "mic_auto_gain_max_db")
+_BOOL = ("player_page", "require_token", "fallback_default_device", "follow_timetable",
+         "mic_auto_gain")
 
 
 def settings_from(cfg) -> StreamSettings:
@@ -234,7 +238,8 @@ class Session:
 
         s = self.settings
         spec = capture.EncodeSpec(codec=s.codec, bitrate_kbps=s.bitrate_kbps,
-                                  samplerate=s.samplerate, channels=s.channels)
+                                  samplerate=s.samplerate, channels=s.channels,
+                                  audio_filter=self._audio_filter())
         mode = capture.resolve_capture(s.capture)
         pcm = None
         if mode == "soundcard":
@@ -273,6 +278,14 @@ class Session:
         return capture.build_ffmpeg(spec, exe=find_ffmpeg(), input_args=inp,
                                     output=out, content_type=ctype), pcm
 
+    def _audio_filter(self) -> str:
+        s = self.settings
+        if getattr(s, "source", "") != "mic" or not getattr(s, "mic_auto_gain", True):
+            return ""
+        from ..recorder.autogain import DEFAULT_MAX_DB, mic_filter
+
+        return mic_filter(getattr(s, "mic_auto_gain_max_db", DEFAULT_MAX_DB))
+
     def _start_encoder(self, device: str) -> None:
         s = self.settings
         cmd, pcm = self._encoder_cmd(device)
@@ -280,7 +293,8 @@ class Session:
         self._encoder = capture.Encoder(
             cmd, pcm_source=pcm, on_chunk=on_chunk,
             spec=capture.EncodeSpec(codec=s.codec, bitrate_kbps=s.bitrate_kbps,
-                                    samplerate=s.samplerate, channels=s.channels))
+                                    samplerate=s.samplerate, channels=s.channels,
+                                    audio_filter=self._audio_filter()))
         self._encoder.start()
 
     def _open_server(self, host: str) -> None:

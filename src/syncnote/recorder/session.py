@@ -30,7 +30,7 @@ from pathlib import Path
 
 from ..logging_setup import get as get_logger
 from ..paths import Layout, safe_name
-from . import devices
+from . import autogain, devices
 from .audio import AudioRecorder
 from .mux import MuxInput, mux
 from .video import VideoRecorder
@@ -699,6 +699,7 @@ class RecordingSession:
                     delete_video=True,
                     delete_audio=False,  # 마지막 mux 뒤에 한 번만 지웁니다
                     meta=self.meta, segment_index=index, ended_at=ended_at,
+                    mic_gain_filter=autogain.from_config(cfg),
                 )
                 final_paths.append(final)
             except Exception as exc:

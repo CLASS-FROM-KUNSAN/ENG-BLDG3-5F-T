@@ -152,6 +152,8 @@ DEFAULTS: dict[str, Any] = {
             "mic_gain_db": 0.0,
             "stereo_mix_enabled": True,
             "stereo_mix_device": "",
+            "mic_auto_gain": True,
+            "mic_auto_gain_max_db": 40.0,
             "track_layout": "separate",
             "silence_warn_sec": 60,
             # 모든 트랙이 동시에 이만큼 무음이면 멈춥니다(예약·감지 녹화만).
@@ -224,6 +226,8 @@ DEFAULTS: dict[str, Any] = {
     "stream": {
         "server": "builtin",
         "source": "system",
+        "mic_auto_gain": True,
+        "mic_auto_gain_max_db": 40.0,
         "capture": "auto",
         "device": "",
         "codec": "mp3",
