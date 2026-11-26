@@ -261,8 +261,19 @@ class RestTransport:
         from .release import API, ReleaseUploader
 
         self.client = ReleaseUploader(owner, repo, token=token, retry_count=2)
+        self.api = API
         self.base = f"{API}/repos/{owner}/{repo}"
+        self.repo_full = f"{owner}/{repo}"
         self.name = "REST"
+
+    def get_json(self, path: str):
+        return self.client._request("GET", self.api + path, timeout=30)
+
+    def post(self, path: str, payload: dict):
+        return self.client._request("POST", self.api + path, timeout=30, json=payload)
+
+    def patch(self, path: str, payload: dict):
+        return self.client._request("PATCH", self.api + path, timeout=30, json=payload)
 
     def create(self, title: str, body: str, labels: list[str]) -> int:
         issue = self.client._request("POST", f"{self.base}/issues", timeout=30,
@@ -282,17 +293,33 @@ class GhTransport:
 
     def __init__(self, owner: str, repo: str) -> None:
         self.repo = f"{owner}/{repo}"
+        self.repo_full = f"{owner}/{repo}"
         self.name = "gh"
 
-    def _api(self, method: str, path: str, payload: dict | None = None) -> dict:
-        cmd = ["gh", "api", "-X", method, f"repos/{self.repo}/{path}"]
+    def get_json(self, path: str):
+        return self._api("GET", path.lstrip("/"))
+
+    def post(self, path: str, payload: dict):
+        return self._api("POST", path.lstrip("/"), payload)
+
+    def patch(self, path: str, payload: dict):
+        return self._api("PATCH", path.lstrip("/"), payload)
+
+    def _api(self, method: str, path: str, payload: dict | None = None):
+        full = path if path.startswith(("repos/", "gists", "user", "orgs/")) else f"repos/{self.repo}/{path}"
+        cmd = ["gh", "api", "-X", method, full]
         cp = subprocess.run(cmd + (["--input", "-"] if payload is not None else []),
                             input=json.dumps(payload) if payload is not None else None,
                             capture_output=True, text=True, encoding="utf-8", errors="replace",
                             timeout=60, creationflags=_NO_WINDOW)
         if cp.returncode != 0:
+            if " 404" in cp.stderr or "Not Found" in cp.stderr:
+                return None
             raise RuntimeError((cp.stderr or cp.stdout).strip()[-300:])
-        return json.loads(cp.stdout or "{}")
+        try:
+            return json.loads(cp.stdout or "null")
+        except ValueError:
+            return None
 
     def create(self, title: str, body: str, labels: list[str]) -> int:
         return int(self._api("POST", "issues", {"title": title, "body": body, "labels": labels})["number"])

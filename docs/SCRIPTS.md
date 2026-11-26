@@ -115,6 +115,7 @@ cp949 창과 UTF-8 창 **모두에서** 이전 줄의 한글 조각이 명령으
 | `record_guard.bat` | 녹화 지킴이: 녹화 중이 아닐 때 녹화 파일을 확인하고 못 올린 것을 올림. |
 | `eclass_sync.bat` | 주기적으로 eClass 수집·업로드. |
 | `transcribe_run.bat` | 야간 무인 전사. |
+| `remote_ops.bat` | 원격 git 작업(`RemoteOps` 작업). 소유자가 GitHub(Gist→이슈)로 올린 **서명된** 계획을 받아, 정규화한 git 작업만(허용 목록) 실행하고 결과를 이슈 댓글로 남김. 서명 비밀(`secrets set remote_ops`)이 없으면 아무것도 안 함. 설정은 `[remote_ops]`. docs/REMOTE_OPS.md. |
 | `update.bat` | 레포 자동 업데이트(`AutoUpdate` 작업, 로그온 10분 뒤부터 한 시간마다). `git pull --no-rebase --no-edit origin main`, 녹화 중이면 건너뜀, 충돌이면 되돌림, requirements.txt 가 바뀌면 설치, 코드가 바뀌면 녹화 프로그램을 새 코드로 다시 시작. 설정은 `[update]`. |
 | `home_backup.bat` / `home_prune.bat` | 홈 백업 / 백업이 확인된 파일 정리(설정에서 켜야 동작). |
 | `record_audio.bat` | (선택, `-AudioAt`) 매일 정해진 시각에 소리만 녹음. 파일 이름에 날짜·시각. |

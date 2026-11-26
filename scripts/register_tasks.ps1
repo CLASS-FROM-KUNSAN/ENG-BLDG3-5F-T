@@ -18,6 +18,8 @@
       RecordWatch     - 로그온 시 시작해 지정 프로그램 감지
       AutoUpdate      - 로그온 10분 뒤부터 한 시간마다 git pull origin main(녹화 중이면 건너뜀,
                         config.toml 의 [update])
+      RemoteOps       - 로그온 12분 뒤부터 주기적으로, 소유자가 GitHub 로 올린 서명된 git 작업 계획을
+                        받아 실행(서명 비밀이 없으면 아무것도 안 함, config.toml 의 [remote_ops])
       RecordGuard     - 로그온 시 시작해(15분마다 다시 확인) 녹화 중이 아닐 때 녹화 파일을
                         확인하고 못 올린 것을 올림 (config.toml 의 [recording.guard])
       TranscribeQueue - 밤마다 밀린 전사 처리
@@ -78,6 +80,7 @@ param(
     [string]$User = $env:USERNAME,
     [string]$Folder = "\Sync Note",
     [int]$UpdateIntervalMinutes = 60,
+    [int]$RemoteOpsIntervalMinutes = 30,
     [switch]$Yes
 )
 
@@ -111,7 +114,7 @@ trap {
 }
 
 function Remove-All {
-    foreach ($name in @("EclassSync","RecordSchedule","RecordWatch","RecordGuard","TranscribeQueue","HomeBackup","HomePrune","TerminalAudio","StreamSchedule","AutoUpdate")) {
+    foreach ($name in @("EclassSync","RecordSchedule","RecordWatch","RecordGuard","TranscribeQueue","HomeBackup","HomePrune","TerminalAudio","StreamSchedule","AutoUpdate","RemoteOps")) {
         if (Get-ScheduledTask -TaskPath "$Folder\" -TaskName $name -ErrorAction SilentlyContinue) {
             Unregister-ScheduledTask -TaskPath "$Folder\" -TaskName $name -Confirm:$false -ErrorAction Stop
             Write-Host "  삭제: $Folder\$name"
@@ -240,6 +243,15 @@ $RegisterAll = {
             -RepetitionInterval (New-TimeSpan -Minutes $UpdateIntervalMinutes)).Repetition
     Register-One "AutoUpdate" (New-HiddenAction "update.bat" @()) $t `
         "레포를 ${UpdateIntervalMinutes}분마다 git pull origin main 으로 받습니다(녹화 중이면 건너뜀)."
+
+    # --- 원격 git 작업(소유자가 GitHub 로 올린 서명된 계획) ---
+    # 로그온 12분 뒤부터 주기적으로 remote-ops 라벨 이슈를 확인(서명 비밀이 없으면 아무것도 안 함).
+    $t = New-ScheduledTaskTrigger -AtLogOn -User $User -ErrorAction Stop
+    $t.Delay = "PT12M"
+    $t.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+            -RepetitionInterval (New-TimeSpan -Minutes $RemoteOpsIntervalMinutes)).Repetition
+    Register-One "RemoteOps" (New-HiddenAction "remote_ops.bat" @()) $t `
+        "소유자가 GitHub 로 올린 서명된 git 작업 계획을 ${RemoteOpsIntervalMinutes}분마다 받아 실행합니다."
 
     # --- 야간 전사 ---
     $t = New-ScheduledTaskTrigger -Daily -At $TranscribeTime
