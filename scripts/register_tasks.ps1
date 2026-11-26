@@ -16,6 +16,8 @@
       EclassSync      - 지정한 간격마다 Eclass 자료 수집
       RecordSchedule  - 로그온 시 시작해 시간표대로 녹화
       RecordWatch     - 로그온 시 시작해 지정 프로그램 감지
+      AutoUpdate      - 로그온 10분 뒤부터 한 시간마다 git pull origin main(녹화 중이면 건너뜀,
+                        config.toml 의 [update])
       RecordGuard     - 로그온 시 시작해(15분마다 다시 확인) 녹화 중이 아닐 때 녹화 파일을
                         확인하고 못 올린 것을 올림 (config.toml 의 [recording.guard])
       TranscribeQueue - 밤마다 밀린 전사 처리
@@ -75,6 +77,7 @@ param(
     [switch]$Stream,
     [string]$User = $env:USERNAME,
     [string]$Folder = "\Sync Note",
+    [int]$UpdateIntervalMinutes = 60,
     [switch]$Yes
 )
 
@@ -108,7 +111,7 @@ trap {
 }
 
 function Remove-All {
-    foreach ($name in @("EclassSync","RecordSchedule","RecordWatch","RecordGuard","TranscribeQueue","HomeBackup","HomePrune","TerminalAudio","StreamSchedule")) {
+    foreach ($name in @("EclassSync","RecordSchedule","RecordWatch","RecordGuard","TranscribeQueue","HomeBackup","HomePrune","TerminalAudio","StreamSchedule","AutoUpdate")) {
         if (Get-ScheduledTask -TaskPath "$Folder\" -TaskName $name -ErrorAction SilentlyContinue) {
             Unregister-ScheduledTask -TaskPath "$Folder\" -TaskName $name -Confirm:$false -ErrorAction Stop
             Write-Host "  삭제: $Folder\$name"
@@ -228,6 +231,15 @@ $RegisterAll = {
             -RepetitionInterval (New-TimeSpan -Minutes 15)).Repetition
     Register-One "RecordGuard" (New-HiddenAction "record_guard.bat" @()) $t `
         "녹화 중이 아닐 때 녹화 파일을 확인하고(꺼진 녹화 합치기·망가진 파일 다시 만들기) 못 올린 것을 올립니다."
+
+    # --- 레포 자동 업데이트 ---
+    # 로그온 10분 뒤부터 한 시간마다 git pull origin main(녹화 중이면 건너뜀, src/syncnote/updater.py).
+    $t = New-ScheduledTaskTrigger -AtLogOn -User $User -ErrorAction Stop
+    $t.Delay = "PT10M"
+    $t.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+            -RepetitionInterval (New-TimeSpan -Minutes $UpdateIntervalMinutes)).Repetition
+    Register-One "AutoUpdate" (New-HiddenAction "update.bat" @()) $t `
+        "레포를 ${UpdateIntervalMinutes}분마다 git pull origin main 으로 받습니다(녹화 중이면 건너뜀)."
 
     # --- 야간 전사 ---
     $t = New-ScheduledTaskTrigger -Daily -At $TranscribeTime
