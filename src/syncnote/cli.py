@@ -2256,6 +2256,38 @@ def cmd_activity_watch_acrobat(args) -> int:
         return 2
 
 
+def cmd_update(args) -> int:
+    """레포 자동 업데이트(git pull origin main). scripts\\update.bat · AutoUpdate 작업. src/syncnote/updater.py."""
+    from . import updater
+
+    state_dir = None
+    cfg = None
+    try:
+        cfg, layout = _load(args)
+        state_dir = layout.state
+    except Exception as exc:            # noqa: BLE001 — 설정이 깨져도 업데이트는 함(고친 코드를 받으려고)
+        log.warning("설정을 읽지 못했지만 업데이트는 합니다: %s", exc)
+    def get(key, default):
+        return cfg.get(key, default) if cfg is not None else default
+
+    if not args.force and not bool(get("update.enabled", True)):
+        print("자동 업데이트가 꺼져 있습니다(config.toml [update] enabled = false).")
+        return 0
+    res = updater.update(state_dir=state_dir, remote=str(get("update.remote", "origin")),
+                         branch=str(get("update.branch", "main")),
+                         install_requirements=bool(get("update.install_requirements", True)),
+                         restart_tasks=bool(get("update.restart_tasks", True)) and not args.no_restart,
+                         dry_run=args.dry_run)
+    line = f"업데이트: {res.status} — {res.message}"
+    if res.pip:
+        line += f" | 패키지 설치 {res.pip}"
+    if res.restarted:
+        line += " | 다시 시작: " + ", ".join(res.restarted)
+    (log.error if res.status == "failed" else log.info)("%s", line)
+    print(line)
+    return 1 if res.status == "failed" else 0
+
+
 def cmd_audio_check(args) -> int:
     """소리 입출력 단계별 점검(scripts\\audio_check.bat). src/syncnote/recorder/audio_check.py."""
     import tempfile
@@ -2328,6 +2360,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="환경 점검")
     p.add_argument("--json", action="store_true", help="결과를 JSON 한 줄로(시간표 편집기용)")
     p.set_defaults(func=cmd_doctor)
+    p = sub.add_parser("update", help="레포 업데이트(git pull origin main) — 녹화 중이 아닐 때만")
+    p.add_argument("--dry-run", action="store_true", help="받을 커밋 수만 확인")
+    p.add_argument("--no-restart", action="store_true", help="받은 뒤 녹화 프로그램을 다시 시작하지 않음")
+    p.add_argument("--force", action="store_true", help="[update] enabled = false 여도 함")
+    p.set_defaults(func=cmd_update)
     p = sub.add_parser("audio-check", help="소리 입출력 단계별 점검(마이크가 실제로 들어오는지)")
     p.add_argument("--yes", action="store_true",
                    help="묻지 않고 모든 단계 진행(원격 실행용, '들어 보기' 는 건너뜀)")
