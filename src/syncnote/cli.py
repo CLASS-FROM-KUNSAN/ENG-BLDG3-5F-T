@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shlex
 import subprocess
@@ -2255,6 +2256,34 @@ def cmd_activity_watch_acrobat(args) -> int:
         return 2
 
 
+def cmd_audio_check(args) -> int:
+    """소리 입출력 단계별 점검(scripts\\audio_check.bat). src/syncnote/recorder/audio_check.py."""
+    import tempfile
+
+    from .recorder import audio_check as AC
+
+    try:
+        _cfg, layout = _load(args)
+        base = layout.logs / "audio_check"
+    except Exception as exc:            # noqa: BLE001 — 설정이 없어도 점검은 함
+        log.debug("설정을 읽지 못해 임시 폴더에 남깁니다: %s", exc)
+        base = Path(tempfile.gettempdir()) / "syncnote-audio-check"
+    out = Path(args.out) if args.out else base / datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        io = AC.SoundcardIO()
+    except Exception as exc:            # noqa: BLE001
+        print(f"소리 장치를 열 수 없습니다: {exc}")
+        return 1
+    steps = tuple(int(s) for s in args.steps.split(",")) if args.steps else AC.STEPS
+    print("소리 입출력 점검 — 단계마다 Enter 로 진행합니다. 녹음은 이 PC 에만 남습니다.")
+    if not args.no_sound:
+        print("4·5단계는 스피커로 소리를 냅니다(--no-sound 로 끌 수 있음).")
+    rep = AC.Check(io, out, auto=args.yes, no_sound=args.no_sound, steps=steps,
+                   gain_db=args.gain_db, silence_sec=args.silence_sec,
+                   speech_sec=args.speech_sec).run()
+    return 0 if "error" not in json.dumps(rep, ensure_ascii=False) else 1
+
+
 def cmd_tasks(args) -> int:
     """작업 스케줄러 등록 확인(status)·자동 등록(ensure). src/syncnote/tasks.py."""
     from . import tasks
@@ -2299,6 +2328,16 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="환경 점검")
     p.add_argument("--json", action="store_true", help="결과를 JSON 한 줄로(시간표 편집기용)")
     p.set_defaults(func=cmd_doctor)
+    p = sub.add_parser("audio-check", help="소리 입출력 단계별 점검(마이크가 실제로 들어오는지)")
+    p.add_argument("--yes", action="store_true",
+                   help="묻지 않고 모든 단계 진행(원격 실행용, '들어 보기' 는 건너뜀)")
+    p.add_argument("--no-sound", action="store_true", help="스피커로 소리를 내는 단계(3·4·5) 건너뜀")
+    p.add_argument("--steps", default="", help="할 단계만, 예: 0,1,2,6")
+    p.add_argument("--gain-db", type=float, default=30.0, help="증폭본 WAV 의 증폭(dB)")
+    p.add_argument("--silence-sec", type=float, default=8.0)
+    p.add_argument("--speech-sec", type=float, default=10.0)
+    p.add_argument("--out", default="", help="결과 폴더(기본: 데이터 폴더의 logs\\audio_check\\<시각>)")
+    p.set_defaults(func=cmd_audio_check)
     p = sub.add_parser("tasks", help="작업 스케줄러 등록 확인·자동 등록")
     p.add_argument("action", choices=["status", "ensure"],
                    help="status: 확인만 / ensure: 빠졌으면 등록(권한이 없으면 UAC)")
